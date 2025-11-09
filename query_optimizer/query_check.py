@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+class QueryValidationError(Exception):
+    """Exception raised when query tree validation fails"""
+    pass
+
+# Dummy QueryTree class for context
 class QueryTree:
     def __init__(self, type: str, val: str = "", parent: QueryTree | None = None):
         self.type: str = type
@@ -60,7 +65,7 @@ SPECIAL_OPERATORS = {
 
 VALID_JOIN_TYPES = {"NATURAL", "ON"}
 
-def check_query(node: QueryTree) -> bool:
+def check_query(node: QueryTree) -> None:
     """
     Validasi query tree berdasarkan operator relational algebra:
     1. Semua child harus valid
@@ -70,42 +75,36 @@ def check_query(node: QueryTree) -> bool:
     """
     
     # Rekursif cek semua child
-    if not all(check_query(child) for child in node.childs):
-        return False
+    for child in node.childs:
+        check_query(child)
     
     # Validasi jumlah children berdasarkan tipe operator
     num_children = len(node.childs)
     
     if node.type in UNARY_OPERATORS:
         if num_children != 1:
-            print(f"-> Validasi GAGAL di <{node.type}>: Operator unary butuh 1 anak, dapat {num_children}")
-            return False
+            raise QueryValidationError(f"Operator unary <{node.type}> butuh 1 anak, dapat {num_children}")
     
     elif node.type in BINARY_OPERATORS:
         if num_children != 2:
-            print(f"-> Validasi GAGAL di <{node.type}>: Operator binary butuh 2 anak, dapat {num_children}")
-            return False
+            raise QueryValidationError(f"Operator binary <{node.type}> butuh 2 anak, dapat {num_children}")
     
     elif node.type in LEAF_NODES:
         if num_children != 0:
-            print(f"-> Validasi GAGAL di <{node.type}>: Leaf node tidak boleh punya anak, dapat {num_children}")
-            return False
+            raise QueryValidationError(f"Leaf node <{node.type}> tidak boleh punya anak, dapat {num_children}")
     
     elif node.type in SPECIAL_OPERATORS:
         # UPDATE/DELETE/INSERT butuh 1 child (relation)
         # BEGIN_TRANSACTION dan COMMIT bisa punya 0 atau lebih children (statements dalam transaction)
         if node.type in {"UPDATE", "DELETE", "INSERT"}:
             if num_children != 1:
-                print(f"-> Validasi GAGAL di <{node.type}>: Butuh 1 anak (relation), dapat {num_children}")
-                return False
+                raise QueryValidationError(f"<{node.type}> butuh 1 anak (relation), dapat {num_children}")
         # BEGIN_TRANSACTION dan COMMIT tidak ada batasan jumlah children
     
-    if not check_value(node):
-        return False
+    # Validasi value
+    check_value(node)
 
-    return True
-
-def check_value(node: QueryTree) -> bool:
+def check_value(node: QueryTree) -> None:
     stats = get_statistic()
     
     # Validasi JOIN
@@ -113,21 +112,17 @@ def check_value(node: QueryTree) -> bool:
         if node.val:
             join_parts = node.val.split(maxsplit=1)
             join_type = join_parts[0]
-            if join_parts.__len__() == 1:
-                return join_type == "NATURAL"
-            if join_parts.__len__() >= 2:
-                return join_type == "ON"
-            else:
-                print(f"-> Validasi GAGAL di <{node.type}>: jumlah value > 2")
-                return False
+            
+            if len(join_parts) == 1:
+                if join_type != "NATURAL":
+                    raise QueryValidationError(f"JOIN dengan 1 kata harus 'NATURAL', dapat '{join_type}'")
+            elif len(join_parts) >= 2:
+                if join_type != "ON":
+                    raise QueryValidationError(f"JOIN dengan kondisi harus diawali 'ON', dapat '{join_type}'")
             
     # Validasi RELATION
     if node.type == "RELATION":
         if not node.val:
-            print(f"-> Validasi GAGAL di <{node.type}>: Relasi harus punya nama tabel")
-            return False
+            raise QueryValidationError(f"<{node.type}> harus punya nama tabel")
         if node.val not in stats["tables"]:
-            print(f"-> Validasi GAGAL di <{node.type}>: Tabel '{node.val}' tidak ditemukan. Tersedia: {stats['tables']}")
-            return False
-    
-    return True
+            raise QueryValidationError(f"Tabel '{node.val}' tidak ditemukan. Tersedia: {stats['tables']}")
