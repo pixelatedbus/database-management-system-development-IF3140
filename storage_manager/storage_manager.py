@@ -1,19 +1,7 @@
-"""Kerangka dasar Storage Manager untuk mini relational DBMS.
-
-File ini berisi dataclass dan kerangka kelas untuk komponen Storage Manager.
-Detail implementasi diserahkan kepada tim untuk diisi.
-
-Berdasarkan diagram yang diberikan:
-- DataRetrieval: berisi table, column, conditions
-- DataWrite<T>: berisi table, column, conditions, new_value
-- DataDeletion: berisi table, conditions
-- Condition: berisi column, operation, operand
-- Statistic: berisi n_r, b_r, l_r, f_r, V_a_r
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 
 @dataclass
