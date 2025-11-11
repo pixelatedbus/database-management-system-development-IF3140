@@ -2,7 +2,75 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+
+@dataclass
+class ColumnDefinition:
+    """Definisi kolom untuk CREATE TABLE.
+
+    Attributes:
+        name: Nama kolom
+        data_type: Tipe data ('INTEGER', 'FLOAT', 'CHAR', 'VARCHAR')
+        size: Ukuran untuk CHAR(n) atau VARCHAR(n). None untuk INTEGER/FLOAT
+        is_primary_key: Apakah kolom ini PRIMARY KEY
+        is_nullable: Apakah kolom ini boleh NULL (default: True)
+        default_value: Nilai default jika tidak diisi
+    """
+    name: str
+    data_type: str  # 'INTEGER', 'FLOAT', 'CHAR', 'VARCHAR'
+    size: Optional[int] = None  # untuk CHAR(n), VARCHAR(n)
+    is_primary_key: bool = False
+    is_nullable: bool = True
+    default_value: Any = None
+
+    def __post_init__(self):
+        """Validasi setelah inisialisasi."""
+        # Normalisasi data_type ke uppercase
+        self.data_type = self.data_type.upper()
+
+        # Validasi tipe data
+        valid_types = ['INTEGER', 'FLOAT', 'CHAR', 'VARCHAR']
+        if self.data_type not in valid_types:
+            raise ValueError(f"Invalid data type: {self.data_type}. Must be one of {valid_types}")
+
+        # CHAR dan VARCHAR harus punya size
+        if self.data_type in ['CHAR', 'VARCHAR']:
+            if self.size is None or self.size <= 0:
+                raise ValueError(f"{self.data_type} must have size > 0")
+
+        # PRIMARY KEY tidak boleh nullable
+        if self.is_primary_key:
+            self.is_nullable = False
+
+
+@dataclass
+class ForeignKey:
+    """Definisi FOREIGN KEY constraint.
+
+    Attributes:
+        column: Nama kolom di tabel ini
+        references_table: Nama tabel yang direferensi
+        references_column: Nama kolom di tabel yang direferensi
+        on_delete: Aksi saat DELETE ('CASCADE', 'SET NULL', 'RESTRICT')
+        on_update: Aksi saat UPDATE ('CASCADE', 'SET NULL', 'RESTRICT')
+    """
+    column: str
+    references_table: str
+    references_column: str
+    on_delete: str = "RESTRICT"  # CASCADE, SET NULL, RESTRICT
+    on_update: str = "RESTRICT"
+
+    def __post_init__(self):
+        """Validasi setelah inisialisasi."""
+        self.on_delete = self.on_delete.upper()
+        self.on_update = self.on_update.upper()
+
+        valid_actions = ['CASCADE', 'SET NULL', 'RESTRICT']
+        if self.on_delete not in valid_actions:
+            raise ValueError(f"Invalid on_delete: {self.on_delete}. Must be one of {valid_actions}")
+        if self.on_update not in valid_actions:
+            raise ValueError(f"Invalid on_update: {self.on_update}. Must be one of {valid_actions}")
 
 
 @dataclass

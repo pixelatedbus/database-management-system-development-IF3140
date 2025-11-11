@@ -5,13 +5,22 @@ from __future__ import annotations
 
 import os
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Union
 
-from .models import Condition, DataRetrieval, DataWrite, DataDeletion, Statistic
+from .models import (
+    Condition,
+    DataRetrieval,
+    DataWrite,
+    DataDeletion,
+    Statistic,
+    ColumnDefinition,
+    ForeignKey
+)
 from .utils import (
     evaluate_condition,
     project_columns,
     validate_table_name,
+    validate_row_for_schema,
     read_binary_table,
     write_binary_table
 )
@@ -86,15 +95,38 @@ class StorageManager:
 
     # ========== Table Management ==========
 
-    def create_table(self, table_name: str, schema: List[str]) -> None:
-        """Buat tabel baru dengan schema tertentu.
+    def create_table(
+        self,
+        table_name: str,
+        columns: Union[List[str], List[ColumnDefinition]],
+        primary_keys: Optional[List[str]] = None,
+        foreign_keys: Optional[List[ForeignKey]] = None
+    ) -> None:
+        """Buat tabel baru dengan schema dan constraints.
 
         Args:
             table_name: Nama tabel
-            schema: List nama kolom
+            columns: List nama kolom (backward compatible) ATAU List ColumnDefinition
+            primary_keys: List nama kolom yang jadi PRIMARY KEY (opsional)
+            foreign_keys: List ForeignKey constraints (opsional)
 
         Raises:
             ValueError: Jika nama tabel invalid atau sudah ada
+
+        Example:
+            # Cara 1: Backward compatible (hanya nama kolom)
+            sm.create_table("users", ["id", "name", "email"])
+
+            # Cara 2: Dengan tipe data lengkap
+            sm.create_table(
+                "users",
+                columns=[
+                    ColumnDefinition("id", "INTEGER", is_primary_key=True),
+                    ColumnDefinition("name", "VARCHAR", size=50),
+                    ColumnDefinition("email", "VARCHAR", size=100),
+                ],
+                primary_keys=["id"]
+            )
         """
         if not validate_table_name(table_name):
             raise ValueError(f"Nama tabel tidak valid: {table_name}")
@@ -102,30 +134,138 @@ class StorageManager:
         if table_name in self.tables:
             raise ValueError(f"Tabel '{table_name}' sudah ada")
 
-        # Simpan schema ke metadata
-        self.tables[table_name] = {"schema": schema}
+        # Handle backward compatibility: jika columns adalah List[str]
+        if columns and isinstance(columns[0], str):
+            # Convert ke ColumnDefinition dengan tipe default (VARCHAR 255)
+            column_defs = [
+                ColumnDefinition(name=col, data_type="VARCHAR", size=255, is_nullable=True)
+                for col in columns
+            ]
+        else:
+            column_defs = columns
+
+        # Validasi primary keys
+        if primary_keys:
+            for pk in primary_keys:
+                # Cari column definition untuk PK
+                pk_col = next((c for c in column_defs if c.name == pk), None)
+                if pk_col is None:
+                    raise ValueError(f"Primary key '{pk}' tidak ada di columns")
+                # Set sebagai primary key
+                pk_col.is_primary_key = True
+                pk_col.is_nullable = False
+
+        # Validasi foreign keys
+        if foreign_keys:
+            for fk in foreign_keys:
+                # Check column exists
+                fk_col = next((c for c in column_defs if c.name == fk.column), None)
+                if fk_col is None:
+                    raise ValueError(f"Foreign key column '{fk.column}' tidak ada")
+
+                # Check referenced table exists
+                if fk.references_table not in self.tables:
+                    raise ValueError(f"Referenced table '{fk.references_table}' tidak ditemukan")
+
+        # Simpan metadata dengan format lengkap
+        self.tables[table_name] = {
+            "columns": [self._column_def_to_dict(c) for c in column_defs],
+            "primary_keys": primary_keys or [],
+            "foreign_keys": [self._foreign_key_to_dict(fk) for fk in foreign_keys] if foreign_keys else []
+        }
         self._save_table_schemas()
 
-        # Buat file binary kosong
+        # Buat file binary kosong (gunakan nama kolom saja untuk compatibility)
+        schema_names = [c.name for c in column_defs]
         table_file = self._get_table_file_path(table_name)
-        write_binary_table(table_file, [], schema)
+        write_binary_table(table_file, [], schema_names)
 
-        print(f"✓ Tabel '{table_name}' berhasil dibuat dengan {len(schema)} kolom")
+        print(f"✓ Tabel '{table_name}' berhasil dibuat dengan {len(column_defs)} kolom")
 
-    def insert_rows(self, table_name: str, rows: List[Dict[str, Any]]) -> None:
-        """Insert rows ke tabel (untuk testing/demo purposes).
+    def _column_def_to_dict(self, col: ColumnDefinition) -> Dict[str, Any]:
+        """Convert ColumnDefinition ke dictionary untuk JSON storage."""
+        return {
+            "name": col.name,
+            "data_type": col.data_type,
+            "size": col.size,
+            "is_primary_key": col.is_primary_key,
+            "is_nullable": col.is_nullable,
+            "default_value": col.default_value
+        }
+
+    def _dict_to_column_def(self, data: Dict[str, Any]) -> ColumnDefinition:
+        """Convert dictionary ke ColumnDefinition."""
+        return ColumnDefinition(
+            name=data["name"],
+            data_type=data["data_type"],
+            size=data.get("size"),
+            is_primary_key=data.get("is_primary_key", False),
+            is_nullable=data.get("is_nullable", True),
+            default_value=data.get("default_value")
+        )
+
+    def _foreign_key_to_dict(self, fk: ForeignKey) -> Dict[str, Any]:
+        """Convert ForeignKey ke dictionary untuk JSON storage."""
+        return {
+            "column": fk.column,
+            "references_table": fk.references_table,
+            "references_column": fk.references_column,
+            "on_delete": fk.on_delete,
+            "on_update": fk.on_update
+        }
+
+    def _get_column_definitions(self, table_name: str) -> List[ColumnDefinition]:
+        """Get column definitions untuk tabel tertentu."""
+        if table_name not in self.tables:
+            raise ValueError(f"Tabel '{table_name}' tidak ditemukan")
+
+        table_meta = self.tables[table_name]
+
+        # Handle backward compatibility
+        if "schema" in table_meta:
+            # Old format: hanya list nama kolom
+            return [
+                ColumnDefinition(name=col, data_type="VARCHAR", size=255)
+                for col in table_meta["schema"]
+            ]
+        else:
+            # New format: dengan column definitions
+            return [self._dict_to_column_def(c) for c in table_meta["columns"]]
+
+    def insert_rows(self, table_name: str, rows: List[Dict[str, Any]], validate: bool = True) -> None:
+        """Insert rows ke tabel dengan validasi tipe data.
 
         Args:
             table_name: Nama tabel
             rows: List of row dictionaries
+            validate: Apakah melakukan validasi tipe data (default: True)
 
         Raises:
-            ValueError: Jika tabel tidak ditemukan
+            ValueError: Jika tabel tidak ditemukan atau data tidak valid
         """
         if table_name not in self.tables:
             raise ValueError(f"Tabel '{table_name}' tidak ditemukan")
 
-        schema = self.tables[table_name]["schema"]
+        # Get column definitions
+        column_defs = self._get_column_definitions(table_name)
+
+        # Validasi setiap row jika diminta
+        if validate:
+            for i, row in enumerate(rows):
+                try:
+                    validate_row_for_schema(row, column_defs)
+                except ValueError as e:
+                    raise ValueError(f"Row {i+1} validation failed: {e}")
+
+        # Get schema names untuk binary file
+        table_meta = self.tables[table_name]
+        if "schema" in table_meta:
+            # Old format
+            schema_names = table_meta["schema"]
+        else:
+            # New format
+            schema_names = [c["name"] for c in table_meta["columns"]]
+
         table_file = self._get_table_file_path(table_name)
 
         # Load existing data (if any)
@@ -136,11 +276,23 @@ class StorageManager:
             except Exception:
                 existing_rows = []
 
+        # Apply default values untuk kolom yang tidak diisi
+        processed_rows = []
+        for row in rows:
+            processed_row = row.copy()
+            for col_def in column_defs:
+                if col_def.name not in processed_row:
+                    if col_def.default_value is not None:
+                        processed_row[col_def.name] = col_def.default_value
+                    elif col_def.is_nullable:
+                        processed_row[col_def.name] = None
+            processed_rows.append(processed_row)
+
         # Append new rows
-        all_rows = existing_rows + rows
+        all_rows = existing_rows + processed_rows
 
         # Write back to binary file
-        write_binary_table(table_file, all_rows, schema)
+        write_binary_table(table_file, all_rows, schema_names)
         print(f"✓ Inserted {len(rows)} rows ke tabel '{table_name}'")
 
     # ========== Core Operations ==========

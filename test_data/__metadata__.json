@@ -1,0 +1,11 @@
+{
+  "mahasiswa": {
+    "schema": [
+      "nim",
+      "nama",
+      "ipk",
+      "angkatan",
+      "jurusan"
+    ]
+  }
+}

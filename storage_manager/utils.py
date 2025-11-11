@@ -8,7 +8,7 @@ from __future__ import annotations
 import struct
 import json
 from typing import Any, Dict, List, Tuple
-from .models import Condition
+from .models import Condition, ColumnDefinition
 
 
 def evaluate_condition(row: Dict[str, Any], condition: Condition) -> bool:
@@ -80,6 +80,69 @@ def validate_table_name(table_name: str) -> bool:
     if table_name[0].isdigit():
         return False
     return True
+
+
+def validate_value_for_column(value: Any, column_def: ColumnDefinition) -> None:
+    """Validasi value sesuai dengan column definition.
+
+    Args:
+        value: Nilai yang akan divalidasi
+        column_def: Definisi kolom
+
+    Raises:
+        ValueError: Jika value tidak valid untuk column tersebut
+    """
+    # Check NULL constraint
+    if value is None:
+        if not column_def.is_nullable:
+            raise ValueError(f"Column '{column_def.name}' cannot be NULL")
+        return  # NULL is valid for nullable columns
+
+    # Check type and constraints
+    if column_def.data_type == "INTEGER":
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError(f"Column '{column_def.name}' expects INTEGER, got {type(value).__name__}")
+
+    elif column_def.data_type == "FLOAT":
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise ValueError(f"Column '{column_def.name}' expects FLOAT, got {type(value).__name__}")
+
+    elif column_def.data_type == "VARCHAR":
+        str_value = str(value)
+        if len(str_value) > column_def.size:
+            raise ValueError(
+                f"Column '{column_def.name}' VARCHAR({column_def.size}): "
+                f"value too long ({len(str_value)} > {column_def.size})"
+            )
+
+    elif column_def.data_type == "CHAR":
+        str_value = str(value)
+        if len(str_value) > column_def.size:
+            raise ValueError(
+                f"Column '{column_def.name}' CHAR({column_def.size}): "
+                f"value too long ({len(str_value)} > {column_def.size})"
+            )
+
+
+def validate_row_for_schema(row: Dict[str, Any], columns: List[ColumnDefinition]) -> None:
+    """Validasi row sesuai dengan schema (column definitions).
+
+    Args:
+        row: Row data yang akan divalidasi
+        columns: List column definitions
+
+    Raises:
+        ValueError: Jika row tidak valid untuk schema
+    """
+    # Check semua kolom yang required ada
+    for col_def in columns:
+        if col_def.name not in row:
+            # Jika tidak ada value, cek apakah boleh NULL atau punya default
+            if not col_def.is_nullable and col_def.default_value is None:
+                raise ValueError(f"Column '{col_def.name}' is required but not provided")
+        else:
+            # Validasi value untuk kolom tersebut
+            validate_value_for_column(row[col_def.name], col_def)
 
 
 # ========== Binary File I/O Functions ==========
