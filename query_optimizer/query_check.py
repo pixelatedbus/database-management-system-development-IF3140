@@ -42,7 +42,6 @@ def get_statistic():
 
 UNARY_OPERATORS = {
     "PROJECT",    # π - projection (SELECT columns)
-    "FILTER",     # σ - selection (WHERE condition)
     "SORT",       # ORDER BY
 }
 
@@ -52,6 +51,7 @@ BINARY_OPERATORS = {
 
 LEAF_NODES = {
     "RELATION",   # Base table/relation
+    "ARRAY",      # Array value
     "LIMIT",      # LIMIT value
 }
 
@@ -61,6 +61,7 @@ SPECIAL_OPERATORS = {
     "DELETE",     # DML operation
     "BEGIN_TRANSACTION",  # Transaction start
     "COMMIT",             # Transaction commit
+    "FILTER"        # σ - selection (WHERE value IN RELATION, WHERE condition, WHERE EXIST RELATION)
 }
 
 VALID_JOIN_TYPES = {"NATURAL", "ON"}
@@ -99,6 +100,18 @@ def check_query(node: QueryTree) -> None:
         if node.type in {"UPDATE", "DELETE", "INSERT"}:
             if num_children != 1:
                 raise QueryValidationError(f"<{node.type}> butuh 1 anak (relation), dapat {num_children}")
+        if node.type == "FILTER":
+            if num_children < 1:
+                raise QueryValidationError(f"<{node.type}> butuh minimum 1 anak, dapat {num_children}")
+            elif num_children == 2:
+                # Anak pertama: continuation tree (bisa PROJECT, JOIN, FILTER, dll)
+                # Anak kedua: value (harus ARRAY atau RELATION untuk subquery)
+                second_child_type = node.childs[1].type
+                if second_child_type not in {"ARRAY", "RELATION", "PROJECT"}:
+                    raise QueryValidationError(f"<{node.type}> dengan 2 anak, anak kedua harus ARRAY/RELATION/PROJECT untuk value, dapat <{second_child_type}>")
+            elif num_children > 2:
+                raise QueryValidationError(f"<{node.type}> maksimal 2 anak (tree, value), dapat {num_children}")
+
         # BEGIN_TRANSACTION dan COMMIT tidak ada batasan jumlah children
     
     # Validasi value
@@ -119,7 +132,23 @@ def check_value(node: QueryTree) -> None:
             elif len(join_parts) >= 2:
                 if join_type != "ON":
                     raise QueryValidationError(f"JOIN dengan kondisi harus diawali 'ON', dapat '{join_type}'")
+    
+    # Validasi FILTER
+    if node.type == "FILTER":
+        if node.val:
+            filter_parts = node.val.split(maxsplit=1)
+            filter_type = filter_parts[0]
             
+            if len(filter_parts) == 1:
+                # Single word: EXIST (untuk subquery check)
+                if filter_type not in {"EXIST"}:
+                    raise QueryValidationError(f"FILTER dengan 1 kata harus 'EXIST', dapat '{filter_type}'")
+            elif len(filter_parts) >= 2:
+                # Multiple words: WHERE condition atau IN column
+                if filter_type not in {"WHERE", "IN"}:
+                    raise QueryValidationError(f"FILTER dengan kondisi harus diawali 'WHERE' atau 'IN', dapat '{filter_type}'")
+
+
     # Validasi RELATION
     if node.type == "RELATION":
         if not node.val:

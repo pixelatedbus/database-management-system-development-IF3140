@@ -6,13 +6,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from query_optimizer.query_check import QueryTree, check_query, QueryValidationError
 
-class TestQueryValidator(unittest.TestCase):
 
+class TestQueryValidator(unittest.TestCase):
+    
+    # ====================================================================
+    # PROJECT TESTS
+    # ====================================================================
+    
     def test_valid_project_with_filter(self):
         # Structure: PROJECT -> FILTER -> RELATION
         # Represents: SELECT id, name FROM users WHERE id = 1;
         project = QueryTree("PROJECT", "id, name")
-        filter_node = QueryTree("FILTER", "id = 1")
+        filter_node = QueryTree("FILTER", "WHERE id = 1")
         relation = QueryTree("RELATION", "users")
         
         project.add_child(filter_node)
@@ -28,7 +33,11 @@ class TestQueryValidator(unittest.TestCase):
         
         with self.assertRaises(QueryValidationError):
             check_query(project)
-
+    
+    # ====================================================================
+    # JOIN TESTS
+    # ====================================================================
+    
     def test_valid_join_with_on(self):
         # Structure: PROJECT -> JOIN -> RELATION, RELATION
         # Represents: SELECT * FROM users JOIN profiles ON users.id = profiles.user_id;
@@ -80,26 +89,11 @@ class TestQueryValidator(unittest.TestCase):
         
         with self.assertRaises(QueryValidationError):
             check_query(join)
-
-    def test_valid_update(self):
-        # Structure: UPDATE -> RELATION
-        # Represents: UPDATE users SET name = 'test', email = 'test@example.com';
-        update = QueryTree("UPDATE", "name = 'test', email = 'test@example.com'")
-        relation = QueryTree("RELATION", "users")
-        
-        update.add_child(relation)
-        
-        check_query(update)
-
-    def test_invalid_update_no_child(self):
-        # Structure: UPDATE (no children)
-        # Represents: UPDATE ?? SET name = 'test';
-        # Invalid because UPDATE must have one child
-        update = QueryTree("UPDATE", "name = 'test'")
-        
-        with self.assertRaises(QueryValidationError):
-            check_query(update)
-
+    
+    # ====================================================================
+    # RELATION TESTS
+    # ====================================================================
+    
     def test_valid_relation_leaf(self):
         # Structure: RELATION
         # Represents: FROM users;
@@ -137,43 +131,183 @@ class TestQueryValidator(unittest.TestCase):
         with self.assertRaises(QueryValidationError):
             check_query(relation)
     
-    def test_complex_query_with_filter_and_join(self):
-        # Structure: PROJECT -> FILTER -> JOIN -> RELATION, RELATION
-        # Represents: SELECT * FROM users JOIN profiles ON users.id = profiles.user_id WHERE users.id > 10;
-        project = QueryTree("PROJECT", "*")
-        filter_node = QueryTree("FILTER", "users.id > 10")
-        join = QueryTree("JOIN", "ON users.id = profiles.user_id")
-        relation1 = QueryTree("RELATION", "users")
-        relation2 = QueryTree("RELATION", "profiles")
+    # ====================================================================
+    # FILTER TESTS
+    # ====================================================================
+    
+    def test_valid_filter_where_single_relation(self):
+        # Structure: FILTER -> RELATION
+        # Represents: SELECT * FROM users WHERE id = 1;
+        # FILTER with WHERE condition and single RELATION child
+        filter_node = QueryTree("FILTER", "WHERE id = 1")
+        relation = QueryTree("RELATION", "users")
+        
+        filter_node.add_child(relation)
+        
+        check_query(filter_node)
+    
+    def test_valid_filter_in_with_array(self):
+        # Structure: FILTER -> RELATION, ARRAY
+        # Represents: SELECT * FROM users WHERE id IN (1, 2, 3);
+        # FILTER with IN condition, RELATION and ARRAY as children
+        filter_node = QueryTree("FILTER", "IN id")
+        relation = QueryTree("RELATION", "users")
+        array = QueryTree("ARRAY", "(1, 2, 3)")
+        
+        filter_node.add_child(relation)
+        filter_node.add_child(array)
+        
+        check_query(filter_node)
+    
+    def test_valid_filter_exist(self):
+        # Structure: FILTER -> RELATION
+        # Represents: SELECT * FROM users WHERE EXISTS (SELECT 1 FROM profiles WHERE profiles.user_id = users.id);
+        # FILTER with EXIST (subquery check) and single RELATION child
+        filter_node = QueryTree("FILTER", "EXIST")
+        relation = QueryTree("RELATION", "users")
+        
+        filter_node.add_child(relation)
+        
+        check_query(filter_node)
+    
+    def test_valid_filter_where_complex(self):
+        # Structure: FILTER -> RELATION
+        # Represents: SELECT * FROM users WHERE name = 'John' AND age > 25;
+        # FILTER with complex WHERE condition
+        filter_node = QueryTree("FILTER", "WHERE name = 'John' AND age > 25")
+        relation = QueryTree("RELATION", "users")
+        
+        filter_node.add_child(relation)
+        
+        check_query(filter_node)
+    
+    def test_valid_filter_in_with_project(self):
+        # Structure: PROJECT -> FILTER -> RELATION, ARRAY
+        # Represents: SELECT name FROM users WHERE id IN (1, 2, 3);
+        # Complete query with FILTER using IN - anak ke-2 adalah value (ARRAY)
+        project = QueryTree("PROJECT", "name")
+        filter_node = QueryTree("FILTER", "IN id")
+        relation = QueryTree("RELATION", "users")
+        array = QueryTree("ARRAY", "(1, 2, 3)")
         
         project.add_child(filter_node)
-        filter_node.add_child(join)
-        join.add_child(relation1)
-        join.add_child(relation2)
+        filter_node.add_child(relation)
+        filter_node.add_child(array)
         
         check_query(project)
     
-    def test_transaction_begin(self):
-        # Structure: BEGIN_TRANSACTION -> UPDATE -> RELATION, UPDATE -> RELATION
-        # Represents: BEGIN TRANSACTION; UPDATE users SET name = 'test'; UPDATE users SET email = 'test@example.com';
-        begin_trans = QueryTree("BEGIN_TRANSACTION")
-        update1 = QueryTree("UPDATE", "name = 'test'")
-        update2 = QueryTree("UPDATE", "email = 'test@example.com'")
-        relation1 = QueryTree("RELATION", "users")
-        relation2 = QueryTree("RELATION", "users")
+    def test_valid_filter_on_sort(self):
+        # Structure: PROJECT -> FILTER -> SORT -> RELATION
+        # Represents: SELECT * FROM users ORDER BY name WHERE id > 10;
+        # FILTER can accept SORT result as child
+        project = QueryTree("PROJECT", "*")
+        filter_node = QueryTree("FILTER", "WHERE id > 10")
+        sort = QueryTree("SORT", "name")
+        relation = QueryTree("RELATION", "users")
         
-        update1.add_child(relation1)
-        update2.add_child(relation2)
-        begin_trans.add_child(update1)
-        begin_trans.add_child(update2)
+        project.add_child(filter_node)
+        filter_node.add_child(sort)
+        sort.add_child(relation)
         
-        check_query(begin_trans)
+        check_query(project)
     
-    def test_commit(self):
-        # Structure: COMMIT
-        # Represents: COMMIT;
-        commit = QueryTree("COMMIT")
-        check_query(commit)
+    def test_valid_filter_on_project(self):
+        # Structure: FILTER -> PROJECT -> RELATION
+        # Represents: SELECT * FROM (SELECT id, name FROM users) WHERE id > 10;
+        # FILTER can accept PROJECT result (subquery-like)
+        filter_node = QueryTree("FILTER", "WHERE id > 10")
+        project = QueryTree("PROJECT", "id, name")
+        relation = QueryTree("RELATION", "users")
+        
+        filter_node.add_child(project)
+        project.add_child(relation)
+        
+        check_query(filter_node)
+    
+    def test_invalid_filter_no_children(self):
+        # Structure: FILTER (no children)
+        # Invalid because FILTER must have at least 1 child
+        filter_node = QueryTree("FILTER", "WHERE id = 1")
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(filter_node)
+    
+    def test_invalid_filter_wrong_second_child(self):
+        # Structure: FILTER -> RELATION, FILTER
+        # Invalid because second child must be ARRAY/RELATION/PROJECT for value
+        filter_node = QueryTree("FILTER", "IN id")
+        relation = QueryTree("RELATION", "users")
+        filter2 = QueryTree("FILTER", "WHERE id = 1")
+        
+        filter_node.add_child(relation)
+        filter_node.add_child(filter2)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(filter_node)
+    
+    def test_invalid_filter_wrong_keyword_single_word(self):
+        # Structure: FILTER -> RELATION
+        # Invalid because single-word FILTER value must be 'EXIST'
+        filter_node = QueryTree("FILTER", "INVALID")
+        relation = QueryTree("RELATION", "users")
+        
+        filter_node.add_child(relation)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(filter_node)
+    
+    def test_invalid_filter_wrong_keyword_multi_word(self):
+        # Structure: FILTER -> RELATION
+        # Invalid because multi-word FILTER value must start with 'WHERE' or 'IN'
+        filter_node = QueryTree("FILTER", "HAVING age > 25")
+        relation = QueryTree("RELATION", "users")
+        
+        filter_node.add_child(relation)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(filter_node)
+    
+    def test_invalid_filter_too_many_children(self):
+        # Structure: FILTER -> RELATION, ARRAY, ARRAY
+        # Invalid because FILTER can have maximum 2 children
+        filter_node = QueryTree("FILTER", "IN id")
+        relation = QueryTree("RELATION", "users")
+        array1 = QueryTree("ARRAY", "(1, 2, 3)")
+        array2 = QueryTree("ARRAY", "(4, 5, 6)")
+        
+        filter_node.add_child(relation)
+        filter_node.add_child(array1)
+        filter_node.add_child(array2)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(filter_node)
+    
+    # ====================================================================
+    # UPDATE TESTS
+    # ====================================================================
+    
+    def test_valid_update(self):
+        # Structure: UPDATE -> RELATION
+        # Represents: UPDATE users SET name = 'test', email = 'test@example.com';
+        update = QueryTree("UPDATE", "name = 'test', email = 'test@example.com'")
+        relation = QueryTree("RELATION", "users")
+        
+        update.add_child(relation)
+        
+        check_query(update)
+
+    def test_invalid_update_no_child(self):
+        # Structure: UPDATE (no children)
+        # Represents: UPDATE ?? SET name = 'test';
+        # Invalid because UPDATE must have one child
+        update = QueryTree("UPDATE", "name = 'test'")
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(update)
+    
+    # ====================================================================
+    # INSERT TESTS
+    # ====================================================================
     
     def test_valid_insert(self):
         # Structure: INSERT -> RELATION
@@ -206,6 +340,54 @@ class TestQueryValidator(unittest.TestCase):
         
         with self.assertRaises(QueryValidationError):
             check_query(insert)
+    
+    # ====================================================================
+    # TRANSACTION TESTS
+    # ====================================================================
+    
+    def test_transaction_begin(self):
+        # Structure: BEGIN_TRANSACTION -> UPDATE -> RELATION, UPDATE -> RELATION
+        # Represents: BEGIN TRANSACTION; UPDATE users SET name = 'test'; UPDATE users SET email = 'test@example.com';
+        begin_trans = QueryTree("BEGIN_TRANSACTION")
+        update1 = QueryTree("UPDATE", "name = 'test'")
+        update2 = QueryTree("UPDATE", "email = 'test@example.com'")
+        relation1 = QueryTree("RELATION", "users")
+        relation2 = QueryTree("RELATION", "users")
+        
+        update1.add_child(relation1)
+        update2.add_child(relation2)
+        begin_trans.add_child(update1)
+        begin_trans.add_child(update2)
+        
+        check_query(begin_trans)
+    
+    def test_commit(self):
+        # Structure: COMMIT
+        # Represents: COMMIT;
+        commit = QueryTree("COMMIT")
+        check_query(commit)
+    
+    # ====================================================================
+    # COMPLEX QUERY TESTS
+    # ====================================================================
+    
+    def test_complex_query_with_filter_on_join(self):
+        # Structure: PROJECT -> FILTER -> JOIN -> RELATION, RELATION
+        # Represents: SELECT * FROM users JOIN profiles ON users.id = profiles.user_id WHERE users.id > 10;
+        # FILTER applied on JOIN result (filtering after join)
+        project = QueryTree("PROJECT", "*")
+        filter_node = QueryTree("FILTER", "WHERE users.id > 10")
+        join = QueryTree("JOIN", "ON users.id = profiles.user_id")
+        relation1 = QueryTree("RELATION", "users")
+        relation2 = QueryTree("RELATION", "profiles")
+        
+        project.add_child(filter_node)
+        filter_node.add_child(join)
+        join.add_child(relation1)
+        join.add_child(relation2)
+        
+        check_query(project)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -21,7 +21,13 @@ UPDATE, SET, INSERT, INTO, DELETE
 ORDER BY, LIMIT
 BEGIN TRANSACTION, COMMIT
 AND, OR, NOT
+IN, EXISTS
 ```
+
+**Note:**
+
+- `IN` digunakan untuk kondisi membership (contoh: `WHERE id IN (1, 2, 3)`)
+- `EXISTS` digunakan untuk subquery check (contoh: `WHERE EXISTS (SELECT ...)`)
 
 #### Operators
 
@@ -54,13 +60,20 @@ AND, OR, NOT
 #### Delimiters
 
 ```
-,  (comma)
-;  (semicolon)
-(  (open parenthesis)
-)  (close parenthesis)
+,   (comma)
+;   (semicolon)
+(   (open parenthesis)
+)   (close parenthesis)
 ```
 
-### 1.2 Tokenization Example
+**Note:**
+
+- `()` digunakan untuk array literals dalam query tree (contoh: `(1, 2, 3)` untuk IN clause)
+- Format array konsisten antara SQL dan query tree, keduanya menggunakan `()`
+
+### 1.2 Tokenization Examples
+
+#### Example 1: Simple SELECT with WHERE
 
 **Input SQL:**
 
@@ -72,6 +85,59 @@ SELECT id, name FROM users WHERE id > 10 ORDER BY name LIMIT 5;
 
 ```
 [SELECT] [id] [,] [name] [FROM] [users] [WHERE] [id] [>] [10] [ORDER BY] [name] [LIMIT] [5] [;]
+```
+
+#### Example 2: SELECT with IN clause
+
+**Input SQL:**
+
+```sql
+SELECT name FROM users WHERE id IN (1, 2, 3);
+```
+
+**Tokens:**
+
+```
+**Tokens:**
+
+```
+
+[SELECT] [name] [FROM] [users] [WHERE] [id] [IN] [(] [1] [,] [2] [,] [3] [)] [;]
+
+```
+
+**Query Tree Representation:**
+
+```
+
+FILTER("IN id")
+├── RELATION("users")
+└── ARRAY("(1, 2, 3)")
+
+```
+
+**Note:** Dalam query tree, `(1, 2, 3)` direpresentasikan sebagai ARRAY node dengan value `(1, 2, 3)`
+```
+
+**Query Tree Representation:**
+
+```
+[SELECT] [name] [FROM] [users] [WHERE] [id] [IN] [[] [1] [,] [2] [,] [3] []]
+```
+
+#### Example 3: SELECT with EXISTS
+
+**Input SQL:**
+
+```sql
+SELECT * FROM users WHERE EXISTS (SELECT 1 FROM profiles WHERE profiles.user_id = users.id);
+```
+
+**Tokens:**
+
+```
+[SELECT] [*] [FROM] [users] [WHERE] [EXISTS] [(] [SELECT] [1] [FROM] [profiles]
+[WHERE] [profiles.user_id] [=] [users.id] [)] [;]
 ```
 
 ---
@@ -113,13 +179,121 @@ SELECT id, name FROM users WHERE id = 1;
 
 ```
 PROJECT("id, name")
-└── FILTER("id = 1")
+└── FILTER("WHERE id = 1")
     └── RELATION("users")
 ```
 
 ---
 
-### 2.2 JOIN Query Structure
+### 2.2 FILTER Structure (Special Operator)
+
+**FILTER adalah SPECIAL_OPERATOR dengan aturan fleksibel:**
+
+#### Pattern 1: Single Child (WHERE condition)
+
+**SQL Pattern:**
+
+```sql
+SELECT * FROM users WHERE id > 10;
+SELECT * FROM (users JOIN profiles) WHERE users.id > 10;
+```
+
+**Query Tree Structure:**
+
+```
+FILTER ("WHERE condition")
+└── <any_operator>   # Bisa RELATION, JOIN, SORT, PROJECT, dll
+```
+
+**Karakteristik:**
+
+- 1 child: continuation tree (bisa operator apapun)
+- Value: `"WHERE condition"`
+- Filter langsung di-apply pada hasil child
+
+**Examples:**
+
+```
+# Filter on RELATION
+FILTER("WHERE id > 10")
+└── RELATION("users")
+
+# Filter on JOIN result
+FILTER("WHERE users.id > 10")
+└── JOIN("ON users.id = profiles.user_id")
+    ├── RELATION("users")
+    └── RELATION("profiles")
+
+# Filter on SORT result
+FILTER("WHERE id > 10")
+└── SORT("name")
+    └── RELATION("users")
+
+# Filter on PROJECT result (subquery-like)
+FILTER("WHERE id > 10")
+└── PROJECT("id, name")
+    └── RELATION("users")
+```
+
+#### Pattern 2: Two Children (IN clause or subquery)
+
+**SQL Pattern:**
+
+```sql
+SELECT * FROM users WHERE id IN (1, 2, 3);
+SELECT * FROM users WHERE EXISTS (SELECT 1 FROM profiles WHERE profiles.user_id = users.id);
+```
+
+**Query Tree Structure:**
+
+```
+FILTER ("IN column" | "EXIST")
+├── <first_child>    # Continuation tree (operator apapun)
+└── <second_child>   # Value: ARRAY, RELATION, atau PROJECT (subquery)
+```
+
+**Karakteristik:**
+
+- 2 children:
+  - **Anak pertama:** continuation tree (hasil yang akan di-filter)
+  - **Anak kedua:** value (ARRAY untuk IN list, RELATION/PROJECT untuk subquery)
+- Value: `"IN column"` atau `"EXIST"`
+
+**Examples:**
+
+```
+# IN with ARRAY
+FILTER("IN id")
+├── RELATION("users")
+└── ARRAY("(1, 2, 3)")
+
+# EXIST with subquery (RELATION)
+FILTER("EXIST")
+├── RELATION("users")
+└── RELATION("profiles")   # Represents subquery
+
+# EXIST with subquery (PROJECT)
+FILTER("EXIST")
+├── RELATION("users")
+└── PROJECT("1")           # Subquery: SELECT 1 FROM ...
+    └── FILTER("WHERE profiles.user_id = users.id")
+        └── RELATION("profiles")
+```
+
+#### Validation Rules:
+
+- **Minimum 1 child, maksimum 2 children**
+- **1 child:** Bisa operator apapun (RELATION, JOIN, SORT, PROJECT, dll)
+- **2 children:**
+  - Anak pertama: continuation tree (operator apapun)
+  - Anak kedua: harus ARRAY, RELATION, atau PROJECT
+- **Value format:**
+  - Single word: `"EXIST"` (untuk EXISTS check)
+  - Multiple words: `"WHERE condition"` atau `"IN column"`
+
+---
+
+### 2.4 JOIN Query Structure
 
 **SQL Pattern:**
 
@@ -164,7 +338,7 @@ PROJECT("*")
 
 ---
 
-### 2.3 UPDATE Query Structure
+### 2.5 UPDATE Query Structure
 
 **SQL Pattern:**
 
@@ -198,13 +372,13 @@ UPDATE users SET name = 'test', email = 'test@example.com' WHERE id = 1;
 
 ```
 UPDATE("name = 'test', email = 'test@example.com'")
-└── FILTER("id = 1")
+└── FILTER("WHERE id = 1")
     └── RELATION("users")
 ```
 
 ---
 
-### 2.4 INSERT Query Structure
+### 2.6 INSERT Query Structure
 
 **SQL Pattern:**
 
@@ -248,7 +422,7 @@ INSERT("name = 'John', email = 'john@example.com'")
 
 ---
 
-### 2.5 DELETE Query Structure
+### 2.7 DELETE Query Structure
 
 **SQL Pattern:**
 
@@ -281,13 +455,13 @@ DELETE FROM users WHERE id = 1;
 
 ```
 DELETE
-└── FILTER("id = 1")
+└── FILTER("WHERE id = 1")
     └── RELATION("users")
 ```
 
 ---
 
-### 2.6 Transaction Structure
+### 2.8 Transaction Structure
 
 **SQL Pattern:**
 
@@ -324,16 +498,78 @@ BEGIN_TRANSACTION
 ```
 1. PROJECT (SELECT)       - paling atas
 2. SORT (ORDER BY)        - optional
-3. FILTER (WHERE)         - optional
+3. FILTER (WHERE)         - optional, bisa di berbagai level
 4. JOIN / RELATION        - data source
 5. LIMIT                  - masih belum pasti
 ```
 
+**Catatan Penting tentang FILTER:**
+
+- FILTER bisa ditempatkan di **berbagai level** dalam query tree
+- FILTER bisa applied pada hasil operator apapun (RELATION, JOIN, SORT, PROJECT)
+- Query optimizer akan menentukan posisi optimal FILTER (selection pushdown)
+
+**Example:**
+
+```sql
+SELECT * FROM users JOIN profiles ON users.id = profiles.user_id WHERE users.id > 10;
+```
+
+Bisa direpresentasikan sebagai:
+
+```
+PROJECT("*")
+└── FILTER("WHERE users.id > 10")      # Filter setelah JOIN
+    └── JOIN("ON users.id = profiles.user_id")
+        ├── RELATION("users")
+        └── RELATION("profiles")
+```
+
+Atau optimizer bisa push down filter menjadi:
+
+```
+PROJECT("*")
+└── JOIN("ON users.id = profiles.user_id")
+    ├── FILTER("WHERE users.id > 10")   # Filter di-push down ke users
+    │   └── RELATION("users")
+    └── RELATION("profiles")
+```
+
 ---
 
-## 4. Special Cases & Edge Cases
+## 4. Operator Categories
 
-### 4.1 Multiple JOINs
+### 4.1 Operator Classification
+
+**UNARY_OPERATORS (1 child):**
+
+- `PROJECT` - projection
+- `SORT` - ordering
+
+**BINARY_OPERATORS (2 children):**
+
+- `JOIN` - join operations
+
+**LEAF_NODES (0 children):**
+
+- `RELATION` - table reference
+- `ARRAY` - array literal
+- `LIMIT` - limit value
+- `COMMIT` - transaction commit
+
+**SPECIAL_OPERATORS (custom rules):**
+
+- `FILTER` - 1-2 children with special rules
+- `UPDATE` - exactly 1 child (relation)
+- `INSERT` - exactly 1 child (relation)
+- `DELETE` - exactly 1 child (relation)
+- `BEGIN_TRANSACTION` - 0+ children
+
+---
+
+## 5. Special Cases & Edge Cases
+
+### 5.1 Multiple JOINs
 
 **SQL:**
 
@@ -352,15 +588,46 @@ PROJECT("*")
     └── RELATION("orders")
 ```
 
-### 4.2 Nested SELECT
+### 5.2 Nested Filters
 
-**Note:** Subquery dan nested SELECT (termasuk IN clause dengan subquery) **belum didukung** untuk saat ini.
+**SQL:**
+
+```sql
+SELECT * FROM users WHERE id > 10 AND id IN (1, 2, 3);
+```
+
+**Structure (Multiple Filters):**
+
+```
+PROJECT("*")
+└── FILTER("WHERE id > 10")
+    └── FILTER("IN id")
+        ├── RELATION("users")
+        └── ARRAY("(1, 2, 3)")
+```
+
+### 5.3 Filter on Complex Operations
+
+**SQL:**
+
+```sql
+SELECT * FROM (SELECT id, name FROM users ORDER BY name) WHERE id > 10;
+```
+
+**Structure:**
+
+```
+FILTER("WHERE id > 10")
+└── PROJECT("id, name")
+    └── SORT("name")
+        └── RELATION("users")
+```
 
 ---
 
-## 5. Validation Rules During Parsing
+## 6. Validation Rules During Parsing
 
-### 5.1 Required Checks
+### 6.1 Required Checks
 
 - [ ] **SELECT** harus punya FROM (atau subquery)
 - [ ] **JOIN** harus punya ON/NATURAL
@@ -369,21 +636,24 @@ PROJECT("*")
 - [ ] **Table names** harus valid (check dari `get_statistic()`)
 - [ ] **Column names** harus valid untuk table yang digunakan
 
-### 5.2 Structural Checks
+### 6.2 Structural Checks
 
-- [ ] **UNARY operators** (PROJECT, FILTER, SORT) punya exactly 1 child
+- [ ] **UNARY operators** (PROJECT, SORT) punya exactly 1 child
 - [ ] **BINARY operators** (JOIN) punya exactly 2 children
-- [ ] **LEAF nodes** (RELATION, LIMIT) tidak punya children
+- [ ] **LEAF nodes** (RELATION, ARRAY, LIMIT, COMMIT) tidak punya children
 - [ ] **SPECIAL operators** sesuai aturan masing-masing:
-  - UPDATE: exactly 1 child (RELATION)
-  - INSERT: exactly 1 child (RELATION)
-  - DELETE: exactly 1 child (RELATION)
-  - BEGIN_TRANSACTION: 0 atau lebih children
-  - COMMIT: 0 atau lebih children
+  - **FILTER:** 1-2 children
+    - 1 child: continuation tree (bisa operator apapun)
+    - 2 children: first = continuation tree, second = value (ARRAY/RELATION/PROJECT)
+  - **UPDATE:** exactly 1 child (RELATION atau FILTER → RELATION)
+  - **INSERT:** exactly 1 child (RELATION)
+  - **DELETE:** exactly 1 child (RELATION atau FILTER → RELATION)
+  - **BEGIN_TRANSACTION:** 0+ children
+  - **COMMIT:** 0 children
 
 ---
 
-## 6. Example: Complete Flow
+## 7. Example: Complete Flow
 
 ### Input SQL:
 
@@ -412,7 +682,7 @@ LIMIT 5;
 
 1. Parse `SELECT` → `PROJECT("users.id, users.name, profiles.bio")`
 2. Parse `ORDER BY` → `SORT("users.name")`
-3. Parse `WHERE` → `FILTER("users.id > 10")`
+3. Parse `WHERE` → `FILTER("WHERE users.id > 10")`
 4. Parse `FROM users JOIN profiles ON` → `JOIN("ON users.id = profiles.user_id")`
 5. Parse tables → `RELATION("users")`, `RELATION("profiles")`
 6. Parse `LIMIT` → `LIMIT("5")` (masih belum fix)
@@ -422,14 +692,15 @@ LIMIT 5;
 ```
 PROJECT("users.id, users.name, profiles.bio")
 └── SORT("users.name")
-    └── FILTER("users.id > 10")
+    └── FILTER("WHERE users.id > 10")
         └── JOIN("ON users.id = profiles.user_id")
             ├── RELATION("users")
             └── RELATION("profiles")
 ```
+
 ---
 
-## Summary
+## 8. Summary
 
 **Tokenizer:** Pecah SQL string menjadi tokens (keywords, identifiers, operators, literals)
 
@@ -437,9 +708,14 @@ PROJECT("users.id, users.name, profiles.bio")
 
 - SELECT → PROJECT di root
 - FROM → RELATION di leaf
-- WHERE → FILTER di tengah
+- WHERE → FILTER (fleksibel, bisa di berbagai level)
 - JOIN → JOIN dengan 2 RELATION children
 - ORDER BY → SORT
 - UPDATE/INSERT/DELETE → node special dengan aturan masing-masing
+
+**FILTER Special Rules:**
+
+- **1 child:** Continuation tree (bisa RELATION, JOIN, SORT, PROJECT, atau operator lainnya)
+- **2 children:** First child = continuation tree, second child = value (ARRAY/RELATION/PROJECT)
 
 **Validation:** Check structure menggunakan `check_query()`
