@@ -342,6 +342,54 @@ class TestQueryValidator(unittest.TestCase):
             check_query(insert)
     
     # ====================================================================
+    # DELETE TESTS
+    # ====================================================================
+    
+    def test_valid_delete(self):
+        # Structure: DELETE -> RELATION
+        # Represents: DELETE FROM users;
+        delete = QueryTree("DELETE")
+        relation = QueryTree("RELATION", "users")
+        
+        delete.add_child(relation)
+        
+        check_query(delete)
+    
+    def test_valid_delete_with_filter(self):
+        # Structure: DELETE -> FILTER -> RELATION
+        # Represents: DELETE FROM users WHERE id = 1;
+        delete = QueryTree("DELETE")
+        filter_node = QueryTree("FILTER", "WHERE id = 1")
+        relation = QueryTree("RELATION", "users")
+        
+        delete.add_child(filter_node)
+        filter_node.add_child(relation)
+        
+        check_query(delete)
+    
+    def test_invalid_delete_no_child(self):
+        # Structure: DELETE (no children)
+        # Represents: DELETE FROM ??;
+        # Invalid because DELETE must have one child
+        delete = QueryTree("DELETE")
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(delete)
+    
+    def test_invalid_delete_multiple_children(self):
+        # Structure: DELETE -> RELATION, RELATION
+        # Invalid because DELETE must have exactly one child
+        delete = QueryTree("DELETE")
+        relation1 = QueryTree("RELATION", "users")
+        relation2 = QueryTree("RELATION", "profiles")
+        
+        delete.add_child(relation1)
+        delete.add_child(relation2)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(delete)
+    
+    # ====================================================================
     # TRANSACTION TESTS
     # ====================================================================
     
