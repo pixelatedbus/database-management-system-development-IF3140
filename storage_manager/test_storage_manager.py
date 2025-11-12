@@ -21,8 +21,8 @@ import os
 import sys
 from typing import List, Dict, Any
 
-from storage_manager import StorageManager
-from models import Condition, DataRetrieval, DataWrite, DataDeletion
+from .storage_manager import StorageManager
+from .models import Condition, DataRetrieval, DataWrite, DataDeletion, ColumnDefinition
 
 
 class TestStorageManager:
@@ -250,16 +250,124 @@ class TestStorageManager:
     # ========== Test: write_block (TODO) ==========
 
     def test_write_block(self):
-        """Test write_block functionality (INSERT & UPDATE)."""
-        self.print_header("WRITE BLOCK (TODO)")
-        print("\n[INFO] write_block belum diimplementasi")
-        print("  TODO: Test INSERT operation")
-        print("  TODO: Test UPDATE operation")
-        print("  TODO: Test UPDATE with conditions")
+        """Test write_block (INSERT dan UPDATE) data ke tabel 'employee'."""
+        self.print_header("write_block (INSERT & UPDATE) ")
+        
+        TABLE_NAME = "employee"
+
+        # buat tabel testing baru 'employee'
+        employee_cols = [
+            ColumnDefinition("id_pegawai", "INTEGER", is_primary_key=True, is_nullable=False),
+            ColumnDefinition("nama", "VARCHAR", size=50, is_nullable=False),
+            ColumnDefinition("gaji", "FLOAT", is_nullable=True),
+            ColumnDefinition("departemen", "VARCHAR", size=20, default_value="Marketing"),
+        ]
+        
+        # Buat tabel jika belum ada (menjaga independensi test)
+        if TABLE_NAME not in self.sm.tables:
+            self.sm.create_table(TABLE_NAME, employee_cols)
+        
+        # Insert data awal (pra-syarat untuk operasi UPDATE)
+        initial_data = [
+            {"id_pegawai": 101, "nama": "Asep Setiawan", "gaji": 5000000.0, "departemen": "IT"},
+            {"id_pegawai": 102, "nama": "Bunga Citra", "gaji": 6500000.0, "departemen": "Finance"},
+        ]
+        try:
+            self.sm.insert_rows(TABLE_NAME, initial_data)
+            self.assert_true(True, f"Pre-syarat: Insert {len(initial_data)} baris awal berhasil.")
+        except Exception as e:
+            self.assert_true(False, f"Gagal menyiapkan data awal: {e}")
+            return
+            
+        # =========================================================
+        # SKENARIO 1: INSERT DATA BARU (write_block tanpa conditions)
+        # =========================================================
+        print("\n[1] INSERT DATA BARU (tanpa conditions)")
+        
+        # INSERT row baru: ID 103, Nama "Cahya Dewi", Gaji 4800000.0. Departemen menggunakan nilai default "Marketing".
+        insert_data_write = DataWrite(
+            table=TABLE_NAME,
+            column=["id_pegawai", "nama", "gaji"],
+            new_value=[103, "Cahya Dewi", 4800000.0],
+            conditions=[] # Conditions kosong -> operasi INSERT
+        )
+
+        try:
+            affected_rows = self.sm.write_block(insert_data_write)
+            self.assert_equal(affected_rows, 1, "Affected rows untuk INSERT harus 1")
+            
+            # Verifikasi data setelah INSERT (total harus 3 baris)
+            all_data = self.sm.read_block(DataRetrieval(table=TABLE_NAME))
+            self.assert_equal(len(all_data), 3, "Jumlah baris setelah INSERT harus 3")
+            
+            cahya_row = next((row for row in all_data if row["id_pegawai"] == 103), None)
+            self.assert_true(cahya_row is not None, "Baris Cahya Dewi ditemukan")
+            if cahya_row:
+                self.assert_equal(cahya_row["departemen"], "Marketing", "Departemen Cahya (nilai default terisi)")
+
+        except Exception as e:
+            self.assert_true(False, f"Test INSERT (write_block) gagal: {e}")
+            
+        # =========================================================
+        # SKENARIO 2: UPDATE DATA (write_block dengan conditions)
+        # =========================================================
+        print("\n[2] UPDATE DATA (dengan conditions)")
+        
+        # UPDATE data: Ubah Gaji Asep (id=101) menjadi 5500000.0 dan Departemennya menjadi "R&D"
+        update_conditions = [Condition(column="id_pegawai", operation="=", operand=101)]
+        update_data_write = DataWrite(
+            table=TABLE_NAME,
+            column=["gaji", "departemen"],
+            new_value=[5500000.0, "R&D"],
+            conditions=update_conditions # Conditions ada -> operasi UPDATE
+        )
+
+        try:
+            affected_rows = self.sm.write_block(update_data_write)
+            self.assert_equal(affected_rows, 1, "Affected rows untuk UPDATE harus 1")
+            
+            # Verifikasi data setelah UPDATE
+            data_asep = self.sm.read_block(
+                DataRetrieval(
+                    table=TABLE_NAME,
+                    conditions=update_conditions
+                )
+            )
+            
+            self.assert_equal(len(data_asep), 1, "Jumlah baris Asep yang cocok setelah UPDATE")
+            
+            if data_asep:
+                asep_row = data_asep[0]
+                self.assert_equal(asep_row["gaji"], 5500000.0, "Gaji Asep setelah UPDATE harus 5500000.0")
+                self.assert_equal(asep_row["departemen"], "R&D", "Departemen Asep setelah UPDATE harus R&D")
+                
+        except Exception as e:
+            self.assert_true(False, f"Test UPDATE (write_block) gagal: {e}")
+
+        # =========================================================
+        # SKENARIO 3: UPDATE DATA (tidak ada yang cocok)
+        # =========================================================
+        print("\n[3] UPDATE DATA (tidak ada yang cocok)")
+
+        # Coba update row id_pegawai=999 (tidak ada)
+        no_match_update = DataWrite(
+            table=TABLE_NAME,
+            column=["gaji"],
+            new_value=[10000000.0],
+            conditions=[Condition(column="id_pegawai", operation="=", operand=999)]
+        )
+
+        try:
+            affected_rows = self.sm.write_block(no_match_update)
+            self.assert_equal(affected_rows, 0, "UPDATE tanpa baris yang cocok mengembalikan 0 baris terpengaruh")
+        except Exception as e:
+            self.assert_true(False, f"Test UPDATE (no match) gagal: {e}")
 
     # ========== Test: delete_block ==========
 
+
     def test_delete_block(self):
+        self.print_header("DELETE BLOCK")
         """Test delete_block functionality."""
         print("\n[1] DELETE - Menghapus mahasiswa dengan IPK < 3.3")
         try:
