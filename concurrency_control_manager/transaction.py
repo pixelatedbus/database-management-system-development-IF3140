@@ -19,23 +19,35 @@ class Transaction:
         self.finish_timestamp: Optional[datetime] = None
         self.actions: List[Action] = []
         self.wait_time: float = 0.0
+
+    def __repr__(self) -> str:
+        return (f"Transaction(transaction_id={self.transaction_id}, status={self.status.name}, "
+                f"start_timestamp={self.start_timestamp}, finish_timestamp={self.finish_timestamp}, "
+                f"validation_timestamp={self.validation_timestamp}, wait_time={self.wait_time}, "
+                f"actions={self.actions})")
     
     def add_action(self, action: Action) -> None:
         """Add an action to the transaction"""
-        pass
+        if action.transaction_id != self.transaction_id:
+            raise ValueError("Action transaction_id does not match Transaction transaction_id")
+        self.actions.append(action)
     
     def set_status(self, status: TransactionStatus) -> None:
         """Set the transaction status"""
-        pass
+        self.status = status
+        if status in [TransactionStatus.COMMITTED, TransactionStatus.ABORTED, TransactionStatus.TERMINATED]:
+            if self.finish_timestamp is None:
+                self.finish_timestamp = datetime.now()
     
     def get_status(self) -> TransactionStatus:
         """Get the transaction status"""
-        pass
+        return self.status
     
     def get_age(self) -> float:
         """Get the age of the transaction"""
-        pass
+        end_time = self.finish_timestamp if self.finish_timestamp else datetime.now()
+        return (end_time - self.start_timestamp).total_seconds()
     
     def get_action_count(self) -> int:
         """Get the number of actions in the transaction"""
-        pass
+        return len(self.actions)
