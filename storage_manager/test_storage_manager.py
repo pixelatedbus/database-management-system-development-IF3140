@@ -6,7 +6,7 @@ Test suite ini mencakup semua fungsi utama Storage Manager:
 2. insert_rows() - Insert data ke tabel
 3. read_block() - Membaca data dengan filtering & projection
 4. write_block() - Update/Insert data (TODO)
-5. delete_block() - Hapus data (TODO)
+5. delete_block() - Hapus data
 6. set_index() - Buat index (TODO)
 7. get_stats() - Ambil statistik (TODO)
 
@@ -21,8 +21,8 @@ import os
 import sys
 from typing import List, Dict, Any
 
-from .storage_manager import StorageManager
-from .models import Condition, DataRetrieval, DataWrite, DataDeletion
+from storage_manager import StorageManager
+from models import Condition, DataRetrieval, DataWrite, DataDeletion
 
 
 class TestStorageManager:
@@ -257,15 +257,34 @@ class TestStorageManager:
         print("  TODO: Test UPDATE operation")
         print("  TODO: Test UPDATE with conditions")
 
-    # ========== Test: delete_block (TODO) ==========
+    # ========== Test: delete_block ==========
 
     def test_delete_block(self):
         """Test delete_block functionality."""
-        self.print_header("DELETE BLOCK (TODO)")
-        print("\n[INFO] delete_block belum diimplementasi")
-        print("  TODO: Test DELETE with single condition")
-        print("  TODO: Test DELETE with multiple conditions")
-        print("  TODO: Test DELETE all rows")
+        print("\n[1] DELETE - Menghapus mahasiswa dengan IPK < 3.3")
+        try:
+            kondisi = Condition(column='ipk', operation='<', operand=3.3)
+            data_deletion = DataDeletion(
+                table='mahasiswa',
+                conditions=[kondisi]
+            )
+            affected_rows = self.sm.delete_block(data_deletion)
+            self.assert_equal(affected_rows, 2, "Should delete 2 rows with ipk < 3.3")
+        except Exception as e:
+            self.assert_true(False, f"DELETE should succeed: {e}")
+
+        print("\n[2] DELETE dengan multiple conditions (WHERE ipk < 3.5 AND angkatan < 2021)")
+        try:
+            kondisi_ipk = Condition(column='ipk', operation='<', operand=3.5)
+            kondisi_angkatan = Condition(column='angkatan', operation='<', operand=2021)
+            data_deletion = DataDeletion(
+                table='mahasiswa',
+                conditions=[kondisi_ipk, kondisi_angkatan]
+            )
+            affected_rows = self.sm.delete_block(data_deletion)
+            self.assert_equal(affected_rows, 0, "Should delete 0 row matching both conditions")
+        except Exception as e:
+            self.assert_true(False, f"DELETE should succeed: {e}")
 
     # ========== Test: set_index (TODO) ==========
 
