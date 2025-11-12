@@ -93,6 +93,7 @@ class StorageManager:
         """Dapatkan path file untuk tabel tertentu."""
         return os.path.join(self.data_dir, f"{table_name}.dat")
 
+
     # ========== Table Management ==========
 
     def create_table(
@@ -377,7 +378,9 @@ class StorageManager:
                 return False
         return True
 
+            
     # ========== Helpers for delete_block ==========
+
     def _load_table_rows(self, table_name: str) -> List[Dict[str, Any]]:
         """Load semua baris dari file tabel. Menangani fallback JSON.
 
@@ -450,24 +453,157 @@ class StorageManager:
             # Jangan biarkan error statistik menghentikan operasi penghapusan
             pass
 
+    # ========== Helpers for write_block ==========
+
+    def _load_all_rows_with_schema(self, table_name: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """
+        Memuat semua baris data dan nama schema (kolom) dari file biner.
+
+        Menggunakan utilitas read_binary_table().
+
+        Returns:
+            Tuple (list of row dictionaries, list of schema names)
+        """
+        table_file = self._get_table_file_path(table_name)
+        
+        # Jika file belum ada, anggap tabel kosong
+        if not os.path.exists(table_file):
+            return [], [col.name for col in self._get_column_definitions(table_name)]
+
+        # Panggil fungsi utilitas untuk membaca seluruh isi file biner
+        rows, schema_names = read_binary_table(table_file)
+        return rows, schema_names
+
+
+    def _apply_defaults_and_validate(self, rows: List[Dict[str, Any]], column_defs: List[ColumnDefinition]) -> None:
+        """
+        Mengisi nilai default dan melakukan validasi schema pada baris yang diberikan (in-place).
+
+        Digunakan saat INSERT untuk memastikan semua kolom wajib ada.
+        """
+        schema_names = [col.name for col in column_defs]
+        
+        for row in rows:
+            # 1. Aplikasikan nilai default dan tangani missing column
+            for col_def in column_defs:
+                col_name = col_def.name
+                
+                # Jika kolom tidak ada di row yang di-insert:
+                if col_name not in row:
+                    if col_def.default_value is not None:
+                        # Isi dengan nilai default
+                        row[col_name] = col_def.default_value
+                    elif col_def.is_nullable:
+                        # Boleh NULL, isi dengan None (atau biarkan saja, tapi di sini kita isi None eksplisit)
+                        row[col_name] = None
+                    else:
+                        # Tidak ada nilai, tidak boleh NULL, dan tidak ada default. Ini adalah error.
+                        raise ValueError(f"Kolom wajib '{col_name}' tidak disediakan dan tidak memiliki nilai default.")
+
+            # 2. Lakukan validasi penuh
+            # Memanggil fungsi utilitas yang memastikan tipe data, NULLability, dan size
+            validate_row_for_schema(row, column_defs)
+
+
     # ========== Write / Delete / Index / Stats ==========
     def write_block(self, data_write: DataWrite) -> int:
-        """Menulis atau memodifikasi data di disk.
-        
-        Args:
-            data_write: Object yang berisi tabel, kolom, kondisi, dan nilai baru
+            """Menulis atau memodifikasi data di disk.
             
-        Returns:
-            Jumlah baris yang terpengaruh
+            Args:
+                data_write: Object yang berisi tabel, kolom, kondisi, dan nilai baru
+                
+            Returns:
+                Jumlah baris yang terpengaruh
+                
+            Implementasi logika insert/update:
+            - Tentukan apakah operasi INSERT (tanpa kondisi) atau UPDATE (dengan kondisi)
+            - Load semua data, modifikasi/tambah, lalu tulis ulang
+            - Update statistik (TODO)
+            - Koordinasi dengan Failure Recovery Manager untuk dirty data (TODO)
+            """
+
+            table_name = data_write.table
             
-        TODO: Implementasi logika insert/update:
-        - Tentukan apakah operasi INSERT atau UPDATE
-        - Cari lokasi yang sesuai di disk
-        - Tulis data dalam format binary
-        - Update statistik
-        - Koordinasi dengan Failure Recovery Manager untuk dirty data
-        """
-        raise NotImplementedError("write_block belum diimplementasi")
+            if table_name not in self.tables:
+                raise ValueError(f"Tabel '{table_name}' tidak ditemukan")
+
+            table_file = self._get_table_file_path(table_name)
+            
+            # Load data yang sudah ada
+            all_rows, schema_names = self._load_all_rows_with_schema(table_name)
+            
+            column_defs = self._get_column_definitions(table_name)
+            
+            rows_affected = 0
+
+            # ========== Logika INSERT (tanpa kondisi) ==========
+            if not data_write.conditions:
+                if not data_write.column or not data_write.new_value:
+                    raise ValueError("Untuk INSERT, column dan new_value harus diisi")
+                
+                if len(data_write.column) != len(data_write.new_value):
+                    raise ValueError("Jumlah kolom dan nilai baru harus sama")
+                    
+                new_row_data = dict(zip(data_write.column, data_write.new_value))
+                
+                # Aplikasikan nilai default dan validasi
+                self._apply_defaults_and_validate([new_row_data], column_defs)
+                
+                # Karena _apply_defaults_and_validate memodifikasi data in-place, kita bisa langsung menambahkannya
+                all_rows.append(new_row_data)
+                rows_affected = 1
+                print(f"✓ Inserted 1 row ke tabel '{table_name}'")
+
+            # ========== Logika UPDATE (dengan kondisi) ==========
+            else:
+                if not data_write.column or not data_write.new_value:
+                    raise ValueError("Untuk UPDATE, column dan new_value harus diisi")
+                
+                if len(data_write.column) != len(data_write.new_value):
+                    raise ValueError("Jumlah kolom dan nilai baru harus sama")
+
+                update_data = dict(zip(data_write.column, data_write.new_value))
+                
+                # Lakukan pra-validasi tipe data untuk nilai yang di-update
+                for col_name, new_val in update_data.items():
+                    col_def = next((c for c in column_defs if c.name == col_name), None)
+                    if col_def is None:
+                        raise ValueError(f"Kolom '{col_name}' tidak ada di tabel '{table_name}'")
+                    
+                    # Validasi nilai baru
+                    from .utils import validate_value_for_column
+                    try:
+                        validate_value_for_column(new_val, col_def)
+                    except ValueError as e:
+                        raise ValueError(f"Update value validation failed for column '{col_name}': {e}")
+                
+                
+                new_rows = []
+                for row in all_rows:
+                    if self._row_matches_all_conditions(row, data_write.conditions):
+                        # Update row
+                        updated_row = row.copy()
+                        for col_name, new_val in update_data.items():
+                            updated_row[col_name] = new_val
+                        
+                        # NOTE: Validasi penuh tidak diperlukan lagi karena pre-validasi di atas
+                        # Namun, jika ada logika constraint yang lebih kompleks, validasi penuh bisa dilakukan
+                        
+                        new_rows.append(updated_row)
+                        rows_affected += 1
+                    else:
+                        new_rows.append(row)
+                
+                all_rows = new_rows
+                print(f"✓ Updated {rows_affected} rows di tabel '{table_name}'")
+
+            # Tulis semua baris (yang sudah dimodifikasi) kembali ke binary file
+            if rows_affected > 0:
+                write_binary_table(table_file, all_rows, schema_names)
+            
+            return rows_affected
+
+
 
     def delete_block(self, data_deletion: DataDeletion) -> int:
         """Menghapus data dari disk.
