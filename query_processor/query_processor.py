@@ -27,7 +27,7 @@ class QueryProcessor:
         ...
     
     # ---------------------------- private methods ----------------------------
-    def _get_query_tree(self, query):
+    def _get_query_tree(self, query:str):
         tok = Tokenizer(query)
         parser = Parser(tok)
 
@@ -39,6 +39,15 @@ class QueryProcessor:
         print(query_tree.tree())
 
         return query_tree
+
+    def _execute(self, query_tree:QueryTree):
+        if len(query_tree.childs) == 0:
+            print(query_tree.val) # placeholder. diganti dengan interaksi ke komponen lain untuk eksekusi instruksi (?)
+            ... # perbarui row hasil eksekusi di node ybs. jadi attr query_tree (?)
+            query_tree.parent.childs = [query_tree] # 1 child representasi row hasil eksekusi
+        else:
+            ... # placeholder. diganti dengan interaksi ke komponen lain untuk eksekusi instruksi (?)
+            ... # perbarui row hasil eksekusi di node ybs. jadi attr query_tree (?)
 
 # Unit Testing
 def main():
