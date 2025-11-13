@@ -6,7 +6,7 @@ from typing import Set, Dict
 from .base import ConcurrencyAlgorithm
 from ..transaction import Transaction
 from ..row import Row
-from ..enums import ActionType
+from ..enums import ActionType, TransactionStatus
 from ..response import Response
 
 
@@ -114,7 +114,6 @@ class ValidationBasedAlgorithm(ConcurrencyAlgorithm):
     
     def commit_transaction(self, t: Transaction) -> None:
         """Commit transaction after validation"""
-        from ..enums import TransactionStatus
         from datetime import datetime
         
         t.validation_timestamp = datetime.now()
@@ -126,11 +125,10 @@ class ValidationBasedAlgorithm(ConcurrencyAlgorithm):
             self.validator.clear_transaction(t.transaction_id)
         else:
             t.set_status(TransactionStatus.Aborted)
-            self.abort_transaction(t)
+            self.abort_transaction(t.transaction_id)
     
     def abort_transaction(self, t: Transaction) -> None:
         """Abort transaction"""
-        from ..enums import TransactionStatus
         
         t.set_status(TransactionStatus.Aborted)
         self.validator.clear_transaction(t.transaction_id)
