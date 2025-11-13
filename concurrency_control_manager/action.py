@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional
 from .enums import ActionType, ActionStatus
 
-
+MAX_RETRY = 3
 class Action:
     """Represents an action within a transaction"""
     
@@ -21,26 +21,36 @@ class Action:
         self.retry_count: int = 0
         self.blocked_timestamp: Optional[datetime] = None
     
+    def __repr__(self):
+        return (f"Action(action_id={self.action_id}, transaction_id={self.transaction_id}, "
+                f"object_id='{self.object_id}', action_type={self.type.name}, "
+                f"status={self.status.name}, timestamp={self.timestamp}, "
+                f"retry_count={self.retry_count})")
+    
     def mark_executed(self) -> None:
         """Mark action as executed"""
-        pass
+        self.status = ActionStatus.Executed
+        self.blocked_timestamp = None
     
     def mark_denied(self) -> None:
         """Mark action as denied"""
-        pass
+        self.status = ActionStatus.Denied
     
     def mark_blocked(self) -> None:
         """Mark action as blocked"""
-        pass
+        self.status = ActionStatus.Blocked
+        self.blocked_timestamp = datetime.now()
     
     def increment_retry(self) -> None:
         """Increment retry count"""
-        pass
+        self.retry_count += 1
     
     def get_wait_time(self) -> float:
         """Get wait time for blocked action"""
-        pass
+        if self.status == ActionStatus.Blocked and self.blocked_timestamp:
+            return (datetime.now() - self.blocked_timestamp).total_seconds()
+        return 0
     
     def should_abort(self) -> bool:
         """Check if action should be aborted"""
-        pass
+        return self.retry_count >= MAX_RETRY
