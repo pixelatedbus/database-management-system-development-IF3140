@@ -131,6 +131,7 @@ class TestOptimizationEngineIntegration(unittest.TestCase):
         
         self.assertIsInstance(result, ParsedQuery)
         self.assertEqual(result.query_tree.type, "UPDATE")
+        self.assertEqual(result.query_tree.val, "name = 'Jane'")
     
     def test_parse_delete(self):
         engine = OptimizationEngine()
@@ -146,7 +147,6 @@ class TestOptimizationEngineIntegration(unittest.TestCase):
     # ====================================================================
     
     def test_parse_transaction(self):
-        """Test parsing BEGIN TRANSACTION...COMMIT."""
         engine = OptimizationEngine()
         sql = "BEGIN TRANSACTION INSERT INTO users (id, name) VALUES (1, 'John') COMMIT"
         
