@@ -21,8 +21,10 @@ from .utils import (
     validate_table_name,
     validate_row_for_schema,
     validate_value_for_column,
-    read_binary_table,
-    write_binary_table
+    read_binary_table_streaming,
+    write_binary_table,
+    append_row_to_table,
+    append_block_to_table
 )
 
 
@@ -441,7 +443,7 @@ class StorageManager:
         return [self._dict_to_column_def(c) for c in table_meta["columns"]]
 
     def insert_rows(self, table_name: str, rows: List[Dict[str, Any]], validate: bool = True) -> None:
-        """insert rows ke tabel dengan validasi tipe data.
+        """insert rows ke tabel dengan validasi tipe data (OPTIMIZED - batch insert).
 
         args:
             table_name: nama tabel
@@ -457,28 +459,6 @@ class StorageManager:
         # ambil column definitions
         column_defs = self._get_column_definitions(table_name)
 
-        # validasi setiap row jika diminta
-        if validate:
-            for i, row in enumerate(rows):
-                try:
-                    validate_row_for_schema(row, column_defs)
-                except ValueError as e:
-                    raise ValueError(f"Row {i+1} validation failed: {e}")
-
-        # ambil schema names untuk binary file
-        table_meta = self.tables[table_name]
-        schema_names = [c["name"] for c in table_meta["columns"]]
-
-        table_file = self._get_table_file_path(table_name)
-
-        # load existing data (jika ada)
-        existing_rows = []
-        if os.path.exists(table_file):
-            try:
-                existing_rows, _ = read_binary_table(table_file)
-            except Exception:
-                existing_rows = []
-
         # aplikasikan default values untuk kolom yang tidak diisi
         processed_rows = []
         for row in rows:
@@ -491,22 +471,37 @@ class StorageManager:
                         processed_row[col_def.name] = None
             processed_rows.append(processed_row)
 
-        # append new rows
-        all_rows = existing_rows + processed_rows
+        # validasi setiap row jika diminta
+        if validate:
+            for i, row in enumerate(processed_rows):
+                try:
+                    validate_row_for_schema(row, column_defs)
+                except ValueError as e:
+                    raise ValueError(f"Row {i+1} validation failed: {e}")
 
-        # write kembali ke binary file
-        write_binary_table(table_file, all_rows, schema_names, self.block_size)
-        print(f"✓ inserted {len(rows)} rows ke tabel '{table_name}'")
+        # ambil schema names untuk binary file
+        table_meta = self.tables[table_name]
+        schema_names = [c["name"] for c in table_meta["columns"]]
+
+        table_file = self._get_table_file_path(table_name)
+
+        # OPTIMIZED: gunakan append_block_to_table untuk batch insert tanpa load semua data!
+        if not os.path.exists(table_file):
+            write_binary_table(table_file, processed_rows, schema_names, self.block_size)
+        else:
+            append_block_to_table(table_file, processed_rows, schema_names, self.block_size)
+
+        print(f"✓ inserted {len(rows)} rows ke tabel '{table_name}' (optimized batch insert)")
 
     # ========== core operations ==========
 
     def read_block(self, data_retrieval: DataRetrieval) -> List[Dict[str, Any]]:
-        """baca data dari disk berdasarkan parameter retrieval.
+        """baca data dari disk berdasarkan parameter retrieval (OPTIMIZED - streaming).
 
         proses:
         1. validasi tabel ada di storage
-        2. load semua data dari binary file tabel
-        3. filter row berdasarkan kondisi (and logic)
+        2. stream data per-block dari binary file (ga load semua!)
+        3. filter row berdasarkan kondisi (and logic) on-the-fly
         4. proyeksi kolom jika diminta
         5. return hasil
 
@@ -533,20 +528,19 @@ class StorageManager:
             print(f"⚠ file tabel '{table_name}' tidak ditemukan")
             return []
 
-        # 3. load data dari binary file
+        # 3. stream data dari binary file (memory efficient!)
         try:
-            all_rows, _ = read_binary_table(table_file)
-            print(f"✓ loaded {len(all_rows)} rows dari binary file '{table_name}.dat'")
+            # Define filter function untuk streaming
+            def row_filter(row):
+                return self._row_matches_all_conditions(row, data_retrieval.conditions)
+
+            # Stream rows yang match conditions
+            filtered_rows = list(read_binary_table_streaming(table_file, filter_fn=row_filter))
+            print(f"✓ found {len(filtered_rows)} matching rows dari tabel '{table_name}' (streamed)")
         except Exception as e:
             raise ValueError(f"error membaca binary file '{table_name}.dat': {e}")
 
-        # 4. filter berdasarkan kondisi (and logic)
-        filtered_rows = []
-        for row in all_rows:
-            if self._row_matches_all_conditions(row, data_retrieval.conditions):
-                filtered_rows.append(row)
-
-        # 5. proyeksi kolom jika ada
+        # 4. proyeksi kolom jika ada
         if data_retrieval.column and len(data_retrieval.column) > 0:
             return [project_columns(row, data_retrieval.column) for row in filtered_rows]
         else:
@@ -571,7 +565,7 @@ class StorageManager:
     # ========== helpers untuk delete_block ==========
 
     def _load_table_rows(self, table_name: str) -> List[Dict[str, Any]]:
-        """load semua baris dari file tabel.
+        """load semua baris dari file tabel (OPTIMIZED - streaming read).
 
         args:
             table_name: nama tabel
@@ -586,7 +580,8 @@ class StorageManager:
         if not os.path.exists(table_file):
             return []
 
-        rows, _ = read_binary_table(table_file)
+        # OPTIMIZED: gunakan streaming untuk read, lalu collect ke list
+        rows = list(read_binary_table_streaming(table_file))
         return rows
 
     def _save_table_rows(self, table_name: str, rows: List[Dict[str, Any]]) -> None:
@@ -606,21 +601,22 @@ class StorageManager:
     # ========== helpers untuk write_block ==========
 
     def _load_all_rows_with_schema(self, table_name: str) -> Tuple[List[Dict[str, Any]], List[str]]:
-        """muat semua baris data dan nama schema (kolom) dari file biner.
-
-        menggunakan utilitas read_binary_table().
+        """muat semua baris data dan nama schema (kolom) dari file biner (OPTIMIZED - streaming).
 
         returns:
             tuple (list of row dictionaries, list of schema names)
         """
         table_file = self._get_table_file_path(table_name)
 
+        # ambil schema names dari metadata
+        schema_names = [col.name for col in self._get_column_definitions(table_name)]
+
         # jika file belum ada, anggap tabel kosong
         if not os.path.exists(table_file):
-            return [], [col.name for col in self._get_column_definitions(table_name)]
+            return [], schema_names
 
-        # panggil fungsi utilitas untuk baca seluruh isi file biner
-        rows, schema_names = read_binary_table(table_file)
+        # OPTIMIZED: gunakan streaming untuk read, lalu collect ke list
+        rows = list(read_binary_table_streaming(table_file))
         return rows, schema_names
 
 
@@ -683,28 +679,54 @@ class StorageManager:
                 if not data_write.column or not data_write.new_value:
                     raise ValueError("Untuk INSERT, column dan new_value harus diisi")
 
-                if len(data_write.column) != len(data_write.new_value):
-                    raise ValueError("Jumlah kolom dan nilai baru harus sama")
+                # Detect: BATCH INSERT atau SINGLE INSERT?
+                # Batch insert: new_value = [[val1, val2], [val1, val2], ...]
+                # Single insert: new_value = [val1, val2]
+                is_batch = isinstance(data_write.new_value[0], (list, tuple)) if data_write.new_value else False
 
-                # buat row baru
-                new_row_data = dict(zip(data_write.column, data_write.new_value))
+                if is_batch:
+                    # ========== BATCH INSERT (EFFICIENT!) ==========
+                    rows_to_insert = []
+                    for row_values in data_write.new_value:
+                        if len(data_write.column) != len(row_values):
+                            raise ValueError(f"Jumlah kolom ({len(data_write.column)}) dan nilai ({len(row_values)}) harus sama")
 
-                # aplikasikan nilai default dan validasi
-                self._apply_defaults_and_validate([new_row_data], column_defs)
+                        row_data = dict(zip(data_write.column, row_values))
+                        rows_to_insert.append(row_data)
 
-                # file baru atau file exists?
-                if not os.path.exists(table_file):
-                    # file baru - write biasa
-                    write_binary_table(table_file, [new_row_data], schema_names, self.block_size)
+                    # Validasi semua rows
+                    self._apply_defaults_and_validate(rows_to_insert, column_defs)
+
+                    # Batch insert dengan append_block_to_table (SUPER EFFICIENT!)
+                    if not os.path.exists(table_file):
+                        write_binary_table(table_file, rows_to_insert, schema_names, self.block_size)
+                    else:
+                        append_block_to_table(table_file, rows_to_insert, schema_names, self.block_size)
+
+                    print(f"✓ BATCH inserted {len(rows_to_insert)} rows ke tabel '{table_name}' (efficient!)")
+                    return len(rows_to_insert)
+
                 else:
-                    # file exists - untuk block-based structure, kita perlu load-modify-write
-                    # karena harus cek apakah row muat di block terakhir atau perlu block baru
-                    existing_rows, _ = read_binary_table(table_file)
-                    existing_rows.append(new_row_data)
-                    write_binary_table(table_file, existing_rows, schema_names, self.block_size)
+                    # ========== SINGLE INSERT ==========
+                    if len(data_write.column) != len(data_write.new_value):
+                        raise ValueError("Jumlah kolom dan nilai baru harus sama")
 
-                print(f"inserted 1 row ke tabel '{table_name}'")
-                return 1
+                    # buat row baru
+                    new_row_data = dict(zip(data_write.column, data_write.new_value))
+
+                    # aplikasikan nilai default dan validasi
+                    self._apply_defaults_and_validate([new_row_data], column_defs)
+
+                    # file baru atau file exists?
+                    if not os.path.exists(table_file):
+                        # file baru - write biasa
+                        write_binary_table(table_file, [new_row_data], schema_names, self.block_size)
+                    else:
+                        # file exists - optimized append tanpa load semua data
+                        append_row_to_table(table_file, new_row_data, schema_names, self.block_size)
+
+                    print(f"inserted 1 row ke tabel '{table_name}'")
+                    return 1
 
             # ========== logika update (dengan kondisi) ==========
             else:
