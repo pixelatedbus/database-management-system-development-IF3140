@@ -22,9 +22,7 @@ from .utils import (
     validate_row_for_schema,
     validate_value_for_column,
     read_binary_table,
-    write_binary_table,
-    serialize_row,
-    MAGIC_BYTES
+    write_binary_table
 )
 
 
@@ -398,7 +396,7 @@ class StorageManager:
         # buat file binary kosong (gunakan nama kolom saja untuk compatibility)
         schema_names = [c.name for c in column_defs]
         table_file = self._get_table_file_path(table_name)
-        write_binary_table(table_file, [], schema_names)
+        write_binary_table(table_file, [], schema_names, self.block_size)
 
         print(f"✓ tabel '{table_name}' berhasil dibuat dengan {len(column_defs)} kolom")
 
@@ -497,7 +495,7 @@ class StorageManager:
         all_rows = existing_rows + processed_rows
 
         # write kembali ke binary file
-        write_binary_table(table_file, all_rows, schema_names)
+        write_binary_table(table_file, all_rows, schema_names, self.block_size)
         print(f"✓ inserted {len(rows)} rows ke tabel '{table_name}'")
 
     # ========== core operations ==========
@@ -603,27 +601,7 @@ class StorageManager:
         """
         schema_names = [c["name"] for c in self.tables[table_name]["columns"]]
         table_file = self._get_table_file_path(table_name)
-        write_binary_table(table_file, rows, schema_names)
-
-    def _update_stats_after_delete(self, table_name: str, remaining_rows: List[Dict[str, Any]]) -> None:
-        """update statistik sederhana setelah penghapusan (hanya count saat ini).
-
-        args:
-            table_name: nama tabel
-            remaining_rows: list dari baris yang tersisa setelah penghapusan
-        """
-        try:
-            n_r = len(remaining_rows)
-            stat_obj = self.stats.get(table_name)
-            # jika stat_obj sudah ada dan punya atribut n_r, coba perbarui; jika tidak, simpan minimal info
-            if isinstance(stat_obj, dict):
-                stat_obj["n_r"] = n_r
-            else:
-                # create minimal statistic representation
-                self.stats[table_name] = {"n_r": n_r}
-        except Exception:
-            # jangan biarkan error statistik menghentikan operasi penghapusan
-            pass
+        write_binary_table(table_file, rows, schema_names, self.block_size)
 
     # ========== helpers untuk write_block ==========
 
@@ -717,34 +695,13 @@ class StorageManager:
                 # file baru atau file exists?
                 if not os.path.exists(table_file):
                     # file baru - write biasa
-                    write_binary_table(table_file, [new_row_data], schema_names)
+                    write_binary_table(table_file, [new_row_data], schema_names, self.block_size)
                 else:
-                    # file exists - true append (no load!)
-                    with open(table_file, 'r+b') as f:
-                        # verify magic bytes
-                        magic = f.read(4)
-                        if magic != MAGIC_BYTES:
-                            raise ValueError(f"invalid file format")
-
-                        # skip version (4 bytes)
-                        f.seek(4 + 4)
-
-                        # read schema length, then skip schema
-                        schema_length = struct.unpack('<I', f.read(4))[0]
-                        f.seek(4 + 4 + 4 + schema_length)
-
-                        # read current row count
-                        old_row_count = struct.unpack('<I', f.read(4))[0]
-
-                        # update row count
-                        new_row_count = old_row_count + 1
-                        f.seek(4 + 4 + 4 + schema_length)
-                        f.write(struct.pack('<I', new_row_count))
-
-                        # seek to end and append row
-                        f.seek(0, 2)  # seek_end
-                        row_bytes = serialize_row(new_row_data, schema_names)
-                        f.write(row_bytes)
+                    # file exists - untuk block-based structure, kita perlu load-modify-write
+                    # karena harus cek apakah row muat di block terakhir atau perlu block baru
+                    existing_rows, _ = read_binary_table(table_file)
+                    existing_rows.append(new_row_data)
+                    write_binary_table(table_file, existing_rows, schema_names, self.block_size)
 
                 print(f"inserted 1 row ke tabel '{table_name}'")
                 return 1
@@ -793,7 +750,7 @@ class StorageManager:
 
                 # write kembali semua rows
                 if rows_affected > 0:
-                    write_binary_table(table_file, new_rows, schema_names)
+                    write_binary_table(table_file, new_rows, schema_names, self.block_size)
 
                 print(f"updated {rows_affected} rows di tabel '{table_name}'")
                 return rows_affected
@@ -848,9 +805,6 @@ class StorageManager:
 
         # save remaining rows kembali ke disk
         self._save_table_rows(table_name, rows_to_keep)
-
-        # update simple statistics
-        self._update_stats_after_delete(table_name, rows_to_keep)
 
         print(f"dihapus {deleted_count} baris dari tabel '{table_name}'")
         return deleted_count
