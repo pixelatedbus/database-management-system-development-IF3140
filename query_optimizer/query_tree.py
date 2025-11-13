@@ -1,36 +1,5 @@
 from __future__ import annotations
 
-# Operator types:
-# UNARY operators (1 child)
-# BINARY operators (2 children)
-# LEAF nodes (0 children)
-# SPECIAL: UPDATE, INSERT, DELETE, BEGIN_TRANSACTION, COMMIT
-
-UNARY_OPERATORS = {
-    "PROJECT",    # π - projection (SELECT columns)
-    "FILTER",     # σ - selection (WHERE condition)
-    "SORT",       # ORDER BY
-}
-
-BINARY_OPERATORS = {
-    "JOIN",       # ⋈ - join (butuh 2 relasi)
-}
-
-LEAF_NODES = {
-    "RELATION",   # Base table/relation
-    "LIMIT",      # LIMIT value
-}
-
-SPECIAL_OPERATORS = {
-    "UPDATE",     # DML operation
-    "INSERT",     # DML operation
-    "DELETE",     # DML operation
-    "BEGIN_TRANSACTION",  # Transaction start
-    "COMMIT",             # Transaction commit
-}
-
-VALID_JOIN_TYPES = {"NATURAL", "ON"}
-
 class QueryTree:
     def __init__(self, type: str, val: str = "", parent: QueryTree | None = None):
         self.type: str = type

@@ -1,21 +1,9 @@
 from __future__ import annotations
+from query_optimizer.query_tree import QueryTree
 
 class QueryValidationError(Exception):
     """Exception raised when query tree validation fails"""
     pass
-
-# Dummy QueryTree class for context
-class QueryTree:
-    def __init__(self, type: str, val: str = "", parent: QueryTree | None = None):
-        self.type: str = type
-        self.val: str = val
-        self.childs: list[QueryTree] = []
-        self.parent: QueryTree | None = parent
-    def add_child(self, child_node: QueryTree):
-        child_node.parent = self
-        self.childs.append(child_node)
-    def __repr__(self) -> str:
-        return f"QueryTree(type='{self.type}', val='{self.val}')"
 
 # Dummy function
 def get_statistic():
