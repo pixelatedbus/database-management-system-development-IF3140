@@ -1,5 +1,5 @@
 from buffer import buffer, table
-from log import actiontype
+from log import actiontype, log
 from recovery_criteria import RecoveryCriteria
 
 class FailureRecovery:
@@ -15,8 +15,3 @@ class FailureRecovery:
 
     def _save_checkpoint(self):
         pass
-
-class RecoverCriteria:
-    def __init__(self, timestamp, transaction_id):
-        self.timestamp = timestamp
-        self.transaction_id = transaction_id
