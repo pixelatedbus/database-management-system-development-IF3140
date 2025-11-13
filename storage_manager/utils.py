@@ -5,6 +5,7 @@ evaluasi kondisi, I/O file, dan validasi data.
 """
 from __future__ import annotations
 
+import os
 import struct
 import json
 from typing import Any, Dict, List, Tuple
@@ -390,14 +391,28 @@ def write_binary_table(file_path: str, rows: List[Dict[str, Any]], schema: List[
                 f.write(row_bytes)
 
 
-def read_binary_table(file_path: str) -> Tuple[List[Dict[str, Any]], List[str]]:
-    """Baca tabel dari binary file dengan block-based structure.
+def read_binary_table_streaming(file_path: str, filter_fn=None):
+    """Generator yang baca tabel per-block (MEMORY EFFICIENT - streaming).
+
+    ✅ RECOMMENDED for READ operations!
+
+    Benefits:
+    - Reads data block-by-block (doesn't load all into memory)
+    - Memory usage: ~1 row at a time vs entire table
+    - Supports on-the-fly filtering
+    - Scalable for large tables (tested with 20k+ rows)
+
+    Use cases:
+    - SELECT queries (read-only operations)
+    - Filtering/searching data
+    - Large tables where memory is a concern
 
     Args:
         file_path: Path ke file yang akan dibaca
+        filter_fn: Optional function(row) -> bool untuk filter rows on-the-fly
 
-    Returns:
-        Tuple (rows, schema)
+    Yields:
+        Dict[str, Any]: Row data yang sudah di-filter (jika ada filter_fn)
 
     Raises:
         ValueError: Jika format file tidak valid
@@ -424,21 +439,263 @@ def read_binary_table(file_path: str) -> Tuple[List[Dict[str, Any]], List[str]]:
         # 5. Read number of blocks
         num_blocks = struct.unpack('<I', f.read(4))[0]
 
-        # 6. Read all blocks
-        rows = []
-
-        # Read all remaining data at once for efficiency
-        all_data = f.read()
-        data_offset = 0
-
+        # 6. Read blocks ONE AT A TIME (streaming)
         for _ in range(num_blocks):
-            # Read row count in this block (4 bytes)
-            row_count = struct.unpack_from('<I', all_data, data_offset)[0]
-            data_offset += 4
+            # Read row count for this block
+            row_count_bytes = f.read(4)
+            if len(row_count_bytes) < 4:
+                break
+            row_count = struct.unpack('<I', row_count_bytes)[0]
 
             # Read all rows in this block
             for _ in range(row_count):
-                row, data_offset = deserialize_row(all_data, data_offset, schema)
-                rows.append(row)
+                # Read row length (4 bytes)
+                row_length_bytes = f.read(4)
+                if len(row_length_bytes) < 4:
+                    return
+                row_length = struct.unpack('<I', row_length_bytes)[0]
 
-        return rows, schema
+                # Read row data (actual content, without length header)
+                row_data = f.read(row_length)
+                if len(row_data) < row_length:
+                    return
+
+                # Deserialize row (pass full buffer: length + data)
+                full_row_buffer = row_length_bytes + row_data
+                row, _ = deserialize_row(full_row_buffer, 0, schema)
+
+                # Apply filter if provided
+                if filter_fn is None or filter_fn(row):
+                    yield row
+
+def append_row_to_table(file_path: str, row: Dict[str, Any], schema: List[str], block_size: int) -> None:
+    """Append single row ke binary table tanpa load semua data (optimized).
+
+    Strategy:
+    1. Read header untuk tahu struktur file
+    2. Navigate ke block terakhir
+    3. Check apakah row muat di block terakhir
+    4. Jika muat: update row_count block terakhir + append row
+    5. Jika tidak muat: buat block baru
+
+    Args:
+        file_path: Path ke file
+        row: Row data yang akan di-append
+        schema: Schema columns
+        block_size: Block size limit
+
+    Raises:
+        ValueError: Jika file format invalid
+    """
+    row_bytes = serialize_row(row, schema)
+    row_size = len(row_bytes)
+
+    with open(file_path, 'r+b') as f:
+        # 1. Read header
+        magic = f.read(4)
+        if magic != MAGIC_BYTES:
+            raise ValueError(f"Invalid file format: expected {MAGIC_BYTES}, got {magic}")
+
+        version = struct.unpack('<I', f.read(4))[0]
+        if version != VERSION:
+            raise ValueError(f"Unsupported version: {version}")
+
+        # Skip schema
+        schema_length = struct.unpack('<I', f.read(4))[0]
+        f.seek(schema_length, 1)  # seek relative
+
+        # Skip block_size (4 bytes)
+        f.seek(4, 1)
+
+        # Read num_blocks
+        num_blocks_pos = f.tell()
+        num_blocks = struct.unpack('<I', f.read(4))[0]
+
+        if num_blocks == 0:
+            # No blocks yet, create first block
+            f.write(struct.pack('<I', 1))  # row count = 1
+            f.write(row_bytes)
+
+            # Update num_blocks in header
+            f.seek(num_blocks_pos)
+            f.write(struct.pack('<I', 1))
+            return
+
+        # 2. Navigate to last block
+        # Need to iterate through blocks to find the last one
+        blocks_start = f.tell()
+        last_block_pos = blocks_start
+
+        for i in range(num_blocks):
+            block_pos = f.tell()
+            row_count = struct.unpack('<I', f.read(4))[0]
+
+            # Calculate block data size by reading each row length
+            block_data_size = 0
+            for _ in range(row_count):
+                row_length = struct.unpack('<I', f.read(4))[0]
+                block_data_size += 4 + row_length  # row length header + row data
+                f.seek(row_length, 1)  # skip row data
+
+            if i == num_blocks - 1:
+                # This is the last block
+                last_block_pos = block_pos
+                last_block_row_count = row_count
+                last_block_size = 4 + block_data_size  # row_count header + data
+
+        # 3. Check if row fits in last block
+        if last_block_size + row_size <= block_size:
+            # Row fits! Update last block
+            # Update row count
+            f.seek(last_block_pos)
+            f.write(struct.pack('<I', last_block_row_count + 1))
+
+            # Seek to end of file and append row
+            f.seek(0, 2)  # SEEK_END
+            f.write(row_bytes)
+        else:
+            # Row doesn't fit, create new block
+            f.seek(0, 2)  # SEEK_END
+            f.write(struct.pack('<I', 1))  # new block with 1 row
+            f.write(row_bytes)
+
+            # Update num_blocks in header
+            f.seek(num_blocks_pos)
+            f.write(struct.pack('<I', num_blocks + 1))
+
+
+def append_block_to_table(file_path: str, rows: List[Dict[str, Any]], schema: List[str], block_size: int) -> int:
+    """Append multiple rows ke binary table (BATCH INSERT - efficient!).
+
+    Strategy:
+    1. Serialize semua rows
+    2. Group rows into blocks (sesuai block_size)
+    3. Append blocks ke file without loading existing data
+
+    Args:
+        file_path: Path ke file
+        rows: List of rows yang akan di-append
+        schema: Schema columns
+        block_size: Block size limit
+
+    Returns:
+        Jumlah rows yang berhasil di-insert
+
+    Raises:
+        ValueError: Jika file format invalid
+    """
+    if not rows:
+        return 0
+
+    # Jika file belum ada, create dengan write_binary_table
+    if not os.path.exists(file_path):
+        write_binary_table(file_path, rows, schema, block_size)
+        return len(rows)
+
+    with open(file_path, 'r+b') as f:
+        # 1. Read header
+        magic = f.read(4)
+        if magic != MAGIC_BYTES:
+            raise ValueError(f"Invalid file format: expected {MAGIC_BYTES}, got {magic}")
+
+        version = struct.unpack('<I', f.read(4))[0]
+        if version != VERSION:
+            raise ValueError(f"Unsupported version: {version}")
+
+        # Skip schema
+        schema_length = struct.unpack('<I', f.read(4))[0]
+        f.seek(schema_length, 1)
+
+        # Skip block_size
+        f.seek(4, 1)
+
+        # Read num_blocks
+        num_blocks_pos = f.tell()
+        num_blocks = struct.unpack('<I', f.read(4))[0]
+
+        # 2. Navigate to last block to check if we can merge
+        last_block_pos = None
+        last_block_row_count = 0
+        last_block_size = 0
+
+        if num_blocks > 0:
+            # Navigate through all blocks to find the last one
+            for i in range(num_blocks):
+                block_pos = f.tell()
+                row_count = struct.unpack('<I', f.read(4))[0]
+
+                block_data_size = 0
+                for _ in range(row_count):
+                    row_length = struct.unpack('<I', f.read(4))[0]
+                    block_data_size += 4 + row_length
+                    f.seek(row_length, 1)
+
+                if i == num_blocks - 1:
+                    last_block_pos = block_pos
+                    last_block_row_count = row_count
+                    last_block_size = 4 + block_data_size
+
+        # 3. Try to fit rows into last block first, then create new blocks
+        rows_to_insert = list(rows)  # copy
+        blocks_added = 0
+
+        # Try to merge with last block
+        if last_block_pos is not None:
+            while rows_to_insert:
+                row_bytes = serialize_row(rows_to_insert[0], schema)
+                row_size = len(row_bytes)
+
+                if last_block_size + row_size <= block_size:
+                    # Fits in last block! Append it
+                    f.seek(0, 2)  # SEEK_END
+                    f.write(row_bytes)
+
+                    # Update last block row count
+                    f.seek(last_block_pos)
+                    last_block_row_count += 1
+                    f.write(struct.pack('<I', last_block_row_count))
+
+                    last_block_size += row_size
+                    rows_to_insert.pop(0)
+                else:
+                    # Can't fit anymore in last block
+                    break
+
+        # 4. Create new blocks for remaining rows
+        if rows_to_insert:
+            f.seek(0, 2)  # SEEK_END
+
+            current_block = []
+            current_block_size = 4  # row_count header
+
+            for row in rows_to_insert:
+                row_bytes = serialize_row(row, schema)
+                row_size = len(row_bytes)
+
+                # Check if row fits in current block
+                if current_block_size + row_size > block_size and current_block:
+                    # Write current block
+                    f.write(struct.pack('<I', len(current_block)))
+                    for rb in current_block:
+                        f.write(rb)
+
+                    blocks_added += 1
+                    current_block = []
+                    current_block_size = 4
+
+                current_block.append(row_bytes)
+                current_block_size += row_size
+
+            # Write last block
+            if current_block:
+                f.write(struct.pack('<I', len(current_block)))
+                for rb in current_block:
+                    f.write(rb)
+                blocks_added += 1
+
+        # 5. Update num_blocks in header
+        if blocks_added > 0:
+            f.seek(num_blocks_pos)
+            f.write(struct.pack('<I', num_blocks + blocks_added))
+
+    return len(rows)
