@@ -4,9 +4,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import unittest
 from datetime import datetime
-from concurrency_control_manager.schedule import Queue, PriorityItem, PriorityQueue, Schedule
-from concurrency_control_manager.action import Action
-from concurrency_control_manager.enums import ActionType, ActionStatus
+from schedule import Queue, PriorityItem, PriorityQueue, Schedule
+from action import Action
+from enums import ActionType, ActionStatus
 
 
 class TestQueue(unittest.TestCase):

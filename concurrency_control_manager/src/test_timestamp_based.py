@@ -4,10 +4,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import unittest
 from datetime import datetime, timedelta
-from concurrency_control_manager.algorithms.timestamp_based import TimestampBasedAlgorithm, ObjectTimestamp
-from concurrency_control_manager.transaction import Transaction
-from concurrency_control_manager.row import Row
-from concurrency_control_manager.enums import ActionType
+from algorithms.timestamp_based import TimestampBasedAlgorithm, ObjectTimestamp
+from transaction import Transaction
+from row import Row
+from enums import ActionType
 
 
 class TestObjectTimestamp(unittest.TestCase):
