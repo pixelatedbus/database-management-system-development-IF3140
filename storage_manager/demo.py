@@ -1,196 +1,176 @@
-"""File demonstrasi cara menggunakan Storage Manager.
+#!/usr/bin/env python3
+"""demo interaktif storage manager - read, write, delete operations"""
 
-Contoh penggunaan untuk:
-- Membuat kondisi filtering
-- Membaca data (read_block)
-- Menulis data (write_block)
-- Menghapus data (delete_block)
-- Membuat index (set_index)
-- Mengambil statistik (get_stats)
-"""
-
-from .models import Condition, DataRetrieval, DataWrite, DataDeletion
 from .storage_manager import StorageManager
+from .models import (
+    ColumnDefinition,
+    DataRetrieval,
+    DataWrite,
+    DataDeletion,
+    Condition
+)
 
+def print_separator():
+    print("\n" + "="*70 + "\n")
 
-def demo_read_block():
-    """Contoh cara menggunakan read_block()."""
-    print("\n" + "="*60)
-    print("CONTOH: READ BLOCK")
-    print("="*60)
-    
-    sm = StorageManager()
-    
-    # Contoh 1: Membaca semua data dari tabel
-    print("\n1. Membaca semua data dari tabel 'mahasiswa':")
-    print("   data_retrieval = DataRetrieval(")
-    print("       table='mahasiswa',")
-    print("       column=['nim', 'nama', 'ipk'],")
-    print("       conditions=[]")
-    print("   )")
-    print("   rows = sm.read_block(data_retrieval)")
-    
-    # Contoh 2: Membaca dengan 1 kondisi
-    print("\n2. Membaca data dengan kondisi WHERE ipk >= 3.5:")
-    print("   kondisi = Condition(")
-    print("       column='ipk',")
-    print("       operation='>=',")
-    print("       operand=3.5")
-    print("   )")
-    print("   data_retrieval = DataRetrieval(")
-    print("       table='mahasiswa',")
-    print("       column=['nim', 'nama', 'ipk'],")
-    print("       conditions=[kondisi]")
-    print("   )")
-    print("   rows = sm.read_block(data_retrieval)")
-    
-    # Contoh 3: Membaca dengan multiple conditions (AND)
-    print("\n3. Membaca dengan multiple conditions (WHERE ipk >= 3.5 AND angkatan = 2021):")
-    print("   kondisi_ipk = Condition(column='ipk', operation='>=', operand=3.5)")
-    print("   kondisi_angkatan = Condition(column='angkatan', operation='=', operand=2021)")
-    print("   data_retrieval = DataRetrieval(")
-    print("       table='mahasiswa',")
-    print("       column=['nim', 'nama', 'ipk', 'angkatan'],")
-    print("       conditions=[kondisi_ipk, kondisi_angkatan]")
-    print("   )")
-    print("   rows = sm.read_block(data_retrieval)  # Dikembalikan dengan AND logic")
+def print_rows(rows, title="hasil:"):
+    """print rows dalam format tabel simple"""
+    print(f"\n{title}")
+    print("-" * 70)
+    if not rows:
+        print("(kosong)")
+        return
 
+    # ambil kolom dari row pertama
+    if rows:
+        cols = list(rows[0].keys())
+        # print header
+        header = " | ".join(f"{col:15}" for col in cols)
+        print(header)
+        print("-" * len(header))
 
-def demo_write_block():
-    """Contoh cara menggunakan write_block()."""
-    print("\n" + "="*60)
-    print("CONTOH: WRITE BLOCK")
-    print("="*60)
-    
-    sm = StorageManager()
-    
-    # Contoh 1: INSERT
-    print("\n1. INSERT - Menambah mahasiswa baru:")
-    print("   data_write = DataWrite(")
-    print("       table='mahasiswa',")
-    print("       column=['nim', 'nama', 'ipk', 'angkatan'],")
-    print("       conditions=[],")
-    print("       new_value=['13520001', 'Budi Santoso', 3.75, 2021]")
-    print("   )")
-    print("   affected_rows = sm.write_block(data_write)")
-    
-    # Contoh 2: UPDATE
-    print("\n2. UPDATE - Mengubah IPK mahasiswa dengan NIM tertentu:")
-    print("   kondisi = Condition(column='nim', operation='=', operand='13520001')")
-    print("   data_write = DataWrite(")
-    print("       table='mahasiswa',")
-    print("       column=['ipk'],")
-    print("       conditions=[kondisi],")
-    print("       new_value=[3.85]")
-    print("   )")
-    print("   affected_rows = sm.write_block(data_write)")
+        # print data
+        for row in rows:
+            row_str = " | ".join(f"{str(row.get(col, 'NULL')):15}" for col in cols)
+            print(row_str)
+    print("-" * 70)
 
+def main():
+    print("🎯 DEMO STORAGE MANAGER - READ/WRITE/DELETE")
+    print_separator()
 
-def demo_delete_block():
-    """Contoh cara menggunakan delete_block()."""
-    print("\n" + "="*60)
-    print("CONTOH: DELETE BLOCK")
-    print("="*60)
-    
-    sm = StorageManager()
-    
-    # Contoh 1: DELETE dengan 1 kondisi
-    print("\n1. DELETE - Menghapus mahasiswa dengan IPK < 2.0:")
-    print("   kondisi = Condition(column='ipk', operation='<', operand=2.0)")
-    print("   data_deletion = DataDeletion(")
-    print("       table='mahasiswa',")
-    print("       conditions=[kondisi]")
-    print("   )")
-    print("   deleted_rows = sm.delete_block(data_deletion)")
-    
-    # Contoh 2: DELETE dengan multiple conditions
-    print("\n2. DELETE dengan multiple conditions (WHERE ipk < 2.0 AND angkatan < 2020):")
-    print("   kondisi_ipk = Condition(column='ipk', operation='<', operand=2.0)")
-    print("   kondisi_angkatan = Condition(column='angkatan', operation='<', operand=2020)")
-    print("   data_deletion = DataDeletion(")
-    print("       table='mahasiswa',")
-    print("       conditions=[kondisi_ipk, kondisi_angkatan]")
-    print("   )")
-    print("   deleted_rows = sm.delete_block(data_deletion)")
+    # 1. init storage manager
+    print("📦 [1] INISIALISASI STORAGE MANAGER")
+    sm = StorageManager(data_dir="demo_data")
+    print_separator()
 
-
-def demo_set_index():
-    """Contoh cara menggunakan set_index()."""
-    print("\n" + "="*60)
-    print("CONTOH: SET INDEX")
-    print("="*60)
-    
-    sm = StorageManager()
-    
-    print("\n1. Membuat Hash Index pada kolom 'nim':")
-    print("   sm.set_index(table='mahasiswa', column='nim', index_type='hash')")
-    
-    print("\n2. Membuat B+ Tree Index pada kolom 'ipk':")
-    print("   sm.set_index(table='mahasiswa', column='ipk', index_type='btree')")
-
-
-def demo_get_stats():
-    """Contoh cara menggunakan get_stats()."""
-    print("\n" + "="*60)
-    print("CONTOH: GET STATS")
-    print("="*60)
-    
-    sm = StorageManager()
-    
-    print("\nMengambil statistik untuk semua tabel:")
-    print("   stats = sm.get_stats()")
-    print("   # Hasil: Dict[str, Statistic]")
-    print("   # Key: nama tabel")
-    print("   # Value: Statistic(n_r, b_r, l_r, f_r, V_a_r)")
-    
-    print("\nContoh output:")
-    print("   stats['mahasiswa'].n_r = 150  # jumlah tuple")
-    print("   stats['mahasiswa'].b_r = 5    # jumlah blok")
-    print("   stats['mahasiswa'].l_r = 128  # ukuran tuple")
-    print("   stats['mahasiswa'].f_r = 32   # blocking factor")
-    print("   stats['mahasiswa'].V_a_r = {'nim': 150, 'nama': 148, 'ipk': 45, ...}")
-
-
-def demo_operators():
-    """Demonstrasi berbagai operator yang didukung."""
-    print("\n" + "="*60)
-    print("OPERATOR YANG DIDUKUNG")
-    print("="*60)
-    
-    operators = [
-        ("=", "sama dengan"),
-        ("<>", "tidak sama dengan"),
-        ("<", "kurang dari"),
-        ("<=", "kurang dari atau sama dengan"),
-        (">", "lebih dari"),
-        (">=", "lebih dari atau sama dengan"),
+    # 2. create table mahasiswa
+    print("📝 [2] CREATE TABLE mahasiswa")
+    columns = [
+        ColumnDefinition("nim", "VARCHAR", size=20, is_primary_key=True, is_nullable=False),
+        ColumnDefinition("nama", "VARCHAR", size=50, is_nullable=False),
+        ColumnDefinition("ipk", "FLOAT", is_nullable=False),
+        ColumnDefinition("angkatan", "INTEGER", is_nullable=False),
+        ColumnDefinition("status", "VARCHAR", size=20, default_value="Aktif")
     ]
-    
-    for op, desc in operators:
-        print(f"\n{op:4} → {desc}")
-        print(f'   Contoh: Condition(column="ipk", operation="{op}", operand=3.5)')
+    sm.create_table("mahasiswa", columns, primary_keys=["nim"])
+    print_separator()
 
+    # 3. insert data menggunakan write_block
+    print("➕ [3] INSERT DATA (write_block)")
+    print("inserting 5 mahasiswa...")
+
+    data_mahasiswa = [
+        ("13521001", "Budi Santoso", 3.75, 2021),
+        ("13521002", "Ani Wijaya", 3.90, 2021),
+        ("13522001", "Citra Dewi", 3.25, 2022),
+        ("13522002", "Doni Pratama", 3.50, 2022),
+        ("13523001", "Eka Putri", 3.85, 2023),
+    ]
+
+    for nim, nama, ipk, angkatan in data_mahasiswa:
+        write_req = DataWrite(
+            table="mahasiswa",
+            column=["nim", "nama", "ipk", "angkatan"],
+            new_value=[nim, nama, ipk, angkatan],
+            conditions=[]  # no conditions = INSERT
+        )
+        sm.write_block(write_req)
+
+    print_separator()
+
+    # 4. read all data
+    print("📖 [4] READ ALL DATA")
+    read_req = DataRetrieval(table="mahasiswa", column=[], conditions=[])
+    rows = sm.read_block(read_req)
+    print_rows(rows, f"semua mahasiswa ({len(rows)} rows):")
+    print_separator()
+
+    # 5. read dengan filter
+    print("🔍 [5] READ DENGAN FILTER (ipk >= 3.5)")
+    kondisi_ipk = Condition(column="ipk", operation=">=", operand=3.5)
+    read_req = DataRetrieval(
+        table="mahasiswa",
+        column=[],
+        conditions=[kondisi_ipk]
+    )
+    rows = sm.read_block(read_req)
+    print_rows(rows, f"mahasiswa dengan ipk >= 3.5 ({len(rows)} rows):")
+    print_separator()
+
+    # 6. read dengan projection
+    print("📊 [6] READ DENGAN PROJECTION (hanya nim, nama, ipk)")
+    read_req = DataRetrieval(
+        table="mahasiswa",
+        column=["nim", "nama", "ipk"],
+        conditions=[]
+    )
+    rows = sm.read_block(read_req)
+    print_rows(rows, f"projection nim, nama, ipk ({len(rows)} rows):")
+    print_separator()
+
+    # 7. read dengan filter dan projection
+    print("🎯 [7] FILTER + PROJECTION (angkatan=2022, tampil nim+nama saja)")
+    kondisi_angkatan = Condition(column="angkatan", operation="=", operand=2022)
+    read_req = DataRetrieval(
+        table="mahasiswa",
+        column=["nim", "nama"],
+        conditions=[kondisi_angkatan]
+    )
+    rows = sm.read_block(read_req)
+    print_rows(rows, f"mahasiswa angkatan 2022 ({len(rows)} rows):")
+    print_separator()
+
+    # 8. update data
+    print("✏️  [8] UPDATE DATA (status mahasiswa angkatan 2021 jadi 'Lulus')")
+    kondisi_angkatan = Condition(column="angkatan", operation="=", operand=2021)
+    update_req = DataWrite(
+        table="mahasiswa",
+        column=["status"],
+        new_value=["Lulus"],
+        conditions=[kondisi_angkatan]
+    )
+    affected = sm.write_block(update_req)
+    print(f"✓ updated {affected} rows")
+
+    # show hasil update
+    read_req = DataRetrieval(table="mahasiswa", column=[], conditions=[])
+    rows = sm.read_block(read_req)
+    print_rows(rows, "setelah update:")
+    print_separator()
+
+    # 9. delete data
+    print("🗑️  [9] DELETE DATA (hapus mahasiswa dengan ipk < 3.3)")
+    kondisi_ipk = Condition(column="ipk", operation="<", operand=3.3)
+    delete_req = DataDeletion(
+        table="mahasiswa",
+        conditions=[kondisi_ipk]
+    )
+    deleted = sm.delete_block(delete_req)
+    print(f"✓ deleted {deleted} rows")
+
+    # show hasil delete
+    read_req = DataRetrieval(table="mahasiswa", column=[], conditions=[])
+    rows = sm.read_block(read_req)
+    print_rows(rows, f"setelah delete ({len(rows)} rows tersisa):")
+    print_separator()
+
+    # 10. complex query
+    print("🔥 [10] COMPLEX QUERY (ipk >= 3.7 AND status = 'Aktif')")
+    kondisi_ipk = Condition(column="ipk", operation=">=", operand=3.7)
+    kondisi_status = Condition(column="status", operation="=", operand="Aktif")
+    read_req = DataRetrieval(
+        table="mahasiswa",
+        column=["nim", "nama", "ipk", "status"],
+        conditions=[kondisi_ipk, kondisi_status]
+    )
+    rows = sm.read_block(read_req)
+    print_rows(rows, f"mahasiswa ipk tinggi yang masih aktif ({len(rows)} rows):")
+    print_separator()
+
+    print("✅ DEMO SELESAI!")
+    print("📁 check 'demo_data/' untuk lihat binary files yang dibuat")
+    print()
 
 if __name__ == "__main__":
-    print("\n" + "="*70)
-    print("PANDUAN PENGGUNAAN STORAGE MANAGER")
-    print("="*70)
-    
-    demo_read_block()
-    demo_write_block()
-    demo_delete_block()
-    demo_set_index()
-    demo_get_stats()
-    demo_operators()
-    
-    print("\n" + "="*70)
-    print("NOTES:")
-    print("="*70)
-    print("""
-    - Semua contoh di atas menunjukkan cara memanggil method StorageManager
-    - Implementasi method masih TODO (NotImplementedError)
-    - Tim perlu mengimplementasi: read_block, write_block, delete_block, 
-      set_index, get_stats
-    - Setelah diimplementasi, contoh di atas bisa langsung dijalankan
-    """)
-    print("="*70 + "\n")
+    main()

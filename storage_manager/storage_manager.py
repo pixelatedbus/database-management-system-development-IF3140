@@ -1,11 +1,10 @@
-"""Core Storage Manager Implementation.
-operasi read, write, delete, index, dan statistik.
-"""
+# storage manager implementation
+# operasi read, write, delete, index, dan statistik
 from __future__ import annotations
 
 import os
-import json
-from typing import Any, Dict, List, Optional, Union
+import struct
+from typing import Any, Dict, List, Optional, Union, Tuple
 
 from .models import (
     Condition,
@@ -21,80 +20,300 @@ from .utils import (
     project_columns,
     validate_table_name,
     validate_row_for_schema,
+    validate_value_for_column,
     read_binary_table,
-    write_binary_table
+    write_binary_table,
+    serialize_row,
+    MAGIC_BYTES
 )
 
 
 class StorageManager:
-    """Komponen Storage Manager untuk menangani penyimpanan data.
-    
-    Tanggung jawab:
-    - Menyimpan data dalam binary file(s) di harddisk
-    - Membaca, menulis, dan menghapus blok data
-    - Mengelola indeks (B+ Tree atau Hash)
-    - Menyediakan statistik untuk optimisasi query
-    
-    Implementasi:
+    """komponen storage manager untuk handle penyimpanan data.
+
+    tanggung jawab:
+    - simpan data dalam binary file di harddisk
+    - baca, tulis, dan hapus blok data
+    - kelola indeks (b+ tree atau hash)
+    - sediakan statistik untuk optimisasi query
+
+    implementasi:
     - 1 file per tabel (format: data/table_name.dat)
-    - Data disimpan dalam format JSON untuk kemudahan testing
-    - Setiap tabel memiliki metadata schema yang disimpan terpisah
+    - data disimpan dalam format binary
+    - setiap tabel punya metadata schema yang disimpan terpisah
     """
 
     def __init__(self, data_dir: str = "data", block_size: int = 4096):
-        """Inisialisasi Storage Manager.
-        
-        Args:
-            data_dir: Direktori tempat menyimpan file data tabel (default: 'data')
-            block_size: Ukuran blok dalam bytes (default: 4096 bytes)
+        """inisialisasi storage manager.
+
+        args:
+            data_dir: direktori tempat simpan file data tabel (default: 'data')
+            block_size: ukuran blok dalam bytes (default: 4096 bytes)
         """
         self.data_dir = data_dir
         self.block_size = block_size
-        
-        # Struktur manajemen file
+
+        # struktur manajemen file
         self.tables: Dict[str, Dict[str, Any]] = {}  # nama_tabel -> schema
-        self.stats: Dict[str, Statistic] = {}  # nama_tabel -> Statistic
+        self.stats: Dict[str, Statistic] = {}  # nama_tabel -> statistic
         self.indexes: Dict[tuple, Any] = {}  # (table_name, column_name) -> index structure
         
         if not os.path.exists(self.data_dir):
             os.makedirs(self.data_dir)
         
         self._load_table_schemas()
-        print(f"Storage Manager diinisialisasi di: {os.path.abspath(self.data_dir)}")
+        print(f"storage manager diinisialisasi di: {os.path.abspath(self.data_dir)}")
 
-    # ========== File Management ==========
-    
+    # ========== file management ==========
+
     def _load_table_schemas(self) -> None:
-        """Load schema dari semua tabel yang ada di data_dir."""
+        """load schema dari semua tabel yang ada di data_dir."""
         metadata_file = self._get_metadata_file_path()
         if os.path.exists(metadata_file):
             try:
-                with open(metadata_file, 'r') as f:
-                    self.tables = json.load(f)
-                print(f"✓ Loaded {len(self.tables)} tabel dari metadata")
+                self.tables = self._read_binary_metadata(metadata_file)
+                print(f"✓ loaded {len(self.tables)} tabel dari metadata")
             except Exception as e:
-                print(f"⚠ Error loading metadata: {e}")
+                print(f"⚠ error loading metadata: {e}")
                 self.tables = {}
 
     def _save_table_schemas(self) -> None:
-        """Simpan schema dari semua tabel ke metadata file."""
+        """simpan schema dari semua tabel ke metadata file."""
         metadata_file = self._get_metadata_file_path()
         try:
-            with open(metadata_file, 'w') as f:
-                json.dump(self.tables, f, indent=2)
+            self._write_binary_metadata(metadata_file, self.tables)
         except Exception as e:
-            print(f"⚠ Error saving metadata: {e}")
+            print(f"⚠ error saving metadata: {e}")
 
     def _get_metadata_file_path(self) -> str:
-        """Dapatkan path file metadata."""
-        return os.path.join(self.data_dir, "__metadata__.json")
+        """dapetin path file metadata."""
+        return os.path.join(self.data_dir, "__metadata__.dat")
 
     def _get_table_file_path(self, table_name: str) -> str:
-        """Dapatkan path file untuk tabel tertentu."""
+        """dapetin path file untuk tabel tertentu."""
         return os.path.join(self.data_dir, f"{table_name}.dat")
 
+    def _write_binary_metadata(self, file_path: str, tables: Dict[str, Dict[str, Any]]) -> None:
+        """tulis metadata ke binary file.
 
-    # ========== Table Management ==========
+        format file:
+        - magic bytes: b'META'
+        - version: 4 bytes
+        - jumlah tabel: 4 bytes
+        - untuk tiap tabel:
+          - panjang nama tabel + nama tabel
+          - metadata tabel (columns, primary_keys, foreign_keys)
+        """
+        with open(file_path, 'wb') as f:
+            # magic bytes
+            f.write(b'META')
+
+            # version
+            f.write(struct.pack('<I', 1))
+
+            # jumlah tabel
+            f.write(struct.pack('<I', len(tables)))
+
+            # tiap tabel
+            for table_name, table_meta in tables.items():
+                # nama tabel
+                table_name_bytes = table_name.encode('utf-8')
+                f.write(struct.pack('<I', len(table_name_bytes)))
+                f.write(table_name_bytes)
+
+                # columns
+                columns = table_meta.get('columns', [])
+                f.write(struct.pack('<I', len(columns)))
+                for col in columns:
+                    # nama kolom
+                    col_name = col['name'].encode('utf-8')
+                    f.write(struct.pack('<I', len(col_name)))
+                    f.write(col_name)
+
+                    # data_type
+                    data_type = col['data_type'].encode('utf-8')
+                    f.write(struct.pack('<I', len(data_type)))
+                    f.write(data_type)
+
+                    # size (bisa None)
+                    if col['size'] is None:
+                        f.write(struct.pack('<B?', 0, False))  # null marker
+                    else:
+                        f.write(struct.pack('<B?I', 1, True, col['size']))  # not null + value
+
+                    # is_primary_key
+                    f.write(struct.pack('<?', col['is_primary_key']))
+
+                    # is_nullable
+                    f.write(struct.pack('<?', col['is_nullable']))
+
+                    # default_value (bisa None atau value)
+                    default_val = col.get('default_value')
+                    if default_val is None:
+                        f.write(struct.pack('<B', 0))  # null
+                    elif isinstance(default_val, bool):
+                        f.write(struct.pack('<B?', 4, default_val))
+                    elif isinstance(default_val, int):
+                        f.write(struct.pack('<Bq', 1, default_val))
+                    elif isinstance(default_val, float):
+                        f.write(struct.pack('<Bd', 2, default_val))
+                    elif isinstance(default_val, str):
+                        encoded = default_val.encode('utf-8')
+                        f.write(struct.pack('<BI', 3, len(encoded)))
+                        f.write(encoded)
+                    else:
+                        f.write(struct.pack('<B', 0))  # fallback ke null
+
+                # primary_keys
+                pk_list = table_meta.get('primary_keys', [])
+                f.write(struct.pack('<I', len(pk_list)))
+                for pk in pk_list:
+                    pk_bytes = pk.encode('utf-8')
+                    f.write(struct.pack('<I', len(pk_bytes)))
+                    f.write(pk_bytes)
+
+                # foreign_keys
+                fk_list = table_meta.get('foreign_keys', [])
+                f.write(struct.pack('<I', len(fk_list)))
+                for fk in fk_list:
+                    # column
+                    col_bytes = fk['column'].encode('utf-8')
+                    f.write(struct.pack('<I', len(col_bytes)))
+                    f.write(col_bytes)
+
+                    # references_table
+                    ref_table = fk['references_table'].encode('utf-8')
+                    f.write(struct.pack('<I', len(ref_table)))
+                    f.write(ref_table)
+
+                    # references_column
+                    ref_col = fk['references_column'].encode('utf-8')
+                    f.write(struct.pack('<I', len(ref_col)))
+                    f.write(ref_col)
+
+                    # on_delete
+                    on_del = fk['on_delete'].encode('utf-8')
+                    f.write(struct.pack('<I', len(on_del)))
+                    f.write(on_del)
+
+                    # on_update
+                    on_upd = fk['on_update'].encode('utf-8')
+                    f.write(struct.pack('<I', len(on_upd)))
+                    f.write(on_upd)
+
+    def _read_binary_metadata(self, file_path: str) -> Dict[str, Dict[str, Any]]:
+        """baca metadata dari binary file."""
+        with open(file_path, 'rb') as f:
+            # verify magic bytes
+            magic = f.read(4)
+            if magic != b'META':
+                raise ValueError(f"invalid metadata format: expected b'META', got {magic}")
+
+            # version
+            version = struct.unpack('<I', f.read(4))[0]
+            if version != 1:
+                raise ValueError(f"unsupported metadata version: {version}")
+
+            # jumlah tabel
+            num_tables = struct.unpack('<I', f.read(4))[0]
+
+            tables = {}
+            for _ in range(num_tables):
+                # nama tabel
+                table_name_len = struct.unpack('<I', f.read(4))[0]
+                table_name = f.read(table_name_len).decode('utf-8')
+
+                # columns
+                num_cols = struct.unpack('<I', f.read(4))[0]
+                columns = []
+                for _ in range(num_cols):
+                    col = {}
+
+                    # nama kolom
+                    col_name_len = struct.unpack('<I', f.read(4))[0]
+                    col['name'] = f.read(col_name_len).decode('utf-8')
+
+                    # data_type
+                    data_type_len = struct.unpack('<I', f.read(4))[0]
+                    col['data_type'] = f.read(data_type_len).decode('utf-8')
+
+                    # size
+                    _ = struct.unpack('<B', f.read(1))[0]  # skip marker
+                    has_size = struct.unpack('<?', f.read(1))[0]
+                    if has_size:
+                        col['size'] = struct.unpack('<I', f.read(4))[0]
+                    else:
+                        col['size'] = None
+
+                    # is_primary_key
+                    col['is_primary_key'] = struct.unpack('<?', f.read(1))[0]
+
+                    # is_nullable
+                    col['is_nullable'] = struct.unpack('<?', f.read(1))[0]
+
+                    # default_value
+                    default_type = struct.unpack('<B', f.read(1))[0]
+                    if default_type == 0:  # null
+                        col['default_value'] = None
+                    elif default_type == 1:  # int
+                        col['default_value'] = struct.unpack('<q', f.read(8))[0]
+                    elif default_type == 2:  # float
+                        col['default_value'] = struct.unpack('<d', f.read(8))[0]
+                    elif default_type == 3:  # str
+                        str_len = struct.unpack('<I', f.read(4))[0]
+                        col['default_value'] = f.read(str_len).decode('utf-8')
+                    elif default_type == 4:  # bool
+                        col['default_value'] = struct.unpack('<?', f.read(1))[0]
+                    else:
+                        col['default_value'] = None
+
+                    columns.append(col)
+
+                # primary_keys
+                num_pks = struct.unpack('<I', f.read(4))[0]
+                primary_keys = []
+                for _ in range(num_pks):
+                    pk_len = struct.unpack('<I', f.read(4))[0]
+                    primary_keys.append(f.read(pk_len).decode('utf-8'))
+
+                # foreign_keys
+                num_fks = struct.unpack('<I', f.read(4))[0]
+                foreign_keys = []
+                for _ in range(num_fks):
+                    fk = {}
+
+                    # column
+                    col_len = struct.unpack('<I', f.read(4))[0]
+                    fk['column'] = f.read(col_len).decode('utf-8')
+
+                    # references_table
+                    ref_table_len = struct.unpack('<I', f.read(4))[0]
+                    fk['references_table'] = f.read(ref_table_len).decode('utf-8')
+
+                    # references_column
+                    ref_col_len = struct.unpack('<I', f.read(4))[0]
+                    fk['references_column'] = f.read(ref_col_len).decode('utf-8')
+
+                    # on_delete
+                    on_del_len = struct.unpack('<I', f.read(4))[0]
+                    fk['on_delete'] = f.read(on_del_len).decode('utf-8')
+
+                    # on_update
+                    on_upd_len = struct.unpack('<I', f.read(4))[0]
+                    fk['on_update'] = f.read(on_upd_len).decode('utf-8')
+
+                    foreign_keys.append(fk)
+
+                tables[table_name] = {
+                    'columns': columns,
+                    'primary_keys': primary_keys,
+                    'foreign_keys': foreign_keys
+                }
+
+            return tables
+
+
+    # ========== table management ==========
 
     def create_table(
         self,
@@ -103,22 +322,22 @@ class StorageManager:
         primary_keys: Optional[List[str]] = None,
         foreign_keys: Optional[List[ForeignKey]] = None
     ) -> None:
-        """Buat tabel baru dengan schema dan constraints.
+        """bikin tabel baru dengan schema dan constraints.
 
-        Args:
-            table_name: Nama tabel
-            columns: List nama kolom (backward compatible) ATAU List ColumnDefinition
-            primary_keys: List nama kolom yang jadi PRIMARY KEY (opsional)
-            foreign_keys: List ForeignKey constraints (opsional)
+        args:
+            table_name: nama tabel
+            columns: list nama kolom (backward compatible) atau list columndefinition
+            primary_keys: list nama kolom yang jadi primary key (opsional)
+            foreign_keys: list foreignkey constraints (opsional)
 
-        Raises:
-            ValueError: Jika nama tabel invalid atau sudah ada
+        raises:
+            valueerror: jika nama tabel invalid atau sudah ada
 
-        Example:
-            # Cara 1: Backward compatible (hanya nama kolom)
+        example:
+            # cara 1: backward compatible (hanya nama kolom)
             sm.create_table("users", ["id", "name", "email"])
 
-            # Cara 2: Dengan tipe data lengkap
+            # cara 2: dengan tipe data lengkap
             sm.create_table(
                 "users",
                 columns=[
@@ -135,9 +354,9 @@ class StorageManager:
         if table_name in self.tables:
             raise ValueError(f"Tabel '{table_name}' sudah ada")
 
-        # Handle backward compatibility: jika columns adalah List[str]
+        # handle backward compatibility: jika columns adalah list[str]
         if columns and isinstance(columns[0], str):
-            # Convert ke ColumnDefinition dengan tipe default (VARCHAR 255)
+            # convert ke columndefinition dengan tipe default (varchar 255)
             column_defs = [
                 ColumnDefinition(name=col, data_type="VARCHAR", size=255, is_nullable=True)
                 for col in columns
@@ -145,30 +364,30 @@ class StorageManager:
         else:
             column_defs = columns
 
-        # Validasi primary keys
+        # validasi primary keys
         if primary_keys:
             for pk in primary_keys:
-                # Cari column definition untuk PK
+                # cari column definition untuk pk
                 pk_col = next((c for c in column_defs if c.name == pk), None)
                 if pk_col is None:
                     raise ValueError(f"Primary key '{pk}' tidak ada di columns")
-                # Set sebagai primary key
+                # set sebagai primary key
                 pk_col.is_primary_key = True
                 pk_col.is_nullable = False
 
-        # Validasi foreign keys
+        # validasi foreign keys
         if foreign_keys:
             for fk in foreign_keys:
-                # Check column exists
+                # cek column exists
                 fk_col = next((c for c in column_defs if c.name == fk.column), None)
                 if fk_col is None:
                     raise ValueError(f"Foreign key column '{fk.column}' tidak ada")
 
-                # Check referenced table exists
+                # cek referenced table exists
                 if fk.references_table not in self.tables:
                     raise ValueError(f"Referenced table '{fk.references_table}' tidak ditemukan")
 
-        # Simpan metadata dengan format lengkap
+        # simpan metadata dengan format lengkap
         self.tables[table_name] = {
             "columns": [self._column_def_to_dict(c) for c in column_defs],
             "primary_keys": primary_keys or [],
@@ -176,15 +395,15 @@ class StorageManager:
         }
         self._save_table_schemas()
 
-        # Buat file binary kosong (gunakan nama kolom saja untuk compatibility)
+        # buat file binary kosong (gunakan nama kolom saja untuk compatibility)
         schema_names = [c.name for c in column_defs]
         table_file = self._get_table_file_path(table_name)
         write_binary_table(table_file, [], schema_names)
 
-        print(f"✓ Tabel '{table_name}' berhasil dibuat dengan {len(column_defs)} kolom")
+        print(f"✓ tabel '{table_name}' berhasil dibuat dengan {len(column_defs)} kolom")
 
     def _column_def_to_dict(self, col: ColumnDefinition) -> Dict[str, Any]:
-        """Convert ColumnDefinition ke dictionary untuk JSON storage."""
+        """convert columndefinition ke dictionary untuk json storage."""
         return {
             "name": col.name,
             "data_type": col.data_type,
@@ -195,7 +414,7 @@ class StorageManager:
         }
 
     def _dict_to_column_def(self, data: Dict[str, Any]) -> ColumnDefinition:
-        """Convert dictionary ke ColumnDefinition."""
+        """convert dictionary ke columndefinition."""
         return ColumnDefinition(
             name=data["name"],
             data_type=data["data_type"],
@@ -206,7 +425,7 @@ class StorageManager:
         )
 
     def _foreign_key_to_dict(self, fk: ForeignKey) -> Dict[str, Any]:
-        """Convert ForeignKey ke dictionary untuk JSON storage."""
+        """convert foreignkey ke dictionary untuk json storage."""
         return {
             "column": fk.column,
             "references_table": fk.references_table,
@@ -216,41 +435,31 @@ class StorageManager:
         }
 
     def _get_column_definitions(self, table_name: str) -> List[ColumnDefinition]:
-        """Get column definitions untuk tabel tertentu."""
+        """ambil column definitions untuk tabel tertentu."""
         if table_name not in self.tables:
             raise ValueError(f"Tabel '{table_name}' tidak ditemukan")
 
         table_meta = self.tables[table_name]
-
-        # Handle backward compatibility
-        if "schema" in table_meta:
-            # Old format: hanya list nama kolom
-            return [
-                ColumnDefinition(name=col, data_type="VARCHAR", size=255)
-                for col in table_meta["schema"]
-            ]
-        else:
-            # New format: dengan column definitions
-            return [self._dict_to_column_def(c) for c in table_meta["columns"]]
+        return [self._dict_to_column_def(c) for c in table_meta["columns"]]
 
     def insert_rows(self, table_name: str, rows: List[Dict[str, Any]], validate: bool = True) -> None:
-        """Insert rows ke tabel dengan validasi tipe data.
+        """insert rows ke tabel dengan validasi tipe data.
 
-        Args:
-            table_name: Nama tabel
-            rows: List of row dictionaries
-            validate: Apakah melakukan validasi tipe data (default: True)
+        args:
+            table_name: nama tabel
+            rows: list of row dictionaries
+            validate: apakah melakukan validasi tipe data (default: true)
 
-        Raises:
-            ValueError: Jika tabel tidak ditemukan atau data tidak valid
+        raises:
+            valueerror: jika tabel tidak ditemukan atau data tidak valid
         """
         if table_name not in self.tables:
             raise ValueError(f"Tabel '{table_name}' tidak ditemukan")
 
-        # Get column definitions
+        # ambil column definitions
         column_defs = self._get_column_definitions(table_name)
 
-        # Validasi setiap row jika diminta
+        # validasi setiap row jika diminta
         if validate:
             for i, row in enumerate(rows):
                 try:
@@ -258,18 +467,13 @@ class StorageManager:
                 except ValueError as e:
                     raise ValueError(f"Row {i+1} validation failed: {e}")
 
-        # Get schema names untuk binary file
+        # ambil schema names untuk binary file
         table_meta = self.tables[table_name]
-        if "schema" in table_meta:
-            # Old format
-            schema_names = table_meta["schema"]
-        else:
-            # New format
-            schema_names = [c["name"] for c in table_meta["columns"]]
+        schema_names = [c["name"] for c in table_meta["columns"]]
 
         table_file = self._get_table_file_path(table_name)
 
-        # Load existing data (if any)
+        # load existing data (jika ada)
         existing_rows = []
         if os.path.exists(table_file):
             try:
@@ -277,7 +481,7 @@ class StorageManager:
             except Exception:
                 existing_rows = []
 
-        # Apply default values untuk kolom yang tidak diisi
+        # aplikasikan default values untuk kolom yang tidak diisi
         processed_rows = []
         for row in rows:
             processed_row = row.copy()
@@ -289,354 +493,345 @@ class StorageManager:
                         processed_row[col_def.name] = None
             processed_rows.append(processed_row)
 
-        # Append new rows
+        # append new rows
         all_rows = existing_rows + processed_rows
 
-        # Write back to binary file
+        # write kembali ke binary file
         write_binary_table(table_file, all_rows, schema_names)
-        print(f"✓ Inserted {len(rows)} rows ke tabel '{table_name}'")
+        print(f"✓ inserted {len(rows)} rows ke tabel '{table_name}'")
 
-    # ========== Core Operations ==========
+    # ========== core operations ==========
 
     def read_block(self, data_retrieval: DataRetrieval) -> List[Dict[str, Any]]:
-        """Membaca data dari disk berdasarkan parameter retrieval.
+        """baca data dari disk berdasarkan parameter retrieval.
 
-        Proses:
-        1. Validasi tabel ada di storage
-        2. Load semua data dari binary file tabel
-        3. Filter row berdasarkan kondisi (AND logic)
-        4. Proyeksi kolom jika diminta
-        5. Return hasil
+        proses:
+        1. validasi tabel ada di storage
+        2. load semua data dari binary file tabel
+        3. filter row berdasarkan kondisi (and logic)
+        4. proyeksi kolom jika diminta
+        5. return hasil
 
-        Args:
-            data_retrieval: Object yang berisi nama tabel, kolom, dan kondisi
+        args:
+            data_retrieval: object yang berisi nama tabel, kolom, dan kondisi
 
-        Returns:
-            List dari baris (setiap baris sebagai dictionary) yang sesuai kondisi
+        returns:
+            list dari baris (setiap baris sebagai dictionary) yang sesuai kondisi
 
-        Raises:
-            ValueError: Jika tabel tidak ditemukan
+        raises:
+            valueerror: jika tabel tidak ditemukan
         """
         table_name = data_retrieval.table
 
-        # 1. Validasi tabel ada
+        # 1. validasi tabel ada
         if table_name not in self.tables:
             available = list(self.tables.keys()) if self.tables else "tidak ada"
             raise ValueError(f"Tabel '{table_name}' tidak ditemukan. Tersedia: {available}")
 
         table_file = self._get_table_file_path(table_name)
 
-        # 2. Cek file exists
+        # 2. cek file exists
         if not os.path.exists(table_file):
-            print(f"⚠ File tabel '{table_name}' tidak ditemukan")
+            print(f"⚠ file tabel '{table_name}' tidak ditemukan")
             return []
 
-        # 3. Load data dari BINARY FILE
+        # 3. load data dari binary file
         try:
             all_rows, _ = read_binary_table(table_file)
-            print(f"✓ Loaded {len(all_rows)} rows dari binary file '{table_name}.dat'")
-        except ValueError as e:
-            # Jika format tidak valid, coba fallback ke JSON (backward compatibility)
-            print(f"⚠ Binary format error: {e}. Trying JSON fallback...")
-            try:
-                with open(table_file, 'r') as f:
-                    all_rows = json.load(f)
-                if not isinstance(all_rows, list):
-                    all_rows = []
-                print(f"✓ Loaded {len(all_rows)} rows dari JSON file (fallback)")
-            except Exception as json_error:
-                print(f"Error membaca file tabel: {json_error}")
-                return []
+            print(f"✓ loaded {len(all_rows)} rows dari binary file '{table_name}.dat'")
         except Exception as e:
-            print(f"Error membaca binary file: {e}")
-            return []
+            raise ValueError(f"error membaca binary file '{table_name}.dat': {e}")
 
-        # 4. Filter berdasarkan kondisi (AND logic)
+        # 4. filter berdasarkan kondisi (and logic)
         filtered_rows = []
         for row in all_rows:
             if self._row_matches_all_conditions(row, data_retrieval.conditions):
                 filtered_rows.append(row)
 
-        # 5. Proyeksi kolom jika ada
+        # 5. proyeksi kolom jika ada
         if data_retrieval.column and len(data_retrieval.column) > 0:
             return [project_columns(row, data_retrieval.column) for row in filtered_rows]
         else:
             return filtered_rows
 
     def _row_matches_all_conditions(self, row: Dict[str, Any], conditions: List[Condition]) -> bool:
-        """Cek apakah row memenuhi SEMUA kondisi (AND logic).
-        
-        Args:
-            row: Baris data (dictionary)
-            conditions: List kondisi yang harus dipenuhi
-            
-        Returns:
-            True jika row memenuhi semua kondisi, False sebaliknya
+        """cek apakah row memenuhi semua kondisi (and logic).
+
+        args:
+            row: baris data (dictionary)
+            conditions: list kondisi yang harus dipenuhi
+
+        returns:
+            true jika row memenuhi semua kondisi, false sebaliknya
         """
         for condition in conditions:
             if not evaluate_condition(row, condition):
                 return False
         return True
 
-            
-    # ========== Helpers for delete_block ==========
+
+    # ========== helpers untuk delete_block ==========
 
     def _load_table_rows(self, table_name: str) -> List[Dict[str, Any]]:
-        """Load semua baris dari file tabel. Menangani fallback JSON.
+        """load semua baris dari file tabel.
 
-        Args:
-            table_name: Nama tabel
-            
-        Returns:
-            List dari baris (setiap baris sebagai dictionary)
+        args:
+            table_name: nama tabel
+
+        returns:
+            list dari baris (setiap baris sebagai dictionary)
+
+        raises:
+            exception: jika gagal membaca binary file
         """
         table_file = self._get_table_file_path(table_name)
         if not os.path.exists(table_file):
             return []
 
-        try:
-            rows, _ = read_binary_table(table_file)
-            return rows
-        except ValueError as e:
-            # fallback ke JSON
-            try:
-                with open(table_file, 'r') as f:
-                    rows = json.load(f)
-                if not isinstance(rows, list):
-                    return []
-                return rows
-            except Exception:
-                return []
-        except Exception:
-            return []
+        rows, _ = read_binary_table(table_file)
+        return rows
 
     def _save_table_rows(self, table_name: str, rows: List[Dict[str, Any]]) -> None:
-        """Tulis kembali semua baris ke file tabel menggunakan schema yang tersimpan.
-        
-        Args:
-            table_name: Nama tabel
-            rows: List dari baris (setiap baris sebagai dictionary)
-        
-        Raises:
-            Exception: Jika penulisan gagal
+        """tulis kembali semua baris ke file tabel menggunakan schema yang tersimpan.
+
+        args:
+            table_name: nama tabel
+            rows: list dari baris (setiap baris sebagai dictionary)
+
+        raises:
+            exception: jika penulisan gagal
         """
-        schema = self.tables.get(table_name, {}).get("schema", [])
+        schema_names = [c["name"] for c in self.tables[table_name]["columns"]]
         table_file = self._get_table_file_path(table_name)
-        try:
-            write_binary_table(table_file, rows, schema)
-        except Exception as e:
-            # fallback: try writing JSON to avoid data loss during development
-            try:
-                with open(table_file, 'w') as f:
-                    json.dump(rows, f, indent=2)
-                print(f"⚠ write_binary_table gagal ({e}), ditulis sebagai JSON fallback")
-            except Exception as ex:
-                print(f"Error menyimpan tabel '{table_name}': {ex}")
+        write_binary_table(table_file, rows, schema_names)
 
     def _update_stats_after_delete(self, table_name: str, remaining_rows: List[Dict[str, Any]]) -> None:
-        """Update statistik sederhana setelah penghapusan (hanya count saat ini).
-        
-        Args:
-            table_name: Nama tabel
-            remaining_rows: List dari baris yang tersisa setelah penghapusan
+        """update statistik sederhana setelah penghapusan (hanya count saat ini).
+
+        args:
+            table_name: nama tabel
+            remaining_rows: list dari baris yang tersisa setelah penghapusan
         """
         try:
             n_r = len(remaining_rows)
             stat_obj = self.stats.get(table_name)
-            # Jika stat_obj sudah ada dan memiliki atribut n_r, coba perbarui; jika tidak, simpan minimal info
+            # jika stat_obj sudah ada dan punya atribut n_r, coba perbarui; jika tidak, simpan minimal info
             if isinstance(stat_obj, dict):
                 stat_obj["n_r"] = n_r
             else:
-                # Create minimal statistic representation
+                # create minimal statistic representation
                 self.stats[table_name] = {"n_r": n_r}
         except Exception:
-            # Jangan biarkan error statistik menghentikan operasi penghapusan
+            # jangan biarkan error statistik menghentikan operasi penghapusan
             pass
 
-    # ========== Helpers for write_block ==========
+    # ========== helpers untuk write_block ==========
 
     def _load_all_rows_with_schema(self, table_name: str) -> Tuple[List[Dict[str, Any]], List[str]]:
-        """
-        Memuat semua baris data dan nama schema (kolom) dari file biner.
+        """muat semua baris data dan nama schema (kolom) dari file biner.
 
-        Menggunakan utilitas read_binary_table().
+        menggunakan utilitas read_binary_table().
 
-        Returns:
-            Tuple (list of row dictionaries, list of schema names)
+        returns:
+            tuple (list of row dictionaries, list of schema names)
         """
         table_file = self._get_table_file_path(table_name)
-        
-        # Jika file belum ada, anggap tabel kosong
+
+        # jika file belum ada, anggap tabel kosong
         if not os.path.exists(table_file):
             return [], [col.name for col in self._get_column_definitions(table_name)]
 
-        # Panggil fungsi utilitas untuk membaca seluruh isi file biner
+        # panggil fungsi utilitas untuk baca seluruh isi file biner
         rows, schema_names = read_binary_table(table_file)
         return rows, schema_names
 
 
     def _apply_defaults_and_validate(self, rows: List[Dict[str, Any]], column_defs: List[ColumnDefinition]) -> None:
-        """
-        Mengisi nilai default dan melakukan validasi schema pada baris yang diberikan (in-place).
+        """isi nilai default dan validasi schema pada baris yang diberikan (in-place).
 
-        Digunakan saat INSERT untuk memastikan semua kolom wajib ada.
+        digunakan saat insert untuk memastikan semua kolom wajib ada.
         """
         schema_names = [col.name for col in column_defs]
-        
+
         for row in rows:
-            # 1. Aplikasikan nilai default dan tangani missing column
+            # 1. aplikasikan nilai default dan tangani missing column
             for col_def in column_defs:
                 col_name = col_def.name
-                
-                # Jika kolom tidak ada di row yang di-insert:
+
+                # jika kolom tidak ada di row yang di-insert:
                 if col_name not in row:
                     if col_def.default_value is not None:
-                        # Isi dengan nilai default
+                        # isi dengan nilai default
                         row[col_name] = col_def.default_value
                     elif col_def.is_nullable:
-                        # Boleh NULL, isi dengan None (atau biarkan saja, tapi di sini kita isi None eksplisit)
+                        # boleh null, isi dengan none (atau biarkan saja, tapi di sini kita isi none eksplisit)
                         row[col_name] = None
                     else:
-                        # Tidak ada nilai, tidak boleh NULL, dan tidak ada default. Ini adalah error.
+                        # tidak ada nilai, tidak boleh null, dan tidak ada default. ini adalah error.
                         raise ValueError(f"Kolom wajib '{col_name}' tidak disediakan dan tidak memiliki nilai default.")
 
-            # 2. Lakukan validasi penuh
-            # Memanggil fungsi utilitas yang memastikan tipe data, NULLability, dan size
+            # 2. lakukan validasi penuh
+            # memanggil fungsi utilitas yang memastikan tipe data, nullability, dan size
             validate_row_for_schema(row, column_defs)
 
 
-    # ========== Write / Delete / Index / Stats ==========
+    # ========== write / delete / index / stats ==========
     def write_block(self, data_write: DataWrite) -> int:
-            """Menulis atau memodifikasi data di disk.
-            
-            Args:
-                data_write: Object yang berisi tabel, kolom, kondisi, dan nilai baru
-                
-            Returns:
-                Jumlah baris yang terpengaruh
-                
-            Implementasi logika insert/update:
-            - Tentukan apakah operasi INSERT (tanpa kondisi) atau UPDATE (dengan kondisi)
-            - Load semua data, modifikasi/tambah, lalu tulis ulang
-            - Update statistik (TODO)
-            - Koordinasi dengan Failure Recovery Manager untuk dirty data (TODO)
+            """tulis atau modifikasi data di disk.
+
+            args:
+                data_write: object yang berisi tabel, kolom, kondisi, dan nilai baru
+
+            returns:
+                jumlah baris yang terpengaruh
+
+            implementasi logika insert/update:
+            - insert (tanpa kondisi): append row baru tanpa load semua data
+            - update (dengan kondisi): load semua data, scan untuk match, lalu update
             """
 
             table_name = data_write.table
-            
+
             if table_name not in self.tables:
                 raise ValueError(f"Tabel '{table_name}' tidak ditemukan")
 
             table_file = self._get_table_file_path(table_name)
-            
-            # Load data yang sudah ada
-            all_rows, schema_names = self._load_all_rows_with_schema(table_name)
-            
             column_defs = self._get_column_definitions(table_name)
-            
-            rows_affected = 0
+            schema_names = [c.name for c in column_defs]
 
-            # ========== Logika INSERT (tanpa kondisi) ==========
+            # ========== logika insert ==========
             if not data_write.conditions:
+                # validasi input
                 if not data_write.column or not data_write.new_value:
                     raise ValueError("Untuk INSERT, column dan new_value harus diisi")
-                
-                if len(data_write.column) != len(data_write.new_value):
-                    raise ValueError("Jumlah kolom dan nilai baru harus sama")
-                    
-                new_row_data = dict(zip(data_write.column, data_write.new_value))
-                
-                # Aplikasikan nilai default dan validasi
-                self._apply_defaults_and_validate([new_row_data], column_defs)
-                
-                # Karena _apply_defaults_and_validate memodifikasi data in-place, kita bisa langsung menambahkannya
-                all_rows.append(new_row_data)
-                rows_affected = 1
-                print(f"✓ Inserted 1 row ke tabel '{table_name}'")
 
-            # ========== Logika UPDATE (dengan kondisi) ==========
-            else:
-                if not data_write.column or not data_write.new_value:
-                    raise ValueError("Untuk UPDATE, column dan new_value harus diisi")
-                
                 if len(data_write.column) != len(data_write.new_value):
                     raise ValueError("Jumlah kolom dan nilai baru harus sama")
+
+                # buat row baru
+                new_row_data = dict(zip(data_write.column, data_write.new_value))
+
+                # aplikasikan nilai default dan validasi
+                self._apply_defaults_and_validate([new_row_data], column_defs)
+
+                # file baru atau file exists?
+                if not os.path.exists(table_file):
+                    # file baru - write biasa
+                    write_binary_table(table_file, [new_row_data], schema_names)
+                else:
+                    # file exists - true append (no load!)
+                    with open(table_file, 'r+b') as f:
+                        # verify magic bytes
+                        magic = f.read(4)
+                        if magic != MAGIC_BYTES:
+                            raise ValueError(f"invalid file format")
+
+                        # skip version (4 bytes)
+                        f.seek(4 + 4)
+
+                        # read schema length, then skip schema
+                        schema_length = struct.unpack('<I', f.read(4))[0]
+                        f.seek(4 + 4 + 4 + schema_length)
+
+                        # read current row count
+                        old_row_count = struct.unpack('<I', f.read(4))[0]
+
+                        # update row count
+                        new_row_count = old_row_count + 1
+                        f.seek(4 + 4 + 4 + schema_length)
+                        f.write(struct.pack('<I', new_row_count))
+
+                        # seek to end and append row
+                        f.seek(0, 2)  # seek_end
+                        row_bytes = serialize_row(new_row_data, schema_names)
+                        f.write(row_bytes)
+
+                print(f"inserted 1 row ke tabel '{table_name}'")
+                return 1
+
+            # ========== logika update (dengan kondisi) ==========
+            else:
+                # validasi input
+                if not data_write.column or not data_write.new_value:
+                    raise ValueError("untuk update, column dan new_value harus diisi")
+
+                if len(data_write.column) != len(data_write.new_value):
+                    raise ValueError("jumlah kolom dan nilai baru harus sama")
 
                 update_data = dict(zip(data_write.column, data_write.new_value))
-                
-                # Lakukan pra-validasi tipe data untuk nilai yang di-update
+
+                # pra-validasi tipe data untuk nilai yang di-update
                 for col_name, new_val in update_data.items():
                     col_def = next((c for c in column_defs if c.name == col_name), None)
                     if col_def is None:
-                        raise ValueError(f"Kolom '{col_name}' tidak ada di tabel '{table_name}'")
-                    
-                    # Validasi nilai baru
-                    from .utils import validate_value_for_column
+                        raise ValueError(f"kolom '{col_name}' tidak ada di tabel '{table_name}'")
+
+                    # validasi nilai baru
                     try:
                         validate_value_for_column(new_val, col_def)
                     except ValueError as e:
-                        raise ValueError(f"Update value validation failed for column '{col_name}': {e}")
-                
-                
+                        raise ValueError(f"update value validation failed for column '{col_name}': {e}")
+
+                # hanya di update: load semua rows untuk scan kondisi
+                all_rows, _ = self._load_all_rows_with_schema(table_name)
+
+                # scan dan update rows yang match
                 new_rows = []
+                rows_affected = 0
+
                 for row in all_rows:
                     if self._row_matches_all_conditions(row, data_write.conditions):
-                        # Update row
+                        # update row yang match kondisi
                         updated_row = row.copy()
                         for col_name, new_val in update_data.items():
                             updated_row[col_name] = new_val
-                        
-                        # NOTE: Validasi penuh tidak diperlukan lagi karena pre-validasi di atas
-                        # Namun, jika ada logika constraint yang lebih kompleks, validasi penuh bisa dilakukan
-                        
                         new_rows.append(updated_row)
                         rows_affected += 1
                     else:
+                        # keep row yang tidak match
                         new_rows.append(row)
-                
-                all_rows = new_rows
-                print(f"✓ Updated {rows_affected} rows di tabel '{table_name}'")
 
-            # Tulis semua baris (yang sudah dimodifikasi) kembali ke binary file
-            if rows_affected > 0:
-                write_binary_table(table_file, all_rows, schema_names)
-            
-            return rows_affected
+                # write kembali semua rows
+                if rows_affected > 0:
+                    write_binary_table(table_file, new_rows, schema_names)
+
+                print(f"updated {rows_affected} rows di tabel '{table_name}'")
+                return rows_affected
 
 
 
     def delete_block(self, data_deletion: DataDeletion) -> int:
-        """Menghapus data dari disk.
+        """hapus data dari disk.
 
-        Proses:
-        - Validasi tabel ada
-        - Load semua baris
-        - Tentukan baris yang harus dihapus berdasarkan kondisi (AND)
-        - Simpan ulang baris yang tersisa
-        - Update statistik sederhana
-        - Return jumlah baris yang dihapus
+        proses:
+        - validasi tabel ada
+        - load semua baris
+        - tentukan baris yang harus dihapus berdasarkan kondisi (and)
+        - simpan ulang baris yang tersisa
+        - update statistik sederhana
+        - return jumlah baris yang dihapus
 
-        Args:
-            data_deletion: Object yang berisi tabel dan kondisi untuk penghapusan
+        args:
+            data_deletion: object yang berisi tabel dan kondisi untuk penghapusan
 
-        Returns:
-            Jumlah baris yang terpengaruh (dihapus)
+        returns:
+            jumlah baris yang terpengaruh (dihapus)
         """
         table_name = data_deletion.table
 
-        # Validasi tabel ada
+        # validasi tabel ada
         if table_name not in self.tables:
             available = list(self.tables.keys()) if self.tables else "tidak ada"
             raise ValueError(f"Tabel '{table_name}' tidak ditemukan. Tersedia: {available}")
 
-        # Load rows
+        # load rows
         all_rows = self._load_table_rows(table_name)
         if not all_rows:
-            # Either file empty or tidak ada rows
-            print(f"✓ Tidak ada baris ditemukan di tabel '{table_name}'")
+            # either file empty atau tidak ada rows
+            print(f"tidak ada baris ditemukan di tabel '{table_name}'")
             return 0
 
-        # Determine rows to keep (delete those that match ALL conditions)
+        # tentukan rows yang di-keep (delete yang match semua conditions)
         conditions = getattr(data_deletion, "conditions", []) or []
         rows_to_keep: List[Dict[str, Any]] = []
         deleted_count = 0
@@ -648,45 +843,45 @@ class StorageManager:
                 rows_to_keep.append(row)
 
         if deleted_count == 0:
-            print(f"✓ Tidak ada baris yang cocok untuk dihapus di tabel '{table_name}'")
+            print(f"tidak ada baris yang cocok untuk dihapus di tabel '{table_name}'")
             return 0
 
-        # Save remaining rows back to disk
+        # save remaining rows kembali ke disk
         self._save_table_rows(table_name, rows_to_keep)
 
-        # Update simple statistics
+        # update simple statistics
         self._update_stats_after_delete(table_name, rows_to_keep)
 
-        print(f"✓ Dihapus {deleted_count} baris dari tabel '{table_name}'")
+        print(f"dihapus {deleted_count} baris dari tabel '{table_name}'")
         return deleted_count
 
     def set_index(self, table: str, column: str, index_type: str) -> None:
-        """Membuat indeks untuk kolom dalam sebuah tabel.
-        
-        Args:
-            table: Nama tabel
-            column: Nama kolom yang akan diindeks
-            index_type: Tipe indeks ("btree" atau "hash")
-            
-        TODO: Implementasi pembuatan indeks:
-        - Support minimal satu tipe indeks (B+ Tree atau Hash)
-        - Bangun struktur indeks untuk kolom yang ditentukan
-        - Simpan metadata indeks
-        - (Bonus: implementasi kedua tipe indeks)
+        """buat indeks untuk kolom dalam sebuah tabel.
+
+        args:
+            table: nama tabel
+            column: nama kolom yang akan diindeks
+            index_type: tipe indeks ("btree" atau "hash")
+
+        todo: implementasi pembuatan indeks:
+        - support minimal satu tipe indeks (b+ tree atau hash)
+        - bangun struktur indeks untuk kolom yang ditentukan
+        - simpan metadata indeks
+        - (bonus: implementasi kedua tipe indeks)
         """
         raise NotImplementedError("set_index belum diimplementasi")
 
     def get_stats(self) -> Dict[str, Statistic]:
-        """Mengambil statistik untuk semua tabel.
-        
-        Returns:
-            Dictionary yang memetakan nama tabel ke object Statistic mereka
-            
-        TODO: Implementasi pengumpulan statistik:
-        - Hitung n_r (jumlah tuple)
-        - Hitung b_r (jumlah blok): b_r = ⌈n_r / f_r⌉
-        - Hitung l_r (ukuran tuple dalam bytes)
-        - Hitung f_r (blocking factor)
-        - Hitung V(A,r) (nilai distinct per atribut)
+        """ambil statistik untuk semua tabel.
+
+        returns:
+            dictionary yang memetakan nama tabel ke object statistic mereka
+
+        todo: implementasi pengumpulan statistik:
+        - hitung n_r (jumlah tuple)
+        - hitung b_r (jumlah blok): b_r = ⌈n_r / f_r⌉
+        - hitung l_r (ukuran tuple dalam bytes)
+        - hitung f_r (blocking factor)
+        - hitung v(a,r) (nilai distinct per atribut)
         """
         raise NotImplementedError("get_stats belum diimplementasi")
