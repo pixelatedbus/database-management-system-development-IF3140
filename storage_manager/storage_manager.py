@@ -24,7 +24,9 @@ from .utils import (
     read_binary_table_streaming,
     write_binary_table,
     append_row_to_table,
-    append_block_to_table
+    append_block_to_table,
+    calculate_row_size
+
 )
 
 
@@ -853,11 +855,107 @@ class StorageManager:
         returns:
             dictionary yang memetakan nama tabel ke object statistic mereka
 
-        todo: implementasi pengumpulan statistik:
-        - hitung n_r (jumlah tuple)
-        - hitung b_r (jumlah blok): b_r = ⌈n_r / f_r⌉
-        - hitung l_r (ukuran tuple dalam bytes)
-        - hitung f_r (blocking factor)
-        - hitung v(a,r) (nilai distinct per atribut)
+        statistik yang dihitung:
+        - n_r: jumlah tuple dalam relasi
+        - b_r: jumlah blok yang berisi tuple
+        - l_r: ukuran rata-rata tuple dalam bytes
+        - f_r: blocking factor (jumlah tuple per blok)
+        - V_a_r: jumlah nilai distinct per atribut
         """
-        raise NotImplementedError("get_stats belum diimplementasi")
+
+        stats = {}
+
+        for table_name in self.tables:
+            table_file = self._get_table_file_path(table_name)
+            schema_names = [c["name"] for c in self.tables[table_name]["columns"]]
+
+            # Default values jika tabel kosong atau file tidak ada
+            n_r = 0
+            b_r = 0
+            l_r = 0
+            f_r = 0
+            V_a_r: Dict[str, int] = {}
+
+            if not os.path.exists(table_file):
+                # Tabel kosong, gunakan default values
+                stats[table_name] = Statistic(
+                    n_r=n_r,
+                    b_r=b_r,
+                    l_r=l_r,
+                    f_r=f_r,
+                    V_a_r=V_a_r
+                )
+                continue
+
+            try:
+                # Baca header file untuk mendapatkan num_blocks
+                with open(table_file, 'rb') as f:
+                    # Skip magic bytes
+                    magic = f.read(4)
+                    if magic != b'SMDB':
+                        continue
+
+                    # Skip version
+                    f.read(4)
+
+                    # Skip schema
+                    schema_length = struct.unpack('<I', f.read(4))[0]
+                    f.seek(schema_length, 1)
+
+                    # Skip block_size
+                    f.read(4)
+
+                    # Read num_blocks (ini adalah b_r!)
+                    b_r = struct.unpack('<I', f.read(4))[0]
+
+                # Load semua rows untuk menghitung statistik lainnya
+                all_rows = list(read_binary_table_streaming(table_file))
+                n_r = len(all_rows)
+
+                if n_r > 0:
+                    # Hitung l_r (rata-rata ukuran row dalam bytes)
+                    total_size = sum(calculate_row_size(row, schema_names) for row in all_rows)
+                    l_r = int(total_size / n_r)
+
+                    # Hitung f_r (blocking factor)
+                    # f_r = floor((block_size - 4) / avg_row_size)
+                    # -4 untuk header row_count per block
+                    if l_r > 0:
+                        usable_space = self.block_size - 4
+                        f_r = int(usable_space / l_r)
+                        if f_r == 0:
+                            f_r = 1  # minimal 1 tuple per block
+
+                    # Hitung V(a,r) - jumlah nilai distinct per atribut
+                    for col_name in schema_names:
+                        distinct_values = set()
+                        for row in all_rows:
+                            if col_name in row:
+                                # Convert to hashable type for set
+                                val = row[col_name]
+                                if isinstance(val, dict) or isinstance(val, list):
+                                    val = str(val)
+                                distinct_values.add(val)
+                        V_a_r[col_name] = len(distinct_values)
+
+                stats[table_name] = Statistic(
+                    n_r=n_r,
+                    b_r=b_r,
+                    l_r=l_r,
+                    f_r=f_r,
+                    V_a_r=V_a_r
+                )
+
+            except Exception as e:
+                print(f"⚠ error calculating stats for '{table_name}': {e}")
+                # Return default stats on error
+                stats[table_name] = Statistic(
+                    n_r=0,
+                    b_r=0,
+                    l_r=0,
+                    f_r=0,
+                    V_a_r={}
+                )
+
+        self.stats = stats
+        return stats
