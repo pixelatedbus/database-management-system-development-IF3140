@@ -116,15 +116,15 @@ filter1 = QueryTree("FILTER", "WHERE age > 25")
 filter2 = QueryTree("FILTER", "WHERE status = 'active'")
 filter3 = QueryTree("FILTER", "WHERE city = 'Jakarta'")
 
-# Create AND filter structure
-filter_and = QueryTree("FILTER", "AND")
-filter_and.add_child(relation)
-filter_and.add_child(filter1)
-filter_and.add_child(filter2)
-filter_and.add_child(filter3)
+# Create OPERATOR_S structure dengan explicit source
+operator_and = QueryTree("OPERATOR_S", "AND")
+operator_and.add_child(relation)  # Child 0: source
+operator_and.add_child(filter1)   # Child 1+: kondisi
+operator_and.add_child(filter2)
+operator_and.add_child(filter3)
 
 project = QueryTree("PROJECT", "*")
-project.add_child(filter_and)
+project.add_child(operator_and)
 
 query = ParsedQuery(project, "SELECT * FROM users WHERE ...")
 
@@ -249,17 +249,24 @@ Query Tree adalah representasi internal dari SQL query dalam bentuk tree structu
 - `ARRAY` - Array literal (untuk IN clause)
 - `LIMIT` - Limit value
 
+**LOGICAL_OPERATORS (custom rules):**
+
+- `OPERATOR_S` - Logical AND/OR dengan explicit source (≥3 children)
+- `OPERATOR` - Nested AND/OR/NOT tanpa explicit source (AND/OR: ≥2 children, NOT: 1 child)
+
 **SPECIAL OPERATORS (custom rules):**
 
-- `FILTER` - Filter/WHERE clause (1-2 children)
+- `FILTER` - Conditional expressions (WHERE/IN/EXIST) (1-2 children)
 - `UPDATE` - Update operation (1 child)
 - `INSERT` - Insert operation (1 child)
 - `DELETE` - Delete operation (1 child)
 - `BEGIN_TRANSACTION` - Transaction start (0+ children)
 
-#### FILTER Node Details
+#### Node Details
 
-FILTER adalah node khusus dengan aturan fleksibel:
+**FILTER Node (Conditional Expressions)**
+
+FILTER adalah node untuk conditional expressions (WHERE/IN/EXIST):
 
 **Pattern 1: Single Child (WHERE condition)**
 
@@ -276,17 +283,28 @@ FILTER("IN column")
 └── ARRAY("(1,2,3)") # Value list
 ```
 
-**Pattern 3: Logical AND/OR (Multiple Children)**
+**OPERATOR_S Node (Logical Operators dengan Source)**
+
+OPERATOR_S untuk logical operations (AND/OR) dengan explicit source:
 
 ```
-FILTER("AND")
-├── <source_tree>           # Child 0: source
-├── FILTER("WHERE cond1")   # Child 1: condition 1
-├── FILTER("WHERE cond2")   # Child 2: condition 2
-└── FILTER("WHERE cond3")   # Child N: condition N
+OPERATOR_S("AND")
+├── <source_tree>           # Child 0: source (eksplisit)
+├── FILTER("WHERE cond1")   # Child 1: kondisi 1
+├── FILTER("WHERE cond2")   # Child 2: kondisi 2
+└── FILTER("WHERE cond3")   # Child N: kondisi N
 ```
 
-Lihat **[Filter.md](Filter.md)** untuk detail lengkap tentang filter structure dan parsing rules.
+**OPERATOR Node (Nested Logical Operators)**
+
+OPERATOR untuk nested logic (AND/OR/NOT) yang mewarisi source dari parent:
+
+```
+OPERATOR("NOT")
+└── FILTER("WHERE condition")  # Negasi kondisi
+```
+
+Lihat **[Filter.md](Filter.md)** untuk detail lengkap tentang OPERATOR, OPERATOR_S, dan FILTER structure.
 
 #### Query Tree Example
 
@@ -306,12 +324,12 @@ PROJECT("id, name")
             └── RELATION("users")
 ```
 
-Atau dengan AND structure:
+Atau dengan OPERATOR_S structure:
 
 ```
 PROJECT("id, name")
 └── SORT("name")
-    └── FILTER("AND")
+    └── OPERATOR_S("AND")
         ├── RELATION("users")
         ├── FILTER("WHERE age > 25")
         └── FILTER("WHERE status = 'active'")
@@ -377,9 +395,11 @@ Lihat **[Rule.md](Rule.md)** dan **[Filter.md](Filter.md)** untuk detail lengkap
 Genetic Algorithm adalah metode optimasi yang terinspirasi dari evolusi biologis.
 
 Rule yang sudah ada:
+
 - Seleksi Konjungtif
 
 Rule yang belum ada:
+
 - Seleksi komutatif
 - Proyeksi Terakhir
 - Gabungkan Seleksi dan Join
@@ -387,7 +407,6 @@ Rule yang belum ada:
 - Join asosiatif
 - Pushdown Seleksi
 - Pushdown Proyeksi
-
 
 #### Core Concepts
 
@@ -397,15 +416,15 @@ Rule yang belum ada:
 class Individual:
     filter_orders: dict[int, list[int]]  # Urutan filter
     applied_rules: list[str]             # Rules yang diterapkan
-    query: ParsedQuery                    # Resulting query
-    fitness: float                        # Cost (lower is better)
+    query: ParsedQuery                    # Query hasil
+    fitness: float                        # Cost (semakin rendah semakin baik)
 ```
 
 Contoh:
 
 ```python
 Individual(
-    filter_orders={0: [2, 0, 1]},  # Apply filter 2, 0, 1 secara berurutan
+    filter_orders={0: [2, 0, 1]},  # Terapkan filter 2, 0, 1 secara berurutan
     applied_rules=["seleksi_konjungtif"],
     fitness=220.0
 )
@@ -492,12 +511,12 @@ Optimization rules mengimplementasikan equivalency rules untuk query transformat
 `σ(c1 ∧ c2 ∧ ... ∧ cn)(R)` ≡ `σ(c1)(σ(c2)(...(σ(cn)(R))...))`
 
 **Transformasi:**  
-FILTER(AND) dengan multiple conditions → Cascaded filters
+OPERATOR_S(AND) dengan multiple conditions → Cascaded filters
 
 **Before:**
 
 ```
-FILTER("AND")
+OPERATOR_S("AND")
 ├── RELATION("users")
 ├── FILTER("WHERE age > 25")
 ├── FILTER("WHERE status = 'active'")
@@ -565,21 +584,56 @@ def check_query(query_tree: QueryTree) -> bool:
 - **PROJECT**: Must have exactly 1 child
 - **SORT**: Must have exactly 1 child
 - **JOIN**: Must have exactly 2 children (both RELATION or tree)
-- **FILTER**:
-  - **0 children**: Valid sebagai condition leaf (e.g., `WHERE age > 25` digunakan dalam AND/OR)
-  - **1 child**: Filter operator dengan source tree (e.g., `WHERE ...` → RELATION)
-  - **2 children**: 
-    - First child: source tree (RELATION, JOIN, atau operator lain)
-    - Second child: value (ARRAY untuk IN, RELATION/PROJECT untuk subquery)
-  - **3+ children**: Logical operators (AND/OR/NOT):
-    - First child: source tree (RELATION, JOIN, dll)
-    - Remaining children: Must be FILTER nodes (conditions)
-  - Value must match pattern: "WHERE ...", "IN ...", "EXIST", "AND", "OR", "NOT"
+- **FILTER** (Conditional Expressions):
+  - **1 child**: Filter operator dengan source tree (misal: `WHERE ...` → RELATION)
+  - **2 children**:
+    - Child pertama: source tree (RELATION, JOIN, atau operator lain)
+    - Child kedua: value (ARRAY untuk IN, RELATION/PROJECT untuk subquery)
+  - **Value**: "WHERE ...", "IN ...", "EXIST" (TIDAK BOLEH "AND", "OR", "NOT")
+
+- **OPERATOR_S** (Logical AND/OR dengan Source):
+  - **≥3 children**: Child[0] = source, Children[1..N] = kondisi
+  - **Child[0]**: Harus operator yang menghasilkan data (RELATION, JOIN, SORT, PROJECT, OPERATOR_S, FILTER dengan children)
+  - **Child[0] TIDAK BOLEH**: OPERATOR (tidak ada data) atau FILTER leaf (tidak ada data)
+  - **Children[1..N]**: Harus FILTER, OPERATOR, atau OPERATOR_S
+  - **Value**: "AND" atau "OR" saja
+
+  **Contoh dengan SORT sebagai source:**
+
+  ```
+  OPERATOR_S("AND")
+  ├── SORT("name")              # Child 0: source (SORT operator)
+  │   └── RELATION("users")
+  ├── FILTER("WHERE age > 25")  # Child 1: kondisi
+  └── FILTER("WHERE active")    # Child 2: kondisi
+  ```
+
+  SQL: `SELECT * FROM users WHERE age > 25 AND active ORDER BY name`
+
+- **OPERATOR** (Nested Logical Operators):
+  - **AND/OR**: ≥2 children, semua harus FILTER/OPERATOR/OPERATOR_S
+  - **NOT**: Tepat 1 child, harus FILTER/OPERATOR/OPERATOR_S
+  - **Tanpa source**: Mewarisi source dari parent OPERATOR_S
+  - **Value**: "AND", "OR", atau "NOT"
+  
+  **Contoh nested:**
+  ```
+  OPERATOR_S("AND")
+  ├── RELATION("users")
+  ├── FILTER("WHERE age > 25")
+  └── OPERATOR("OR")            # Nested, mewarisi source
+      ├── FILTER("WHERE city = 'Jakarta'")
+      └── FILTER("WHERE city = 'Bandung'")
+  ```
+
 - **RELATION, ARRAY, LIMIT**: Must have 0 children
-- **UPDATE, INSERT, DELETE**: Must have exactly 1 child (RELATION or FILTER → RELATION)
+- **UPDATE, INSERT, DELETE**: Must have exactly 1 child (RELATION atau FILTER/OPERATOR_S → RELATION)
 
 **Important Notes:**
-- FILTER dengan `WHERE`/`IN` dapat memiliki 0 children sebagai condition leaf, digunakan sebagai child dari AND/OR
+
+- Logical operators (AND/OR/NOT) TIDAK menggunakan FILTER, tapi menggunakan OPERATOR atau OPERATOR_S
+- OPERATOR_S digunakan ketika logical operator memiliki explicit source
+- OPERATOR digunakan untuk nested logic yang mewarisi source dari parent
 - Equivalency rules (seperti seleksi konjungtif) menghasilkan query tree yang tetap valid setelah transformasi
 - Validasi dilakukan secara rekursif pada seluruh tree structure
 

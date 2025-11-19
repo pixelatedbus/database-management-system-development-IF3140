@@ -1,13 +1,13 @@
 """
 Unit tests untuk Rule 1: Seleksi Konjungtif
-Testing transformasi FILTER(AND) menjadi cascaded filters
+Testing transformasi OPERATOR_S(AND) menjadi cascaded filters
 """
 
 import unittest
 from query_optimizer.query_tree import QueryTree
 from query_optimizer.optimization_engine import ParsedQuery
 from query_optimizer.query_check import check_query
-from ..seleksi_konjungtif import (
+from query_optimizer.seleksi_konjungtif import (
     seleksi_konjungtif,
     seleksi_konjungtif_rec,
     transform_and_filter,
@@ -28,15 +28,15 @@ class TestSeleksiKonjungtif(unittest.TestCase):
         pass
     
     def test_simple_and_transformation(self):
-        """Test transformasi sederhana FILTER(AND) dengan 2 kondisi"""
-        # Input: FILTER(AND) -> [RELATION(users), FILTER(WHERE age > 18), FILTER(WHERE status = 'active')]
+        """Test transformasi sederhana OPERATOR_S(AND) dengan 2 kondisi"""
+        # Input: OPERATOR_S(AND) -> [RELATION(users), FILTER(WHERE age > 18), FILTER(WHERE status = 'active')]
         # Output: FILTER(WHERE status = 'active') -> FILTER(WHERE age > 18) -> RELATION(users)
         
         relation = QueryTree("RELATION", "users")
         condition1 = QueryTree("FILTER", "WHERE age > 18")
         condition2 = QueryTree("FILTER", "WHERE status = 'active'")
         
-        and_filter = QueryTree("FILTER", "AND")
+        and_filter = QueryTree("OPERATOR_S", "AND")
         and_filter.add_child(relation)
         and_filter.add_child(condition1)
         and_filter.add_child(condition2)
@@ -68,13 +68,13 @@ class TestSeleksiKonjungtif(unittest.TestCase):
         self.assertEqual(bottom.val, "users")
     
     def test_and_with_three_conditions(self):
-        """Test FILTER(AND) dengan 3 kondisi"""
+        """Test OPERATOR_S(AND) dengan 3 kondisi"""
         relation = QueryTree("RELATION", "orders")
         cond1 = QueryTree("FILTER", "WHERE amount > 100")
         cond2 = QueryTree("FILTER", "WHERE status = 'paid'")
         cond3 = QueryTree("FILTER", "WHERE date > '2024-01-01'")
         
-        and_filter = QueryTree("FILTER", "AND")
+        and_filter = QueryTree("OPERATOR_S", "AND")
         and_filter.add_child(relation)
         and_filter.add_child(cond1)
         and_filter.add_child(cond2)
@@ -104,14 +104,14 @@ class TestSeleksiKonjungtif(unittest.TestCase):
     
     def test_no_transformation_for_nested_and(self):
         """Test bahwa nested AND tidak ditransformasi"""
-        # FILTER(AND) -> [FILTER(AND), FILTER(cond1), FILTER(cond2)]
+        # OPERATOR_S(AND) -> [OPERATOR_S(AND), FILTER(cond1), FILTER(cond2)]
         
-        inner_and = QueryTree("FILTER", "AND")
+        inner_and = QueryTree("OPERATOR_S", "AND")
         inner_and.add_child(QueryTree("RELATION", "users"))
         inner_and.add_child(QueryTree("FILTER", "WHERE x = 1"))
         inner_and.add_child(QueryTree("FILTER", "WHERE y = 2"))
         
-        outer_and = QueryTree("FILTER", "AND")
+        outer_and = QueryTree("OPERATOR_S", "AND")
         outer_and.add_child(inner_and)
         outer_and.add_child(QueryTree("FILTER", "WHERE z = 3"))
         outer_and.add_child(QueryTree("FILTER", "WHERE w = 4"))
@@ -126,16 +126,27 @@ class TestSeleksiKonjungtif(unittest.TestCase):
         # Validasi query setelah transformasi
         check_query(result.query_tree)
         
-        # Outer AND should not be transformed because first child is FILTER
+        # Inner AND will be transformed, outer AND will also be transformed
+        # Result should be cascaded filters
         self.assertEqual(result.query_tree.type, "FILTER")
-        self.assertEqual(result.query_tree.val, "AND")
     
     def test_is_conjunctive_filter(self):
         """Test fungsi is_conjunctive_filter"""
-        and_filter = QueryTree("FILTER", "AND")
+        # is_conjunctive_filter now requires OPERATOR_S with >= 3 children
+        relation = QueryTree("RELATION", "users")
+        cond1 = QueryTree("FILTER", "WHERE x = 1")
+        cond2 = QueryTree("FILTER", "WHERE y = 2")
+        
+        and_filter = QueryTree("OPERATOR_S", "AND")
+        and_filter.add_child(relation)
+        and_filter.add_child(cond1)
+        and_filter.add_child(cond2)
         self.assertTrue(is_conjunctive_filter(and_filter))
         
-        or_filter = QueryTree("FILTER", "OR")
+        or_filter = QueryTree("OPERATOR_S", "OR")
+        or_filter.add_child(relation)
+        or_filter.add_child(cond1)
+        or_filter.add_child(cond2)
         self.assertFalse(is_conjunctive_filter(or_filter))
         
         where_filter = QueryTree("FILTER", "WHERE x = 1")
@@ -151,7 +162,7 @@ class TestSeleksiKonjungtif(unittest.TestCase):
         cond1 = QueryTree("FILTER", "WHERE age > 18")
         cond2 = QueryTree("FILTER", "WHERE status = 'active'")
         
-        and_filter = QueryTree("FILTER", "AND")
+        and_filter = QueryTree("OPERATOR_S", "AND")
         and_filter.add_child(relation)
         and_filter.add_child(cond1)
         and_filter.add_child(cond2)
@@ -159,15 +170,15 @@ class TestSeleksiKonjungtif(unittest.TestCase):
         self.assertTrue(can_transform(and_filter))
         
         # Invalid: less than 3 children
-        and_filter2 = QueryTree("FILTER", "AND")
+        and_filter2 = QueryTree("OPERATOR_S", "AND")
         and_filter2.add_child(relation)
         and_filter2.add_child(cond1)
         
         self.assertFalse(can_transform(and_filter2))
         
-        # Invalid: first child is FILTER
-        and_filter3 = QueryTree("FILTER", "AND")
-        and_filter3.add_child(QueryTree("FILTER", "WHERE x = 1"))
+        # Invalid: first child is OPERATOR (nested logic)
+        and_filter3 = QueryTree("OPERATOR_S", "AND")
+        and_filter3.add_child(QueryTree("OPERATOR", "AND"))
         and_filter3.add_child(cond1)
         and_filter3.add_child(cond2)
         
@@ -180,7 +191,7 @@ class TestSeleksiKonjungtif(unittest.TestCase):
         cond2 = QueryTree("FILTER", "WHERE status = 'active'")
         cond3 = QueryTree("FILTER", "WHERE city = 'Jakarta'")
         
-        and_filter = QueryTree("FILTER", "AND")
+        and_filter = QueryTree("OPERATOR_S", "AND")
         and_filter.add_child(relation)
         and_filter.add_child(cond1)
         and_filter.add_child(cond2)
@@ -246,9 +257,9 @@ class TestSeleksiKonjungtif(unittest.TestCase):
         # Should have 1 child (the AND node created from inner cascaded filters)
         self.assertEqual(len(result.query_tree.childs), 1)
         
-        # Child should be AND node
+        # Child should be OPERATOR_S(AND) node
         and_node = result.query_tree.get_child(0)
-        self.assertEqual(and_node.type, "FILTER")
+        self.assertEqual(and_node.type, "OPERATOR_S")
         self.assertEqual(and_node.val, "AND")
         
         # AND node should have 3 children: 1 relation + 2 filters
@@ -275,12 +286,12 @@ class TestSeleksiKonjungtif(unittest.TestCase):
     
     def test_complex_nested_structure(self):
         """Test transformasi pada struktur nested yang kompleks"""
-        # PROJECT -> FILTER(AND) -> [RELATION, cond1, cond2]
+        # PROJECT -> OPERATOR_S(AND) -> [RELATION, cond1, cond2]
         relation = QueryTree("RELATION", "users")
         cond1 = QueryTree("FILTER", "WHERE age > 18")
         cond2 = QueryTree("FILTER", "WHERE status = 'active'")
         
-        and_filter = QueryTree("FILTER", "AND")
+        and_filter = QueryTree("OPERATOR_S", "AND")
         and_filter.add_child(relation)
         and_filter.add_child(cond1)
         and_filter.add_child(cond2)
@@ -310,8 +321,8 @@ class TestSeleksiKonjungtif(unittest.TestCase):
         self.assertEqual(nested.type, "FILTER")
     
     def test_empty_and_filter(self):
-        """Test FILTER(AND) tanpa kondisi yang cukup"""
-        # Note: FILTER(AND) dengan hanya 2 children (1 source + 1 condition) adalah invalid
+        """Test OPERATOR_S(AND) tanpa kondisi yang cukup"""
+        # Note: OPERATOR_S(AND) dengan hanya 2 children (1 source + 1 condition) adalah invalid
         # karena AND memerlukan minimal 2 conditions untuk operasi logika
         # Test ini memverifikasi bahwa transformasi tidak terjadi pada struktur yang tidak memenuhi syarat
         
@@ -319,7 +330,7 @@ class TestSeleksiKonjungtif(unittest.TestCase):
         cond1 = QueryTree("FILTER", "WHERE age > 18")
         cond2 = QueryTree("FILTER", "WHERE status = active")
         
-        and_filter = QueryTree("FILTER", "AND")
+        and_filter = QueryTree("OPERATOR_S", "AND")
         and_filter.add_child(relation)
         and_filter.add_child(cond1)
         and_filter.add_child(cond2)
@@ -336,7 +347,7 @@ class TestSeleksiKonjungtif(unittest.TestCase):
         result = seleksi_konjungtif(query)
         
         # Should not transform (less than 3 children)
-        self.assertEqual(result.query_tree.type, "FILTER")
+        self.assertEqual(result.query_tree.type, "OPERATOR_S")
         self.assertEqual(result.query_tree.val, "AND")
     
     def test_transform_preserves_query_string(self):
@@ -345,7 +356,7 @@ class TestSeleksiKonjungtif(unittest.TestCase):
         cond1 = QueryTree("FILTER", "WHERE age > 18")
         cond2 = QueryTree("FILTER", "WHERE status = 'active'")
         
-        and_filter = QueryTree("FILTER", "AND")
+        and_filter = QueryTree("OPERATOR_S", "AND")
         and_filter.add_child(relation)
         and_filter.add_child(cond1)
         and_filter.add_child(cond2)
@@ -373,7 +384,7 @@ class TestTransformAndFilter(unittest.TestCase):
         cond1 = QueryTree("FILTER", "WHERE age > 18")
         cond2 = QueryTree("FILTER", "WHERE status = 'active'")
         
-        and_filter = QueryTree("FILTER", "AND")
+        and_filter = QueryTree("OPERATOR_S", "AND")
         and_filter.add_child(relation)
         and_filter.add_child(cond1)
         and_filter.add_child(cond2)
@@ -405,7 +416,7 @@ class TestTransformAndFilter(unittest.TestCase):
         
         cond2 = QueryTree("FILTER", "WHERE amount > 1000")
         
-        and_filter = QueryTree("FILTER", "AND")
+        and_filter = QueryTree("OPERATOR_S", "AND")
         and_filter.add_child(relation)
         and_filter.add_child(cond1)
         and_filter.add_child(cond2)
@@ -426,13 +437,13 @@ class TestCascadeAndUncascade(unittest.TestCase):
     """Test cases untuk cascade dan uncascade operations"""
     
     def test_cascade_then_uncascade(self):
-        """Test bahwa cascade -> uncascade mengembalikan struktur AND (partial)"""
+        """Test bahwa cascade -> uncascade mengembalikan struktur OPERATOR_S(AND) (partial)"""
         relation = QueryTree("RELATION", "users")
         cond1 = QueryTree("FILTER", "WHERE age > 18")
         cond2 = QueryTree("FILTER", "WHERE status = 'active'")
         cond3 = QueryTree("FILTER", "WHERE city = 'Jakarta'")
         
-        and_filter = QueryTree("FILTER", "AND")
+        and_filter = QueryTree("OPERATOR_S", "AND")
         and_filter.add_child(relation)
         and_filter.add_child(cond1)
         and_filter.add_child(cond2)
@@ -491,7 +502,7 @@ class TestCascadeAndUncascade(unittest.TestCase):
         cond2 = QueryTree("FILTER", "WHERE b = 2")
         cond3 = QueryTree("FILTER", "WHERE c = 3")
         
-        and_filter = QueryTree("FILTER", "AND")
+        and_filter = QueryTree("OPERATOR_S", "AND")
         and_filter.add_child(relation)
         and_filter.add_child(cond1)
         and_filter.add_child(cond2)

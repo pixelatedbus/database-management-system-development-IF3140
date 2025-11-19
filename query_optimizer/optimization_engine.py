@@ -142,16 +142,19 @@ class OptimizationEngine:
         # Base cost on tree structure
         node_count = 0
         filter_count = 0
+        operator_count = 0
         join_count = 0
         
         def count_nodes(node):
-            nonlocal node_count, filter_count, join_count
+            nonlocal node_count, filter_count, operator_count, join_count
             if node is None:
                 return
             
             node_count += 1
             if node.type == "FILTER":
                 filter_count += 1
+            elif node.type in {"OPERATOR", "OPERATOR_S"}:
+                operator_count += 1
             elif node.type == "JOIN":
                 join_count += 1
             
@@ -163,9 +166,10 @@ class OptimizationEngine:
         # Random cost with some structure dependency
         base_cost = 100
         filter_cost = filter_count * 40
+        operator_cost = operator_count * 30  # Logical operators slightly cheaper
         join_cost = join_count * 150
         
-        cost = base_cost + filter_cost + join_cost
+        cost = base_cost + filter_cost + operator_cost + join_cost
         
         return cost
     

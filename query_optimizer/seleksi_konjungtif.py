@@ -20,86 +20,94 @@ def seleksi_konjungtif_rec(node: QueryTree) -> QueryTree:
     for i in range(len(node.childs)):
         node.childs[i] = seleksi_konjungtif_rec(node.childs[i])
     
-    if node.is_node_type("FILTER") and node.is_node_value("AND"):
+    # Transform OPERATOR_S(AND) menjadi cascaded filters
+    if node.is_node_type("OPERATOR_S") and node.is_node_value("AND"):
         return transform_and_filter(node)
     
     return node
 
 
 def transform_and_filter(and_node: QueryTree) -> QueryTree:
-    """Transformasi FILTER(AND) menjadi chain of cascaded filters."""
+    """Transformasi OPERATOR_S(AND) menjadi chain of cascaded filters."""
     num_children = len(and_node.childs)
     if num_children < 3:
         return and_node
     
-    first_child = and_node.get_child(0)
-    if first_child.is_node_type("FILTER"):
-        return and_node
-    
-    source = first_child
+    # OPERATOR_S structure: child[0] = source, child[1+] = conditions
+    source = and_node.get_child(0)
     conditions = and_node.childs[1:]
     current = source
     
+    # Build cascaded filters from bottom to top (reverse order)
     for i in range(len(conditions) - 1, -1, -1):
         condition = conditions[i]
         
-        if len(condition.childs) > 0:
-            if condition.is_node_type("FILTER") and condition.val.startswith(("WHERE", "IN", "EXIST")):
-                new_filter = QueryTree("FILTER", condition.val)
-                new_filter.add_child(current)
-            else:
-                new_filter = update_filter_source(condition, current)
+        # Jika condition adalah FILTER leaf (0 children), buat FILTER baru dengan current sebagai child
+        if len(condition.childs) == 0:
+            new_filter = QueryTree("FILTER", condition.val)
+            new_filter.add_child(current)
+        # Jika condition adalah OPERATOR/OPERATOR_S, update source-nya
+        elif condition.type in {"OPERATOR", "OPERATOR_S"}:
+            new_filter = update_filter_source(condition, current)
+        # Jika condition adalah FILTER dengan children, clone dan update source
         else:
             new_filter = QueryTree("FILTER", condition.val)
             new_filter.add_child(current)
+            # Copy children lainnya jika ada (untuk IN/EXIST pattern)
+            for j in range(1, len(condition.childs)):
+                new_filter.add_child(condition.childs[j])
         
         current = new_filter
     
     return current
 
 
-def update_filter_source(filter_node: QueryTree, new_source: QueryTree) -> QueryTree:
-    """Update source dari filter node."""
-    new_node = QueryTree(filter_node.type, filter_node.val)
+def update_filter_source(operator_node: QueryTree, new_source: QueryTree) -> QueryTree:
+    """Update source dari OPERATOR_S node."""
+    new_node = QueryTree(operator_node.type, operator_node.val)
     
-    if filter_node.val in {"AND", "OR"} and len(filter_node.childs) > 0:
-        first_child = filter_node.get_child(0)
-        if not first_child.is_node_type("FILTER"):
-            new_node.add_child(new_source)
-            for i in range(1, len(filter_node.childs)):
-                new_node.add_child(filter_node.childs[i])
-        else:
-            new_node.add_child(new_source)
-            for child in filter_node.childs:
-                new_node.add_child(child)
+    # OPERATOR_S: replace child[0] dengan new_source, keep child[1+]
+    if operator_node.type == "OPERATOR_S":
+        new_node.add_child(new_source)
+        for i in range(1, len(operator_node.childs)):
+            new_node.add_child(operator_node.childs[i])
+    # OPERATOR: convert to OPERATOR_S dengan new_source
+    elif operator_node.type == "OPERATOR":
+        new_node = QueryTree("OPERATOR_S", operator_node.val)
+        new_node.add_child(new_source)
+        for child in operator_node.childs:
+            new_node.add_child(child)
+    # FILTER: keep as is dengan new_source
     else:
         new_node.add_child(new_source)
-        for i in range(1, len(filter_node.childs)):
-            new_node.add_child(filter_node.childs[i])
+        for i in range(1, len(operator_node.childs)):
+            new_node.add_child(operator_node.childs[i])
     
     return new_node
 
 
 def is_conjunctive_filter(node: QueryTree) -> bool:
-    """Cek apakah node adalah FILTER(AND)."""
-    return node.is_node_type("FILTER") and node.is_node_value("AND")
+    """Cek apakah node adalah OPERATOR_S(AND) dengan >= 3 children."""
+    return node.is_node_type("OPERATOR_S") and node.is_node_value("AND") and len(node.childs) >= 3
 
 
 def can_transform(node: QueryTree) -> bool:
-    """Cek apakah FILTER(AND) bisa ditransformasi."""
+    """Cek apakah OPERATOR_S(AND) bisa ditransformasi."""
     if not is_conjunctive_filter(node):
         return False
     
     if len(node.childs) < 3:
         return False
     
+    # First child harus bukan FILTER/OPERATOR (harus source tree)
     first_child = node.get_child(0)
-    if first_child.is_node_type("FILTER"):
+    if first_child.type in {"FILTER", "OPERATOR", "OPERATOR_S"}:
         return False
     
+    # Remaining children harus FILTER/OPERATOR
     for i in range(1, len(node.childs)):
         child = node.get_child(i)
-        if not child.is_node_type("FILTER"):
+        if child.type not in {"FILTER", "OPERATOR", "OPERATOR_S"}:
             return False
     
     return True
@@ -125,9 +133,8 @@ def cascade_filters(query: ParsedQuery, filter_order: list[int] | None = None) -
 
 
 def cascade_and_with_order(and_node: QueryTree, order: list[int] | None = None) -> QueryTree:
-    """Cascade AND filter dengan urutan spesifik."""
-    first_child = and_node.get_child(0)
-    source = first_child
+    """Cascade OPERATOR_S(AND) dengan urutan spesifik."""
+    source = and_node.get_child(0)
     conditions = and_node.childs[1:]
     
     if order is None:
@@ -140,6 +147,7 @@ def cascade_and_with_order(and_node: QueryTree, order: list[int] | None = None) 
     for idx in order:
         if 0 <= idx < len(conditions):
             condition = conditions[idx]
+            # Create FILTER with condition value
             new_filter = QueryTree("FILTER", condition.val)
             new_filter.add_child(current)
             current = new_filter
@@ -148,7 +156,7 @@ def cascade_and_with_order(and_node: QueryTree, order: list[int] | None = None) 
 
 
 def uncascade_filters(query: ParsedQuery) -> ParsedQuery:
-    """Convert cascaded filters kembali ke bentuk AND."""
+    """Convert cascaded filters kembali ke bentuk OPERATOR_S(AND)."""
     def uncascade_rec(node: QueryTree) -> QueryTree:
         if node is None:
             return None
@@ -156,11 +164,13 @@ def uncascade_filters(query: ParsedQuery) -> ParsedQuery:
         for i in range(len(node.childs)):
             node.childs[i] = uncascade_rec(node.childs[i])
         
+        # Detect cascaded filters: FILTER with 1 child
         if node.is_node_type("FILTER") and len(node.childs) == 1:
             filters = []
             current = node
             source = None
             
+            # Collect all cascaded filters
             while current is not None and current.is_node_type("FILTER"):
                 if len(current.childs) == 1:
                     filters.append(current)
@@ -168,11 +178,13 @@ def uncascade_filters(query: ParsedQuery) -> ParsedQuery:
                 else:
                     break
             
+            # If we have 2+ filters and a valid source, create OPERATOR_S(AND)
             if len(filters) >= 2 and current is not None:
                 source = current
-                and_node = QueryTree("FILTER", "AND")
+                and_node = QueryTree("OPERATOR_S", "AND")
                 and_node.add_child(source)
                 
+                # Add conditions as FILTER leaves (0 children)
                 for f in filters:
                     condition = QueryTree("FILTER", f.val)
                     and_node.add_child(condition)
