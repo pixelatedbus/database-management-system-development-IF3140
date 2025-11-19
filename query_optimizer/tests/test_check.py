@@ -226,11 +226,12 @@ class TestQueryValidator(unittest.TestCase):
     
     def test_invalid_filter_no_children(self):
         # Structure: FILTER (no children)
-        # Invalid because FILTER must have at least 1 child
+        # VALID: FILTER dengan WHERE/IN bisa jadi condition leaf (0 children)
+        # Ini digunakan sebagai child dari AND/OR
         filter_node = QueryTree("FILTER", "WHERE id = 1")
         
-        with self.assertRaises(QueryValidationError):
-            check_query(filter_node)
+        # Should NOT raise error - condition leaf is valid
+        check_query(filter_node)
     
     def test_invalid_filter_wrong_second_child(self):
         # Structure: FILTER -> RELATION, FILTER

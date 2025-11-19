@@ -604,7 +604,7 @@ def rule_my_new_rule(query: ParsedQuery) -> ParsedQuery:
 
 ```python
 ALL_RULES = [
-    ("seleksi_konjunktif", rule_seleksi_konjunktif),
+    ("seleksi_konjungtif", rule_seleksi_konjungtif),
     ("seleksi_komutatif", rule_seleksi_komutatif),
     ("my_new_rule", rule_my_new_rule),  # Add here
 ]

@@ -89,16 +89,17 @@ def check_query(node: QueryTree) -> None:
             if num_children != 1:
                 raise QueryValidationError(f"<{node.type}> butuh 1 anak (relation), dapat {num_children}")
         if node.type == "FILTER":
-            if num_children < 1:
-                raise QueryValidationError(f"<{node.type}> butuh minimum 1 anak, dapat {num_children}")
-            elif num_children == 2:
+            # FILTER bisa jadi condition leaf (0 children) atau operator node (>= 1 children)
+            # Validasi lebih detail ada di check_value
+            if num_children == 2:
                 # Anak pertama: continuation tree (bisa PROJECT, JOIN, FILTER, dll)
                 # Anak kedua: value (harus ARRAY atau RELATION untuk subquery)
                 second_child_type = node.childs[1].type
                 if second_child_type not in {"ARRAY", "RELATION", "PROJECT"}:
                     raise QueryValidationError(f"<{node.type}> dengan 2 anak, anak kedua harus ARRAY/RELATION/PROJECT untuk value, dapat <{second_child_type}>")
             elif num_children > 2:
-                raise QueryValidationError(f"<{node.type}> maksimal 2 anak (tree, value), dapat {num_children}")
+                # Multiple children valid untuk AND/OR/EXIST dengan source
+                pass
 
         # BEGIN_TRANSACTION dan COMMIT tidak ada batasan jumlah children
     
@@ -167,6 +168,13 @@ def check_value(node: QueryTree) -> None:
             elif len(filter_parts) >= 2:
                 if filter_type not in {"WHERE", "IN"}:
                     raise QueryValidationError(f"FILTER dengan kondisi harus diawali 'WHERE' atau 'IN', dapat '{filter_type}'")
+                
+                # WHERE/IN bisa jadi:
+                # 1. Condition leaf (0 children) - digunakan dalam AND/OR
+                # 2. Filter operator (1 child) - aplikasi filter ke source
+                # 3. Filter dengan value (2 children) - IN dengan array/subquery
+                if num_children > 2:
+                    raise QueryValidationError(f"FILTER '{filter_type}' maksimal 2 children, dapat {num_children}")
 
 
     # Validasi RELATION

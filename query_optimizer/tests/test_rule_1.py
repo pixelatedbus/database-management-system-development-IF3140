@@ -6,6 +6,7 @@ Testing transformasi FILTER(AND) menjadi cascaded filters
 import unittest
 from query_optimizer.query_tree import QueryTree
 from query_optimizer.optimization_engine import ParsedQuery
+from query_optimizer.query_check import check_query
 from ..seleksi_konjungtif import (
     seleksi_konjungtif,
     seleksi_konjungtif_rec,
@@ -19,8 +20,8 @@ from ..seleksi_konjungtif import (
 )
 
 
-class TestSeleksiKonjunktif(unittest.TestCase):
-    """Test cases untuk fungsi seleksi_konjunktif"""
+class TestSeleksiKonjungtif(unittest.TestCase):
+    """Test cases untuk fungsi seleksi_konjungtif"""
     
     def setUp(self):
         """Setup test fixtures"""
@@ -41,7 +42,14 @@ class TestSeleksiKonjunktif(unittest.TestCase):
         and_filter.add_child(condition2)
         
         query = ParsedQuery(and_filter, "SELECT * FROM users WHERE age > 18 AND status = 'active'")
+        
+        # Validasi query sebelum transformasi
+        check_query(and_filter)
+        
         result = seleksi_konjungtif(query)
+        
+        # Validasi query setelah transformasi
+        check_query(result.query_tree)
         
         # Cek struktur hasil
         self.assertEqual(result.query_tree.type, "FILTER")
@@ -73,7 +81,14 @@ class TestSeleksiKonjunktif(unittest.TestCase):
         and_filter.add_child(cond3)
         
         query = ParsedQuery(and_filter, "test query")
+        
+        # Validasi query sebelum transformasi
+        check_query(and_filter)
+        
         result = seleksi_konjungtif(query)
+        
+        # Validasi query setelah transformasi
+        check_query(result.query_tree)
         
         # Count depth of cascaded filters
         depth = 0
@@ -102,7 +117,14 @@ class TestSeleksiKonjunktif(unittest.TestCase):
         outer_and.add_child(QueryTree("FILTER", "WHERE w = 4"))
         
         query = ParsedQuery(outer_and, "test query")
+        
+        # Validasi query sebelum transformasi
+        check_query(outer_and)
+        
         result = seleksi_konjungtif(query)
+        
+        # Validasi query setelah transformasi
+        check_query(result.query_tree)
         
         # Outer AND should not be transformed because first child is FILTER
         self.assertEqual(result.query_tree.type, "FILTER")
@@ -169,7 +191,14 @@ class TestSeleksiKonjunktif(unittest.TestCase):
         # Apply dengan urutan custom: [2, 0, 1]
         # Order menentukan urutan aplikasi dari bottom ke top
         # Index 2 (city) diapply first (bottom), lalu 0 (age), lalu 1 (status) di top
+        
+        # Validasi query sebelum transformasi
+        check_query(and_filter)
+        
         result = cascade_filters(query, [2, 0, 1])
+        
+        # Validasi query setelah transformasi
+        check_query(result.query_tree)
         
         # Verify cascade structure exists
         filters = []
@@ -201,7 +230,14 @@ class TestSeleksiKonjunktif(unittest.TestCase):
         filter3.add_child(filter2)
         
         query = ParsedQuery(filter3, "test query")
+        
+        # Validasi query sebelum uncascade
+        check_query(filter3)
+        
         result = uncascade_filters(query)
+        
+        # Validasi query setelah uncascade
+        check_query(result.query_tree)
         
         # Due to bottom-up recursion, top filter remains but child becomes AND
         # Result structure: FILTER(city) -> FILTER(AND) -> [RELATION, FILTER(age), FILTER(status)]
@@ -253,7 +289,14 @@ class TestSeleksiKonjunktif(unittest.TestCase):
         project.add_child(and_filter)
         
         query = ParsedQuery(project, "test query")
+        
+        # Validasi query sebelum transformasi
+        check_query(project)
+        
         result = seleksi_konjungtif(query)
+        
+        # Validasi query setelah transformasi
+        check_query(result.query_tree)
         
         # PROJECT should still be at top
         self.assertEqual(result.query_tree.type, "PROJECT")
@@ -268,14 +311,28 @@ class TestSeleksiKonjunktif(unittest.TestCase):
     
     def test_empty_and_filter(self):
         """Test FILTER(AND) tanpa kondisi yang cukup"""
+        # Note: FILTER(AND) dengan hanya 2 children (1 source + 1 condition) adalah invalid
+        # karena AND memerlukan minimal 2 conditions untuk operasi logika
+        # Test ini memverifikasi bahwa transformasi tidak terjadi pada struktur yang tidak memenuhi syarat
+        
         relation = QueryTree("RELATION", "users")
         cond1 = QueryTree("FILTER", "WHERE age > 18")
+        cond2 = QueryTree("FILTER", "WHERE status = active")
         
         and_filter = QueryTree("FILTER", "AND")
         and_filter.add_child(relation)
         and_filter.add_child(cond1)
+        and_filter.add_child(cond2)
         
+        # Ubah menjadi hanya 2 children dengan memodifikasi after validation
         query = ParsedQuery(and_filter, "test query")
+        
+        # Validasi query dengan 3 children (valid)
+        check_query(and_filter)
+        
+        # Remove satu condition untuk test transformasi dengan < 3 children
+        and_filter.childs = [relation, cond1]
+        
         result = seleksi_konjungtif(query)
         
         # Should not transform (less than 3 children)
@@ -295,7 +352,14 @@ class TestSeleksiKonjunktif(unittest.TestCase):
         
         original_query = "SELECT * FROM users WHERE age > 18 AND status = 'active'"
         query = ParsedQuery(and_filter, original_query)
+        
+        # Validasi query sebelum transformasi
+        check_query(and_filter)
+        
         result = seleksi_konjungtif(query)
+        
+        # Validasi query setelah transformasi
+        check_query(result.query_tree)
         
         self.assertEqual(result.query, original_query)
 
@@ -314,7 +378,13 @@ class TestTransformAndFilter(unittest.TestCase):
         and_filter.add_child(cond1)
         and_filter.add_child(cond2)
         
+        # Validasi query sebelum transformasi
+        check_query(and_filter)
+        
         result = transform_and_filter(and_filter)
+        
+        # Validasi query setelah transformasi
+        check_query(result)
         
         # Result should be cascaded filters
         self.assertEqual(result.type, "FILTER")
@@ -328,9 +398,9 @@ class TestTransformAndFilter(unittest.TestCase):
         """Test transform dengan kondisi yang lebih kompleks"""
         relation = QueryTree("RELATION", "orders")
         
-        # Kondisi dengan subquery
+        # Kondisi dengan subquery - gunakan tabel yang ada
         cond1 = QueryTree("FILTER", "IN user_id")
-        subquery = QueryTree("RELATION", "active_users")
+        subquery = QueryTree("RELATION", "users")
         cond1.add_child(subquery)
         
         cond2 = QueryTree("FILTER", "WHERE amount > 1000")
@@ -340,7 +410,13 @@ class TestTransformAndFilter(unittest.TestCase):
         and_filter.add_child(cond1)
         and_filter.add_child(cond2)
         
+        # Validasi query sebelum transformasi
+        check_query(and_filter)
+        
         result = transform_and_filter(and_filter)
+        
+        # Validasi query setelah transformasi
+        check_query(result)
         
         self.assertEqual(result.type, "FILTER")
         self.assertEqual(len(result.childs), 1)
@@ -364,8 +440,14 @@ class TestCascadeAndUncascade(unittest.TestCase):
         
         query = ParsedQuery(and_filter, "test query")
         
+        # Validasi query sebelum cascade
+        check_query(and_filter)
+        
         # Cascade
         cascaded = cascade_filters(query)
+        
+        # Validasi query setelah cascade
+        check_query(cascaded.query_tree)
         
         # Verify it's cascaded (should be single-child filters chained)
         self.assertEqual(cascaded.query_tree.type, "FILTER")
@@ -374,6 +456,9 @@ class TestCascadeAndUncascade(unittest.TestCase):
         
         # Uncascade
         uncascaded = uncascade_filters(cascaded)
+        
+        # Validasi query setelah uncascade
+        check_query(uncascaded.query_tree)
         
         # Due to bottom-up recursion, uncascade creates nested structure
         # Top filter remains, child becomes AND
@@ -421,8 +506,14 @@ class TestCascadeAndUncascade(unittest.TestCase):
             [1, 0, 2],  # Mixed order
         ]
         
+        # Validasi query sebelum cascade
+        check_query(and_filter)
+        
         for order in orders:
             result = cascade_filters(query, order)
+            
+            # Validasi query setelah cascade
+            check_query(result.query_tree)
             
             # Count filters
             depth = 0

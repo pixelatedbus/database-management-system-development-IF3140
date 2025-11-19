@@ -45,7 +45,7 @@ def rule_seleksi_komutatif(query: ParsedQuery) -> ParsedQuery:
 
 
 ALL_RULES = [
-    ("seleksi_konjunktif", rule_seleksi_konjungtif),
+    ("seleksi_konjungtif", rule_seleksi_konjungtif),
     ("seleksi_komutatif", rule_seleksi_komutatif),
 ]
 
