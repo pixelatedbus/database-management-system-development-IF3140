@@ -31,6 +31,14 @@ def print_query_tree(query_tree, indent=0):
     for child in query_tree.childs:
         print_query_tree(child, indent + 1)
 
+def print_help():
+    """Print help message for demo usage"""
+    print_separator("QUERY OPTIMIZER DEMO HELP")
+    print("Usage:")
+    print("  python -m query_optimizer.demo 1  # Run demo parse")
+    print("  python -m query_optimizer.demo 2  # Run demo optimized")
+    print_separator()
+
 
 def demo_parse():
     """Demo 1: Basic optimization tanpa GA"""
@@ -178,14 +186,13 @@ def main():
         try:
             demo_num = int(sys.argv[1])
         except ValueError:
-            print("\n❌ Error: Argument must be a number (1 or 2)")
+            print("\n Error: Argument must be a number")
             print("\nUsage:")
-            print("  python -m query_optimizer.main 1  # Run demo parse")
-            print("  python -m query_optimizer.main 2  # Run demo optimized")
-            print("  python -m query_optimizer.main    # Run all demos")
+            print("  python -m query_optimizer.demo 1  # Run demo parse")
+            print("  python -m query_optimizer.demo 2  # Run demo optimized")
             return
     else:
-        demo_num = 0  # Run all demos
+        demo_num = 0
     
     try:
         if demo_num == 1:
@@ -194,26 +201,13 @@ def main():
         elif demo_num == 2:
             demo_optimized()
             print_separator("DEMO COMPLETED")
-        elif demo_num == 0:
-            demo_parse()
-            print("\n\n⏳ Press Enter to continue...")
-            input()
-            demo_optimized()
-            print_separator("ALL DEMOS COMPLETED")
         else:
-            print(f"\n❌ Error: Invalid demo number '{demo_num}'")
-            print("\nAvailable demos:")
-            print("  1 - Basic Query Parsing")
-            print("  2 - Genetic Algorithm Optimization")
-            print("\nUsage:")
-            print("  python -m query_optimizer.main 1  # Run demo parse")
-            print("  python -m query_optimizer.main 2  # Run demo optimized")
-            print("  python -m query_optimizer.main    # Run all demos")
+            print_help()
         
     except KeyboardInterrupt:
-        print("\n\n⚠️  Demo interrupted by user.")
+        print("\n\n  Demo interrupted by user.")
     except Exception as e:
-        print(f"\n\n❌ Error occurred: {e}")
+        print(f"\n\n Error occurred: {e}")
         import traceback
         traceback.print_exc()
 
