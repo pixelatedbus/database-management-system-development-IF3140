@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Optional
 from query_optimizer.tokenizer import Tokenizer
 from query_optimizer.query_tree import QueryTree
-from query_optimizer.token import Token, TokenType
+from query_optimizer.query_token import Token, TokenType
 
 
 class ParserError(Exception):
