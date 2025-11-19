@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import struct
 from typing import Any, Dict, List, Optional, Union, Tuple
+from hash_index import HashIndex
 
 from .models import (
     Condition,
@@ -702,9 +703,33 @@ class StorageManager:
         return deleted_count
 
     def set_index(self, table: str, column: str, index_type: str) -> None:
-        # bikin index buat kolom di tabel
-        # bisa btree atau hash
-        raise NotImplementedError("set_index belum diimplementasi")
+        if table not in self.tables:
+            raise ValueError(f"Tabel '{table}' tidak ditemukan")
+        
+        if column not in [c["name"] for c in self.tables[table]["columns"]]:
+            raise ValueError(f"Kolom '{column}' tidak ditemukan di tabel '{table}'")
+        
+        if index_type not in ["btree", "hash"]:
+            raise ValueError(f"Type {index_type} tidak ada")
+        
+        if index_type == "btree":
+            raise NotImplemented("B+ Tree Index belum di implementasi")
+        elif index_type == "hash":
+            index = HashIndex()
+            table_file = self._get_table_file_path(table)
+            if os.path.exists(table_file):
+                record_id = 0
+                for row in read_binary_table_streaming(table_file):
+                    if column in row:
+                        key = row[column]
+                        key_str = str(key) if key is not None else "NULL"
+                        index.insert(key_str, record_id)
+                    record_id += 1
+
+                print(f"Index dibuat dengan {record_id} entries")
+            else:
+                print("Tabel Kosong")
+
 
     def get_stats(self) -> Dict[str, Statistic]:
         # ambil statistik buat semua tabel
