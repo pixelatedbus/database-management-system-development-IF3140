@@ -226,11 +226,12 @@ class TestQueryValidator(unittest.TestCase):
     
     def test_invalid_filter_no_children(self):
         # Structure: FILTER (no children)
-        # Invalid because FILTER must have at least 1 child
+        # VALID: FILTER dengan WHERE/IN bisa jadi condition leaf (0 children)
+        # Ini digunakan sebagai child dari AND/OR
         filter_node = QueryTree("FILTER", "WHERE id = 1")
         
-        with self.assertRaises(QueryValidationError):
-            check_query(filter_node)
+        # Should NOT raise error - condition leaf is valid
+        check_query(filter_node)
     
     def test_invalid_filter_wrong_second_child(self):
         # Structure: FILTER -> RELATION, FILTER
@@ -435,6 +436,305 @@ class TestQueryValidator(unittest.TestCase):
         join.add_child(relation2)
         
         check_query(project)
+    
+    # ====================================================================
+    # OPERATOR TESTS (Logical operators: AND/OR/NOT)
+    # ====================================================================
+    
+    def test_valid_operator_and_nested(self):
+        # Structure: OPERATOR(AND) -> FILTER, FILTER
+        # Represents: (age > 18) AND (status = 'active')
+        # Nested AND without explicit source
+        operator_and = QueryTree("OPERATOR", "AND")
+        filter1 = QueryTree("FILTER", "WHERE age > 18")
+        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
+        
+        operator_and.add_child(filter1)
+        operator_and.add_child(filter2)
+        
+        check_query(operator_and)
+    
+    def test_valid_operator_or_nested(self):
+        # Structure: OPERATOR(OR) -> FILTER, FILTER, FILTER
+        # Represents: (city = 'Jakarta') OR (city = 'Bandung') OR (city = 'Surabaya')
+        operator_or = QueryTree("OPERATOR", "OR")
+        filter1 = QueryTree("FILTER", "WHERE city = 'Jakarta'")
+        filter2 = QueryTree("FILTER", "WHERE city = 'Bandung'")
+        filter3 = QueryTree("FILTER", "WHERE city = 'Surabaya'")
+        
+        operator_or.add_child(filter1)
+        operator_or.add_child(filter2)
+        operator_or.add_child(filter3)
+        
+        check_query(operator_or)
+    
+    def test_valid_operator_not(self):
+        # Structure: OPERATOR(NOT) -> FILTER
+        # Represents: NOT (age < 18)
+        operator_not = QueryTree("OPERATOR", "NOT")
+        filter1 = QueryTree("FILTER", "WHERE age < 18")
+        
+        operator_not.add_child(filter1)
+        
+        check_query(operator_not)
+    
+    def test_valid_operator_not_with_operator_s(self):
+        # Structure: OPERATOR(NOT) -> OPERATOR_S(AND)
+        # Represents: NOT ((age > 18) AND (status = 'active'))
+        operator_not = QueryTree("OPERATOR", "NOT")
+        operator_and = QueryTree("OPERATOR_S", "AND")
+        relation = QueryTree("RELATION", "users")
+        filter1 = QueryTree("FILTER", "WHERE age > 18")
+        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
+        
+        operator_and.add_child(relation)
+        operator_and.add_child(filter1)
+        operator_and.add_child(filter2)
+        operator_not.add_child(operator_and)
+        
+        check_query(operator_not)
+    
+    def test_invalid_operator_no_value(self):
+        # Structure: OPERATOR -> FILTER, FILTER
+        # Invalid because OPERATOR must have value (AND/OR/NOT)
+        operator = QueryTree("OPERATOR", "")
+        filter1 = QueryTree("FILTER", "WHERE age > 18")
+        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
+        
+        operator.add_child(filter1)
+        operator.add_child(filter2)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(operator)
+    
+    def test_invalid_operator_wrong_value(self):
+        # Structure: OPERATOR(INVALID) -> FILTER, FILTER
+        # Invalid because OPERATOR value must be AND/OR/NOT
+        operator = QueryTree("OPERATOR", "INVALID")
+        filter1 = QueryTree("FILTER", "WHERE age > 18")
+        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
+        
+        operator.add_child(filter1)
+        operator.add_child(filter2)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(operator)
+    
+    def test_invalid_operator_and_one_child(self):
+        # Structure: OPERATOR(AND) -> FILTER
+        # Invalid because AND/OR need minimum 2 children
+        operator_and = QueryTree("OPERATOR", "AND")
+        filter1 = QueryTree("FILTER", "WHERE age > 18")
+        
+        operator_and.add_child(filter1)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(operator_and)
+    
+    def test_invalid_operator_not_multiple_children(self):
+        # Structure: OPERATOR(NOT) -> FILTER, FILTER
+        # Invalid because NOT must have exactly 1 child
+        operator_not = QueryTree("OPERATOR", "NOT")
+        filter1 = QueryTree("FILTER", "WHERE age > 18")
+        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
+        
+        operator_not.add_child(filter1)
+        operator_not.add_child(filter2)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(operator_not)
+    
+    def test_invalid_operator_non_filter_child(self):
+        # Structure: OPERATOR(AND) -> RELATION, FILTER
+        # Invalid because OPERATOR children must be FILTER/OPERATOR/OPERATOR_S
+        operator_and = QueryTree("OPERATOR", "AND")
+        relation = QueryTree("RELATION", "users")
+        filter1 = QueryTree("FILTER", "WHERE age > 18")
+        
+        operator_and.add_child(relation)
+        operator_and.add_child(filter1)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(operator_and)
+    
+    # ====================================================================
+    # OPERATOR_S TESTS (Logical operators with source)
+    # ====================================================================
+    
+    def test_valid_operator_s_and_with_relation(self):
+        # Structure: OPERATOR_S(AND) -> RELATION, FILTER, FILTER
+        # Represents: SELECT * FROM users WHERE (age > 18) AND (status = 'active')
+        operator_and = QueryTree("OPERATOR_S", "AND")
+        relation = QueryTree("RELATION", "users")
+        filter1 = QueryTree("FILTER", "WHERE age > 18")
+        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
+        
+        operator_and.add_child(relation)
+        operator_and.add_child(filter1)
+        operator_and.add_child(filter2)
+        
+        check_query(operator_and)
+    
+    def test_valid_operator_s_or_with_join(self):
+        # Structure: OPERATOR_S(OR) -> JOIN, FILTER, FILTER
+        # Represents: SELECT * FROM users JOIN profiles WHERE (age > 18) OR (status = 'active')
+        operator_or = QueryTree("OPERATOR_S", "OR")
+        join = QueryTree("JOIN", "NATURAL")
+        relation1 = QueryTree("RELATION", "users")
+        relation2 = QueryTree("RELATION", "profiles")
+        filter1 = QueryTree("FILTER", "WHERE age > 18")
+        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
+        
+        join.add_child(relation1)
+        join.add_child(relation2)
+        operator_or.add_child(join)
+        operator_or.add_child(filter1)
+        operator_or.add_child(filter2)
+        
+        check_query(operator_or)
+    
+    def test_valid_operator_s_with_sort_source(self):
+        # Structure: OPERATOR_S(AND) -> SORT, FILTER, FILTER
+        # Represents: SELECT * FROM users ORDER BY name WHERE (age > 18) AND (status = 'active')
+        operator_and = QueryTree("OPERATOR_S", "AND")
+        sort = QueryTree("SORT", "name")
+        relation = QueryTree("RELATION", "users")
+        filter1 = QueryTree("FILTER", "WHERE age > 18")
+        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
+        
+        sort.add_child(relation)
+        operator_and.add_child(sort)
+        operator_and.add_child(filter1)
+        operator_and.add_child(filter2)
+        
+        check_query(operator_and)
+    
+    def test_valid_operator_s_with_operator_s_source(self):
+        # Structure: OPERATOR_S(OR) -> OPERATOR_S(AND), FILTER, FILTER
+        # Nested OPERATOR_S as source (OPERATOR_S produces data)
+        outer_or = QueryTree("OPERATOR_S", "OR")
+        inner_and = QueryTree("OPERATOR_S", "AND")
+        relation = QueryTree("RELATION", "users")
+        filter1 = QueryTree("FILTER", "WHERE age > 18")
+        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
+        filter3 = QueryTree("FILTER", "WHERE city = 'Jakarta'")
+        filter4 = QueryTree("FILTER", "WHERE verified = true")
+        
+        inner_and.add_child(relation)
+        inner_and.add_child(filter1)
+        inner_and.add_child(filter2)
+        
+        outer_or.add_child(inner_and)
+        outer_or.add_child(filter3)
+        outer_or.add_child(filter4)
+        
+        check_query(outer_or)
+    
+    def test_valid_operator_s_with_filter_source(self):
+        # Structure: OPERATOR_S(AND) -> FILTER(with child), FILTER, FILTER
+        # FILTER with child (produces data) as source
+        operator_and = QueryTree("OPERATOR_S", "AND")
+        filter_source = QueryTree("FILTER", "WHERE verified = true")
+        relation = QueryTree("RELATION", "users")
+        filter1 = QueryTree("FILTER", "WHERE age > 18")
+        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
+        
+        filter_source.add_child(relation)
+        operator_and.add_child(filter_source)
+        operator_and.add_child(filter1)
+        operator_and.add_child(filter2)
+        
+        check_query(operator_and)
+    
+    def test_invalid_operator_s_no_value(self):
+        # Structure: OPERATOR_S -> RELATION, FILTER, FILTER
+        # Invalid because OPERATOR_S must have value (AND/OR)
+        operator_s = QueryTree("OPERATOR_S", "")
+        relation = QueryTree("RELATION", "users")
+        filter1 = QueryTree("FILTER", "WHERE age > 18")
+        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
+        
+        operator_s.add_child(relation)
+        operator_s.add_child(filter1)
+        operator_s.add_child(filter2)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(operator_s)
+    
+    def test_invalid_operator_s_not_value(self):
+        # Structure: OPERATOR_S(NOT) -> RELATION, FILTER
+        # Invalid because NOT cannot have explicit source (use OPERATOR instead)
+        operator_s = QueryTree("OPERATOR_S", "NOT")
+        relation = QueryTree("RELATION", "users")
+        filter1 = QueryTree("FILTER", "WHERE age > 18")
+        
+        operator_s.add_child(relation)
+        operator_s.add_child(filter1)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(operator_s)
+    
+    def test_invalid_operator_s_less_than_three_children(self):
+        # Structure: OPERATOR_S(AND) -> RELATION, FILTER
+        # Invalid because OPERATOR_S needs minimum 3 children (1 source + 2 conditions)
+        operator_and = QueryTree("OPERATOR_S", "AND")
+        relation = QueryTree("RELATION", "users")
+        filter1 = QueryTree("FILTER", "WHERE age > 18")
+        
+        operator_and.add_child(relation)
+        operator_and.add_child(filter1)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(operator_and)
+    
+    def test_invalid_operator_s_operator_as_source(self):
+        # Structure: OPERATOR_S(AND) -> OPERATOR(AND), FILTER, FILTER
+        # Invalid because first child cannot be OPERATOR (nested logic, doesn't produce data)
+        operator_s = QueryTree("OPERATOR_S", "AND")
+        operator_nested = QueryTree("OPERATOR", "AND")
+        filter1 = QueryTree("FILTER", "WHERE age > 18")
+        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
+        filter3 = QueryTree("FILTER", "WHERE city = 'Jakarta'")
+        
+        operator_nested.add_child(filter1)
+        operator_nested.add_child(filter2)
+        
+        operator_s.add_child(operator_nested)
+        operator_s.add_child(filter3)
+        operator_s.add_child(QueryTree("FILTER", "WHERE verified = true"))
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(operator_s)
+    
+    def test_invalid_operator_s_filter_leaf_as_source(self):
+        # Structure: OPERATOR_S(AND) -> FILTER(no children), FILTER, FILTER
+        # Invalid because first child FILTER must have children (produce data)
+        operator_and = QueryTree("OPERATOR_S", "AND")
+        filter_leaf = QueryTree("FILTER", "WHERE verified = true")  # No children = condition leaf
+        filter1 = QueryTree("FILTER", "WHERE age > 18")
+        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
+        
+        operator_and.add_child(filter_leaf)
+        operator_and.add_child(filter1)
+        operator_and.add_child(filter2)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(operator_and)
+    
+    def test_invalid_operator_s_non_filter_condition(self):
+        # Structure: OPERATOR_S(AND) -> RELATION, RELATION, FILTER
+        # Invalid because conditions (child 1+) must be FILTER/OPERATOR/OPERATOR_S
+        operator_and = QueryTree("OPERATOR_S", "AND")
+        relation1 = QueryTree("RELATION", "users")
+        relation2 = QueryTree("RELATION", "profiles")
+        filter1 = QueryTree("FILTER", "WHERE age > 18")
+        
+        operator_and.add_child(relation1)
+        operator_and.add_child(relation2)
+        operator_and.add_child(filter1)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(operator_and)
 
 
 if __name__ == '__main__':

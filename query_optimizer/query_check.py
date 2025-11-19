@@ -43,13 +43,20 @@ LEAF_NODES = {
     "LIMIT",      # LIMIT value
 }
 
+LOGICAL_OPERATORS = {
+    "OPERATOR",    # Logical operator nested (AND/OR/NOT tanpa explicit source)
+    "OPERATOR_S",  # Logical operator dengan explicit source tree
+}
+
 SPECIAL_OPERATORS = {
     "UPDATE",     # DML operation
     "INSERT",     # DML operation
     "DELETE",     # DML operation
     "BEGIN_TRANSACTION",  # Transaction start
     "COMMIT",             # Transaction commit
-    "FILTER"        # σ - selection (WHERE value IN RELATION, WHERE condition, WHERE EXIST RELATION)
+    "FILTER",       # σ - selection (WHERE condition, IN value, EXIST)
+    "OPERATOR",     # Logical operators nested (AND/OR/NOT)
+    "OPERATOR_S",   # Logical operators dengan source (AND_S/OR_S)
 }
 
 VALID_JOIN_TYPES = {"NATURAL", "ON"}
@@ -88,17 +95,52 @@ def check_query(node: QueryTree) -> None:
         if node.type in {"UPDATE", "DELETE", "INSERT"}:
             if num_children != 1:
                 raise QueryValidationError(f"<{node.type}> butuh 1 anak (relation), dapat {num_children}")
+        
         if node.type == "FILTER":
+            # FILTER bisa jadi condition leaf (0 children) atau operator node (>= 1 children)
+            pass
+        
+        if node.type == "OPERATOR":
+            # OPERATOR: Logical operators nested (AND/OR/NOT) tanpa explicit source
+            # - AND/OR: minimum 2 children (semua harus FILTER atau OPERATOR)
+            # - NOT: exactly 1 child (harus FILTER atau OPERATOR)
             if num_children < 1:
-                raise QueryValidationError(f"<{node.type}> butuh minimum 1 anak, dapat {num_children}")
-            elif num_children == 2:
-                # Anak pertama: continuation tree (bisa PROJECT, JOIN, FILTER, dll)
-                # Anak kedua: value (harus ARRAY atau RELATION untuk subquery)
-                second_child_type = node.childs[1].type
-                if second_child_type not in {"ARRAY", "RELATION", "PROJECT"}:
-                    raise QueryValidationError(f"<{node.type}> dengan 2 anak, anak kedua harus ARRAY/RELATION/PROJECT untuk value, dapat <{second_child_type}>")
-            elif num_children > 2:
-                raise QueryValidationError(f"<{node.type}> maksimal 2 anak (tree, value), dapat {num_children}")
+                raise QueryValidationError(f"<OPERATOR> minimal 1 child, dapat {num_children}")
+        
+        if node.type == "OPERATOR_S":
+            # OPERATOR_S: Logical operators dengan explicit source tree
+            # - Child 0: source tree yang menghasilkan data
+            #   * RELATION, JOIN, SORT, PROJECT, dll (operators yang produce data)
+            #   * OPERATOR_S (logical operator dengan source, pasti produce data)
+            #   * FILTER dengan >= 1 children (filter dengan source, produce data)
+            #   * TIDAK boleh: OPERATOR (nested logic, tidak produce data)
+            #   * TIDAK boleh: FILTER leaf/0 children (condition saja, tidak produce data)
+            # - Child 1 dan seterusnya: conditions (FILTER atau OPERATOR)
+            # - Minimum 3 children (1 source + 2 conditions)
+            if num_children < 3:
+                raise QueryValidationError(f"<OPERATOR_S> minimal 3 children (1 source + 2 conditions), dapat {num_children}")
+            
+            # Validate first child
+            first_child = node.childs[0]
+            first_child_type = first_child.type
+            
+            if first_child_type == "OPERATOR":
+                raise QueryValidationError(
+                    f"<OPERATOR_S> child pertama tidak boleh OPERATOR (nested logic tanpa source). Gunakan OPERATOR_S sebagai source."
+                )
+            
+            if first_child_type == "FILTER" and len(first_child.childs) == 0:
+                raise QueryValidationError(
+                    f"<OPERATOR_S> child pertama FILTER harus punya children (filter dengan source) untuk produce data. FILTER leaf (0 children) tidak produce data."
+                )
+            
+            # Validate remaining children
+            for i in range(1, num_children):
+                child_type = node.childs[i].type
+                if child_type not in {"FILTER", "OPERATOR", "OPERATOR_S"}:
+                    raise QueryValidationError(
+                        f"<OPERATOR_S> child {i} harus FILTER/OPERATOR/OPERATOR_S, dapat {child_type}"
+                    )
 
         # BEGIN_TRANSACTION dan COMMIT tidak ada batasan jumlah children
     
@@ -121,20 +163,80 @@ def check_value(node: QueryTree) -> None:
                 if join_type != "ON":
                     raise QueryValidationError(f"JOIN dengan kondisi harus diawali 'ON', dapat '{join_type}'")
     
-    # Validasi FILTER
+    # Validasi FILTER (WHERE/IN/EXIST conditions only)
     if node.type == "FILTER":
+        num_children = len(node.childs)
         if node.val:
             filter_parts = node.val.split(maxsplit=1)
             filter_type = filter_parts[0]
             
             if len(filter_parts) == 1:
-                # Single word: EXIST (untuk subquery check)
-                if filter_type not in {"EXIST"}:
-                    raise QueryValidationError(f"FILTER dengan 1 kata harus 'EXIST', dapat '{filter_type}'")
+                # Single word: EXIST only (AND/OR/NOT dipindah ke OPERATOR)
+                if filter_type != "EXIST":
+                    raise QueryValidationError(f"FILTER dengan 1 kata harus 'EXIST', dapat '{filter_type}'. Gunakan OPERATOR untuk AND/OR/NOT.")
+            
             elif len(filter_parts) >= 2:
-                # Multiple words: WHERE condition atau IN column
                 if filter_type not in {"WHERE", "IN"}:
                     raise QueryValidationError(f"FILTER dengan kondisi harus diawali 'WHERE' atau 'IN', dapat '{filter_type}'")
+                
+                # WHERE/IN bisa jadi:
+                # 1. Condition leaf (0 children) - digunakan dalam OPERATOR
+                # 2. Filter operator (1 child) - aplikasi filter ke source
+                # 3. Filter dengan value (2 children) - IN dengan array/subquery
+                if num_children == 2:
+                    # Validasi pattern IN/WHERE dengan value
+                    second_child_type = node.childs[1].type
+                    if second_child_type not in {"ARRAY", "RELATION", "PROJECT"}:
+                        raise QueryValidationError(
+                            f"FILTER '{filter_type}' dengan 2 children, child kedua harus ARRAY/RELATION/PROJECT untuk value, dapat {second_child_type}"
+                        )
+                elif num_children > 2:
+                    raise QueryValidationError(f"FILTER '{filter_type}' maksimal 2 children, dapat {num_children}")
+    
+    # Validasi OPERATOR
+    if node.type == "OPERATOR":
+        num_children = len(node.childs)
+        if not node.val:
+            raise QueryValidationError("<OPERATOR> harus punya value (AND/OR/NOT)")
+        
+        operator_type = node.val.strip()
+        
+        if operator_type not in {"AND", "OR", "NOT"}:
+            raise QueryValidationError(f"<OPERATOR> value harus 'AND', 'OR', atau 'NOT', dapat '{operator_type}'")
+        
+        if operator_type == "NOT":
+            # NOT: exactly 1 child (FILTER atau OPERATOR)
+            if num_children != 1:
+                raise QueryValidationError(f"<OPERATOR> 'NOT' harus punya 1 child, dapat {num_children}")
+            
+            child_type = node.childs[0].type
+            if child_type not in {"FILTER", "OPERATOR", "OPERATOR_S"}:
+                raise QueryValidationError(
+                    f"<OPERATOR> 'NOT' child harus FILTER/OPERATOR/OPERATOR_S, dapat {child_type}"
+                )
+        
+        elif operator_type in {"AND", "OR"}:
+            # AND/OR: minimum 2 children (semua harus FILTER atau OPERATOR)
+            if num_children < 2:
+                raise QueryValidationError(f"<OPERATOR> '{operator_type}' minimal 2 children, dapat {num_children}")
+            
+            for i in range(num_children):
+                child_type = node.childs[i].type
+                if child_type not in {"FILTER", "OPERATOR", "OPERATOR_S"}:
+                    raise QueryValidationError(
+                        f"<OPERATOR> '{operator_type}' child {i} harus FILTER/OPERATOR/OPERATOR_S, dapat {child_type}"
+                    )
+    
+    # Validasi OPERATOR_S (Logical operators dengan source)
+    if node.type == "OPERATOR_S":
+        num_children = len(node.childs)
+        if not node.val:
+            raise QueryValidationError("<OPERATOR_S> harus punya value (AND/OR)")
+        
+        operator_type = node.val.strip()
+        
+        if operator_type not in {"AND", "OR"}:
+            raise QueryValidationError(f"<OPERATOR_S> value harus 'AND' atau 'OR', dapat '{operator_type}' (NOT tidak bisa punya explicit source)")
 
 
     # Validasi RELATION

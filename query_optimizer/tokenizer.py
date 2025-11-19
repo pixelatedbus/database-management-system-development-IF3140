@@ -1,5 +1,5 @@
 import re
-from .token import Token, TokenType
+from .query_token import Token, TokenType
 
 class Tokenizer:
 

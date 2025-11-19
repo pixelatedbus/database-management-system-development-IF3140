@@ -1,6 +1,6 @@
 import pytest
 from query_optimizer.tokenizer import Tokenizer
-from query_optimizer.token import TokenType
+from query_optimizer.query_token import TokenType
 
 """
 Cara ngetestnya mesti download pytest dulu
