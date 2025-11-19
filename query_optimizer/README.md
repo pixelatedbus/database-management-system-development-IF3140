@@ -566,12 +566,22 @@ def check_query(query_tree: QueryTree) -> bool:
 - **SORT**: Must have exactly 1 child
 - **JOIN**: Must have exactly 2 children (both RELATION or tree)
 - **FILTER**:
-  - 1 child: Any operator
-  - 2 children: All must be FILTER
-  - 3 children: First = source tree, After that must be FILTER
+  - **0 children**: Valid sebagai condition leaf (e.g., `WHERE age > 25` digunakan dalam AND/OR)
+  - **1 child**: Filter operator dengan source tree (e.g., `WHERE ...` → RELATION)
+  - **2 children**: 
+    - First child: source tree (RELATION, JOIN, atau operator lain)
+    - Second child: value (ARRAY untuk IN, RELATION/PROJECT untuk subquery)
+  - **3+ children**: Logical operators (AND/OR/NOT):
+    - First child: source tree (RELATION, JOIN, dll)
+    - Remaining children: Must be FILTER nodes (conditions)
   - Value must match pattern: "WHERE ...", "IN ...", "EXIST", "AND", "OR", "NOT"
 - **RELATION, ARRAY, LIMIT**: Must have 0 children
 - **UPDATE, INSERT, DELETE**: Must have exactly 1 child (RELATION or FILTER → RELATION)
+
+**Important Notes:**
+- FILTER dengan `WHERE`/`IN` dapat memiliki 0 children sebagai condition leaf, digunakan sebagai child dari AND/OR
+- Equivalency rules (seperti seleksi konjungtif) menghasilkan query tree yang tetap valid setelah transformasi
+- Validasi dilakukan secara rekursif pada seluruh tree structure
 
 ### 3.6 Cost Estimation
 
