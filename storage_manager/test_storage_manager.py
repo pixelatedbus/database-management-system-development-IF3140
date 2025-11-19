@@ -22,7 +22,7 @@ import sys
 from typing import List, Dict, Any
 
 from .storage_manager import StorageManager
-from .models import Condition, DataRetrieval, DataWrite, DataDeletion, ColumnDefinition
+from .models import Condition, DataRetrieval, DataWrite, DataDeletion, ColumnDefinition, ForeignKey
 
 
 class TestStorageManager:
@@ -621,6 +621,51 @@ class TestStorageManager:
         except Exception as e:
             self.assert_true(False, f"Test large dataset gagal: {e}")
 
+
+    # ========== Test: drop_table ==========
+
+    def test_drop_table(self):
+        """Test drop_table functionality."""
+        self.print_header("DROP TABLE")
+
+        # Setup: Create table untuk testing drop
+        TABLE_NAME = "temp_table"
+
+        if TABLE_NAME not in self.sm.tables:
+            self.sm.create_table(TABLE_NAME, ["col1", "col2", "col3"])
+
+        # Test 1: Drop table berhasil
+        print("\n[1] Drop existing table 'temp_table'")
+        try:
+            self.sm.drop_table(TABLE_NAME)
+            self.assert_true(TABLE_NAME not in self.sm.tables, "Table 'temp_table' should be dropped")
+        except Exception as e:
+            self.assert_true(False, f"Drop table should succeed: {e}")
+
+        # Test 2: Drop table gagal karena tabel tidak ada
+        print("\n[2] Drop non-existing table should fail")
+        try:
+            self.sm.drop_table("non_existing_table")
+            self.assert_true(False, "Should raise ValueError for non-existing table")
+        except ValueError:
+            self.assert_true(True, "Should raise ValueError for non-existing table")
+
+        # Test 3: Drop table gagal karena ada referensi di tabel lain 
+        fk_id_pegawai = ForeignKey("id_pegawai", "employee", "id")
+        if "employee_phone_number" not in self.sm.tables:
+            self.sm.create_table("employee_phone_number", [
+                ColumnDefinition("id_pegawai", "INTEGER", is_primary_key=True),
+                ColumnDefinition("phone_number", "VARCHAR", size=15)
+            ], ["id_pegawai"], [fk_id_pegawai])
+
+        print("\n[3] Drop table referenced by another table should fail")
+        try:
+            self.sm.drop_table("employee")
+            self.assert_true(False, "Should raise ValueError for table with references")
+        except ValueError:
+            self.assert_true(True, "Should raise ValueError for table with references")
+
+
     # ========== Test Runner ==========
 
     def run_all_tests(self):
@@ -633,6 +678,7 @@ class TestStorageManager:
         self.test_delete_block()
         self.test_set_index()
         self.test_get_stats()
+        self.test_drop_table()
 
         self.teardown()
         self.print_summary()

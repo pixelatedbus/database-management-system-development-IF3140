@@ -352,6 +352,27 @@ class StorageManager:
 
         print(f"✓ tabel '{table_name}' berhasil dibuat dengan {len(column_defs)} kolom")
 
+    def drop_table(self, table_name: str) -> None:
+        if table_name not in self.tables:
+            raise ValueError(f"Tabel '{table_name}' tidak ditemukan")
+
+        # implementasi restrict drop: ga boleh hapus kalo ada tabel lain yang referensi ke tabel ini
+        for tbl, meta in self.tables.items():
+            for fk in meta.get("foreign_keys", []):
+                if fk["references_table"] == table_name:
+                    raise ValueError(f"Tabel '{table_name}' tidak bisa dihapus karena direferensi oleh tabel '{tbl}'")
+
+        # hapus metadata tabel
+        del self.tables[table_name]
+        self._save_table_schemas()
+
+        # hapus file binary tabel
+        table_file = self._get_table_file_path(table_name)
+        if os.path.exists(table_file):
+            os.remove(table_file)
+
+        print(f"tabel '{table_name}' berhasil dihapus")
+
     def _column_def_to_dict(self, col: ColumnDefinition) -> Dict[str, Any]:
         # convert columndefinition ke dictionary buat disimpen
         return {
