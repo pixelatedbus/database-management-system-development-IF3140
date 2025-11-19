@@ -123,16 +123,48 @@ def check_value(node: QueryTree) -> None:
     
     # Validasi FILTER
     if node.type == "FILTER":
+        num_children = len(node.childs)
         if node.val:
             filter_parts = node.val.split(maxsplit=1)
             filter_type = filter_parts[0]
             
             if len(filter_parts) == 1:
-                # Single word: EXIST (untuk subquery check)
-                if filter_type not in {"EXIST"}:
-                    raise QueryValidationError(f"FILTER dengan 1 kata harus 'EXIST', dapat '{filter_type}'")
+                # Single word: EXIST, AND, OR, or NOT
+                if filter_type not in {"EXIST", "AND", "OR", "NOT"}:
+                    raise QueryValidationError(f"FILTER dengan 1 kata harus 'EXIST', 'AND', 'OR', atau 'NOT', dapat '{filter_type}'")
+                
+                if filter_type in {"AND", "OR"}:
+                    if num_children < 2:
+                        raise QueryValidationError(f"FILTER '{filter_type}' butuh minimum 2 children")
+                    
+                    if node.childs[0].type != "FILTER":
+                        if num_children < 3:
+                            raise QueryValidationError(
+                                f"FILTER '{filter_type}' dengan source butuh >= 3 children (1 source + 2+ conditions)"
+                            )
+                        for i in range(1, num_children):
+                            if node.childs[i].type != "FILTER":
+                                raise QueryValidationError(
+                                    f"FILTER '{filter_type}' child {i} harus FILTER, dapat {node.childs[i].type}"
+                                )
+                    else:
+                        for i in range(num_children):
+                            if node.childs[i].type != "FILTER":
+                                raise QueryValidationError(
+                                    f"FILTER '{filter_type}' nested child {i} harus FILTER, dapat {node.childs[i].type}"
+                                )
+                
+                elif filter_type == "NOT":
+                    if num_children != 1:
+                        raise QueryValidationError(
+                            f"FILTER 'NOT' harus punya tepat 1 child, dapat {num_children}"
+                        )
+                    if node.childs[0].type != "FILTER":
+                        raise QueryValidationError(
+                            f"FILTER 'NOT' child harus FILTER, dapat {node.childs[0].type}"
+                        )
+            
             elif len(filter_parts) >= 2:
-                # Multiple words: WHERE condition atau IN column
                 if filter_type not in {"WHERE", "IN"}:
                     raise QueryValidationError(f"FILTER dengan kondisi harus diawali 'WHERE' atau 'IN', dapat '{filter_type}'")
 
