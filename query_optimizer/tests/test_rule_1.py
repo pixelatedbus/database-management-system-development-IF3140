@@ -6,7 +6,7 @@ Testing transformasi FILTER(AND) menjadi cascaded filters
 import unittest
 from query_optimizer.query_tree import QueryTree
 from query_optimizer.optimization_engine import ParsedQuery
-from query_optimizer.seleksi_konjungtif import (
+from ..seleksi_konjungtif import (
     seleksi_konjungtif,
     seleksi_konjungtif_rec,
     transform_and_filter,
