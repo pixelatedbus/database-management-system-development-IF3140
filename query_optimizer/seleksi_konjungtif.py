@@ -189,4 +189,4 @@ def clone_tree(node: QueryTree) -> QueryTree:
     """Deep clone query tree."""
     if node is None:
         return None
-    return node.clone()
+    return node.clone(deep=True)

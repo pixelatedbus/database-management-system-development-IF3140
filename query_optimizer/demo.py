@@ -3,7 +3,6 @@ Demo Program untuk Query Optimizer
 """
 
 from query_optimizer.optimization_engine import OptimizationEngine
-from query_optimizer.genetic_optimizer import GeneticOptimizer
 import sys
 
 
@@ -109,24 +108,25 @@ def demo_optimized():
     original_cost = engine.get_cost(query)
     print(f"\n Original Cost: {original_cost}")
     
-    # Setup Genetic Algorithm
+    # Setup Genetic Algorithm via OptimizationEngine
     print("\n Running Genetic Algorithm...")
     print("Parameters:")
     print("  - Population Size: 30")
     print("  - Generations: 50")
     print("  - Mutation Rate: 0.15")
     print("  - Crossover Rate: 0.8")
+    print("  - Elitism: 3")
     
-    ga = GeneticOptimizer(
+    # Use OptimizationEngine.optimize_query() with GA
+    optimized_query = engine.optimize_query(
+        query,
+        use_genetic=True,
         population_size=30,
         generations=50,
         mutation_rate=0.15,
         crossover_rate=0.8,
         elitism=3
     )
-    
-    # Run optimization
-    optimized_query = ga.optimize(query)
     
     print("\n Optimized Query Tree:")
     print_query_tree(optimized_query.query_tree)
@@ -142,34 +142,10 @@ def demo_optimized():
     print(f"  - Cost Reduction: {improvement:.2f}")
     print(f"  - Percentage: {improvement_pct:.2f}%")
     
-    # Show best individual
-    if ga.best_individual:
-        print(f"\n Best Solution:")
-        print(f"  - Filter Orders: {ga.best_individual.filter_orders}")
-        print(f"  - Applied Rules: {ga.best_individual.applied_rules}")
-        
-        if not ga.best_individual.filter_orders:
-            print("\n Note: No AND filters found in query tree structure.")
-            print("       GA is optimizing by applying random transformation rules only.")
-            print("       Current parser creates FILTER nodes with full WHERE clause,")
-            print("       not decomposed AND structure needed for filter reordering.")
+    print("\n Note: For detailed GA statistics, access the GeneticOptimizer directly.")
+    print("      This demo uses the simplified OptimizationEngine.optimize_query() API.")
     
-    # Show evolution progress
-    if ga.history:
-        print("\n Evolution Progress (Every 10 generations):")
-        print("Gen | Best Cost | Avg Cost | Worst Cost")
-        print("----|-----------|----------|------------")
-        
-        for i, record in enumerate(ga.history):
-            if i % 10 == 0 or i == len(ga.history) - 1:
-                print(f"{record['generation']:3d} | "
-                      f"{record['best_fitness']:9.2f} | "
-                      f"{record['avg_fitness']:8.2f} | "
-                      f"{record['worst_fitness']:10.2f}")
-    else:
-        print("\n No evolution occurred - query structure not suitable for GA optimization.")
-    
-    return optimized_query, ga
+    return optimized_query
 
 
 def main():
