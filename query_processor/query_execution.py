@@ -4,9 +4,10 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from misc.optimizer import *
-from misc.storage import Rows, Condition
+from misc.storage import Condition
 from query_optimizer import *
-from query_processor import QueryProcessor
+from query_processor.query_processor import AdapterStorage, AdapterCCM
+# from query_processor import QueryProcessor
 
 """
 TODO List:
@@ -28,53 +29,57 @@ TODO List:
 """
 
 class QueryExecution:
-    def execute_node(self, query_tree: QueryTree) -> Rows | None:
+    def __init__(self, storage_adapter: AdapterStorage, ccm_adapter: AdapterCCM):
+        self.storage_adapter = storage_adapter
+        self.ccm_adapter = ccm_adapter
+        
+    def execute_node(self, query_tree: QueryTree, transaction_id: int) -> list[dict] | None:
         type = query_tree.type
         results = {}
 
         for child in query_tree.childs:
-            child_result = self.execute_node(child)
+            child_result = self.execute_node(child, transaction_id)
             results[child] = child_result
 
         if type in UNARY_OPERATORS:
             # TODO: implementasi eksekusi operator unary
-            return self.execute_unary_node(query_tree)
+            return self.execute_unary_node(query_tree, transaction_id)
 
         elif type in BINARY_OPERATORS:
             # TODO: implementasi eksekusi JOIN, diskusikan dengan storage manager
             return None
 
         elif type in LEAF_NODES:
-            return self.execute_leaf_node(query_tree)
+            return self.execute_leaf_node(query_tree, transaction_id)
 
         elif type in SPECIAL_OPERATORS:
             print(f"Executing special operator: <{type}>")
             # TODO: implementasi eksekusi operator khusus
-            return self.execute_special_node(query_tree)
+            return self.execute_special_node(query_tree, transaction_id)
 
         else:
             raise ValueError(f"Tipe node tidak dikenali: <{type}>")
         
-    def execute_unary_node(self, query_tree: QueryTree):
+    def execute_unary_node(self, query_tree: QueryTree, transaction_id: int) -> list[dict] | None:
         if len(query_tree.childs) != 1:
             raise ValueError(f"Unary operator <{query_tree.type}> harus punya tepat 1 anak")
         
         type = query_tree.type
         value = query_tree.val
-        child_result: Rows | None = self.execute_node(query_tree.childs[0])
+        child_result: list[dict] | None = self.execute_node(query_tree.childs[0])
         processed_result: list[dict] = []
         if type == "PROJECT":
             if value == "*":
                 return child_result 
             columns = value.split(",") if value else []
-            for row in child_result.rows:
+            for row in child_result:
                 projected_row = {col: row[col] for col in columns if col in row}
                 processed_result.append(projected_row)
 
             # TESTING: print hasil projection
             print(f"Executing PROJECT on columns: {columns}")
             print(f"Projected Result: {processed_result}")
-            return Rows(processed_result)
+            return processed_result
         
         elif type == "FILTER":
             # TODO: handle AND/OR conditions properly, for now just single condition
@@ -96,7 +101,7 @@ class QueryExecution:
             if val.isdigit():
                 val = int(val)
 
-            for row in child_result.rows:
+            for row in child_result:
                 if op == "=" and row.get(col) == val:
                     naive_filtering.append(row)
                 elif op == "!=" and row.get(col) != val:
@@ -112,7 +117,7 @@ class QueryExecution:
 
             print(f"Executing FILTER on condition: {condition_string}, result filtered")
             print(f"Filtered Result: {naive_filtering}")
-            return Rows(naive_filtering)
+            return naive_filtering
         
         elif type == "SORT":
             columns = value.split(",") if value else []
@@ -120,55 +125,57 @@ class QueryExecution:
             sorted_result = sorted(child_result, key=lambda row: tuple(row[col] for col in columns if col in row))
             print(f"Executing SORT on columns: {columns}, result sorted")
             print(f"Sorted Result: {sorted_result}")
-            return Rows(sorted_result)
+            return sorted_result
         
-    def execute_leaf_node(self, query_tree: QueryTree) -> Rows | None:
+    def execute_leaf_node(self, query_tree: QueryTree, transaction_id: int) -> list[dict] | None:
         type = query_tree.type
         if type == "RELATION":
             table_name = query_tree.val
             # TODO: interact with storage manager to get table data. TEST FOR NOW!
-
-            test_rows = Rows([{"id": 1, "name": "mifune"}, {"id": 2, "name": "alice"}, {"id": 3, "name": "bob"}])
+            
+            test_rows = [{"id": 1, "name": "mifune"}, {"id": 2, "name": "alice"}, {"id": 3, "name": "bob"}]
             print(f"Executing RELATION node for table: {table_name}")
             print(f"Retrieved Rows: {test_rows}")
             return test_rows
+        
         elif type == "LIMIT":
             # TODO: implement LIMIT logic, use global variable
             limit_value = int(query_tree.val)
             print(f"Executing LIMIT node with value: {limit_value}")
             return None
         
-    def execute_special_node(self, query_tree: QueryTree) -> None:
+    def execute_special_node(self, query_tree: QueryTree, transaction_id: int) -> None:
         type = query_tree.type
         value = query_tree.val
         if type == "UPDATE":
             # TODO: implement UPDATE logic, mungkin gunakan AST dari parser
             print(f"Executing UPDATE with value: {value}")
+
         elif type == "INSERT":
-            relation: Rows = self.execute_node(query_tree.childs[0]) if query_tree.childs else None
+            relation: list[dict] = self.execute_node(query_tree.childs[0]) if query_tree.childs else None
             if not relation:
                 raise ValueError("INSERT node harus punya child RELATION yang menyatakan tabel tujuan")
             
             upcoming_row = {}
             insert_values = value.split(",") if value else []
-            print(f"Executing INSERT with values: {insert_values}")
             for val in insert_values:
                 column, _, value = val.strip().partition("=")
                 column = column.strip()
                 value = value.strip()
                 upcoming_row[column] = value
 
-            first_element = relation.rows[0] if relation.rows else {}
+            first_element = relation[0] if relation else {}
             if set(upcoming_row.keys()) != set(first_element.keys()):
                 print(upcoming_row.keys(), first_element.keys())
                 raise ValueError("Kolom pada INSERT tidak sesuai dengan kolom pada tabel tujuan")
-            print(f"Inserting Row: {upcoming_row} into Relation")
-            # TODO: interact with storage manager to insert the row
+            
             return upcoming_row
 
         elif type == "DELETE":
             # TODO: implement DELETE yang berinteraksi dengan storage manager
             rows_to_delete = self.execute_node(query_tree.childs[0]) if query_tree.childs else None
+            if not rows_to_delete:
+                raise ValueError("DELETE node harus punya child yang menyatakan baris yang akan dihapus")
             print(f"Rows to delete: {rows_to_delete}")
             print(f"Executing DELETE operation (simulate delete)")
             return None
@@ -183,13 +190,13 @@ class QueryExecution:
     
 def main():
     print("Hello from execute_node module")
-    processor = QueryProcessor()
+    # processor = QueryProcessor()
     # tree = processor._get_query_tree("SELECT * FROM users WHERE name='mifune';")
     # tree = processor._get_query_tree("INSERT INTO users (id, name) VALUES (100, 'didd');")
-    tree = processor._get_query_tree("DELETE FROM users WHERE id=2;")
-    exe = QueryExecution()
-    result = exe.execute_node(tree)
-    print(f"Final Result: {result}")
+    # tree = processor._get_query_tree("DELETE FROM users WHERE id=2;")
+    # exe = QueryExecution()
+    # result = exe.execute_node(tree)
+    # print(f"Final Result: {result}")
 
 if __name__ == "__main__":
     main()
