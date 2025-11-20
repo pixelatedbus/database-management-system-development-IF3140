@@ -10,9 +10,7 @@ from query_optimizer.rule_1 import (
     uncascade_filters,
     clone_tree
 )
-from query_optimizer.rules_registry import (
-    get_all_rules
-)
+from query_optimizer.rule_2 import reorder_and_conditions
 from query_optimizer.rule_params_manager import get_rule_params_manager
 
 
@@ -27,7 +25,6 @@ class Individual:
                          'rule_2': {123: {...}},
                          ...
                      }
-        applied_rules: List of rule names to apply in order
         fitness: Fitness value (lower is better)
     """
     
@@ -35,11 +32,9 @@ class Individual:
         self, 
         rule_params: dict[str, dict[int, Any]],
         base_query: ParsedQuery,
-        applied_rules: list[str] | None = None,
         lazy_eval: bool = False
     ):
         self.rule_params = rule_params
-        self.applied_rules = applied_rules or []
         self.base_query = base_query
         self._query_cache = None
         self.fitness: float | None = None
@@ -59,30 +54,29 @@ class Individual:
         cloned_tree = clone_tree(base_query.query_tree)
         current_query = ParsedQuery(cloned_tree, base_query.query)
         
-        # Terapkan optimization rules
-        if self.applied_rules:
-            all_rules = dict(get_all_rules())
-            for rule_name in self.applied_rules:
-                if rule_name in all_rules:
-                    try:
-                        current_query = all_rules[rule_name](current_query)
-                    except:
-                        pass
-        
-        # Apply Rule 1 if present (Seleksi Konjungtif)
+        # Apply Rule 1 with integrated reordering (Seleksi Konjungtif)
+        # Rule 1 now handles both reordering (rule_2) and cascading
         if 'rule_1' in self.rule_params:
             query_and = uncascade_filters(current_query)
             if self.rule_params['rule_1']:
+                # Check if we have rule_2 params for reordering
+                reorder_params = self.rule_params.get('rule_2', {})
+                if reorder_params:
+                    # Apply reordering first, then cascade
+                    query_and = reorder_and_conditions(query_and, operator_orders=reorder_params)
                 current_query = cascade_filters(query_and, operator_orders=self.rule_params['rule_1'])
             else:
                 current_query = query_and
+        # Apply Rule 2 standalone if Rule 1 is not present
+        elif 'rule_2' in self.rule_params and self.rule_params['rule_2']:
+            current_query = reorder_and_conditions(current_query, operator_orders=self.rule_params['rule_2'])
         
-        # TODO: Apply other rules (rule_2, rule_3, etc.) when implemented
+        # TODO: Apply other rules (rule_3, rule_4, etc.) when implemented
         
         return current_query
     
     def __repr__(self):
-        return f"Individual(fitness={self.fitness}, params={self.rule_params}, rules={self.applied_rules})"
+        return f"Individual(fitness={self.fitness}, params={self.rule_params})"
 
 
 class GeneticOptimizer:
@@ -163,8 +157,8 @@ class GeneticOptimizer:
                 if random.random() < self.crossover_rate:
                     child1, child2 = self._crossover(parent1, parent2, query)
                 else:
-                    child1 = self._crossover(parent1, parent1, query)
-                    child2 = self._crossover(parent2, parent2, query)
+                    child1, _ = self._crossover(parent1, parent1, query)
+                    child2, _ = self._crossover(parent2, parent2, query)
                 
                 if random.random() < self.mutation_rate:
                     child1 = self._mutate(child1, query, self._rule_analysis_cache)
@@ -211,7 +205,6 @@ class GeneticOptimizer:
         """Inisialisasi populasi dengan random params untuk semua rules."""
         population = []
         manager = get_rule_params_manager()
-        all_rule_names = [name for name, _ in get_all_rules()]
         
         for _ in range(self.population_size):
             # Generate random params untuk setiap rule
@@ -223,11 +216,7 @@ class GeneticOptimizer:
                     params = manager.generate_random_params(rule_name, metadata)
                     rule_params[rule_name][node_id] = params
             
-            # Random pilih rules untuk diterapkan
-            num_rules = random.randint(1, min(3, len(all_rule_names)))
-            applied_rules = random.sample(all_rule_names, num_rules)
-            
-            individual = Individual(rule_params, base_query, applied_rules)
+            individual = Individual(rule_params, base_query)
             population.append(individual)
         
         return population
@@ -266,17 +255,9 @@ class GeneticOptimizer:
                 child1_params[rule_name] = copy.deepcopy(parent2.rule_params.get(rule_name, {}))
                 child2_params[rule_name] = copy.deepcopy(parent1.rule_params.get(rule_name, {}))
         
-        # Simple applied_rules crossover
-        if random.random() < 0.5:
-            child1_rules = parent1.applied_rules.copy()
-            child2_rules = parent2.applied_rules.copy()
-        else:
-            child1_rules = parent2.applied_rules.copy()
-            child2_rules = parent1.applied_rules.copy()
-        
         # Lazy evaluation
-        child1 = Individual(child1_params, base_query, child1_rules, lazy_eval=True)
-        child2 = Individual(child2_params, base_query, child2_rules, lazy_eval=True)
+        child1 = Individual(child1_params, base_query, lazy_eval=True)
+        child2 = Individual(child2_params, base_query, lazy_eval=True)
         
         return child1, child2
     
@@ -291,13 +272,10 @@ class GeneticOptimizer:
         """
         import copy
         
-        mutation_type = random.choice(['params', 'rules'])
-        
         # Shallow copy dulu (fast)
         mutated_params = {k: v.copy() for k, v in individual.rule_params.items()}
-        mutated_rules = individual.applied_rules.copy()
         
-        if mutation_type == 'params' and mutated_params:
+        if mutated_params:
             manager = get_rule_params_manager()
             rule_name = random.choice(list(mutated_params.keys()))
             node_params = mutated_params[rule_name]
@@ -312,33 +290,14 @@ class GeneticOptimizer:
                     mutated_params[rule_name][node_id]
                 )
         
-        elif mutation_type == 'rules':
-            all_rule_names = [name for name, _ in get_all_rules()]
-            rule_mutation = random.choice(['add', 'remove', 'replace'])
-            
-            if rule_mutation == 'add' and len(mutated_rules) < 5:
-                available_rules = [r for r in all_rule_names if r not in mutated_rules]
-                if available_rules:
-                    mutated_rules.append(random.choice(available_rules))
-            
-            elif rule_mutation == 'remove' and mutated_rules:
-                mutated_rules.pop(random.randint(0, len(mutated_rules) - 1))
-            
-            elif rule_mutation == 'replace' and mutated_rules:
-                idx = random.randint(0, len(mutated_rules) - 1)
-                available_rules = [r for r in all_rule_names if r not in mutated_rules]
-                if available_rules:
-                    mutated_rules[idx] = random.choice(available_rules)
-        
         # Lazy evaluation
-        return Individual(mutated_params, base_query, mutated_rules, lazy_eval=True)
+        return Individual(mutated_params, base_query, lazy_eval=True)
     
     def get_statistics(self) -> dict:
         """Dapatkan statistik optimasi."""
         return {
             'best_fitness': self.best_fitness,
             'best_params': self.best_individual.rule_params if self.best_individual else None,
-            'best_rules': self.best_individual.applied_rules if self.best_individual else None,
             'generations': len(self.history),
             'history': self.history
         }
@@ -370,7 +329,9 @@ class GeneticOptimizer:
                                 explanations.append(f"{item} single")
                         if explanations:
                             print(f"      → {' -> '.join(explanations)}")
-            print(f"\nApplied Rules: {self.best_individual.applied_rules}")
+                    # Special formatting for rule_2
+                    elif rule_name == 'rule_2' and isinstance(params, list):
+                        print(f"      → Reorder: {params}")
         
         print("\nProgress:")
         print("Gen | Best    | Average | Worst")

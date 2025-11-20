@@ -38,6 +38,7 @@ from query_optimizer.rule_1 import (
     generate_random_rule_1_params,
     copy_rule_1_params,
     count_conditions_in_rule_1_params,
+    mutate_rule_1_params,
     seleksi_konjungtif,
     cascade_filters,
     cascade_and_mixed,
@@ -92,6 +93,62 @@ class TestHelperFunctions(unittest.TestCase):
                 else:
                     indices.append(item)
             self.assertEqual(len(indices), len(set(indices)))
+    
+    def test_mutate_rule_1_params_group(self):
+        """Test mutate with group operation"""
+        # All singles: [0, 1, 2] -> should be able to group adjacent
+        params = [0, 1, 2]
+        
+        # Run multiple times to test randomness
+        grouped = False
+        for _ in range(20):
+            mutated = mutate_rule_1_params(params.copy())
+            # Check if any grouping happened
+            if any(isinstance(item, list) for item in mutated):
+                grouped = True
+                break
+        
+        self.assertTrue(grouped, "Should be able to group singles")
+    
+    def test_mutate_rule_1_params_ungroup(self):
+        """Test mutate with ungroup operation"""
+        # Has group: [2, [0, 1]] -> should be able to ungroup
+        params = [2, [0, 1]]
+        
+        ungrouped = False
+        for _ in range(20):
+            mutated = mutate_rule_1_params(params.copy())
+            # Check if ungrouping happened (all singles)
+            if all(not isinstance(item, list) for item in mutated):
+                ungrouped = True
+                break
+        
+        self.assertTrue(ungrouped, "Should be able to ungroup")
+    
+    def test_mutate_rule_1_params_regroup(self):
+        """Test mutate with regroup operation"""
+        # Has large group: [[0, 1, 2, 3]] -> should be able to split into 2 groups
+        params = [[0, 1, 2, 3]]
+        
+        regrouped = False
+        for _ in range(30):
+            mutated = mutate_rule_1_params(params.copy())
+            # Check if split into 2 groups (regroup creates 2 lists from 1)
+            if len(mutated) == 2 and all(isinstance(item, list) for item in mutated):
+                regrouped = True
+                break
+        
+        self.assertTrue(regrouped, "Should be able to regroup (split into 2 groups)")
+    
+    def test_mutate_preserves_indices(self):
+        """Test that mutation preserves all condition indices"""
+        params = [2, [0, 1], 3]
+        original_count = count_conditions_in_rule_1_params(params)
+        
+        for _ in range(10):
+            mutated = mutate_rule_1_params(params.copy())
+            mutated_count = count_conditions_in_rule_1_params(mutated)
+            self.assertEqual(original_count, mutated_count, "Mutation should preserve all indices")
 
 
 class TestAnalyzeAndOperators(unittest.TestCase):

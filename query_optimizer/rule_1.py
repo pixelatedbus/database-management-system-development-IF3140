@@ -422,6 +422,61 @@ def uncascade_filters(query: ParsedQuery) -> ParsedQuery:
     return ParsedQuery(transformed_tree, query.query)
 
 
+def mutate_rule_1_params(params: list[int | list[int]]) -> list[int | list[int]]:
+    """Mutate rule 1 params - hanya grouping/ungrouping, tanpa swap.
+    
+    Swap tidak diperlukan karena AND bersifat komutatif (A AND B = B AND A),
+    jadi swap seharusnya di-handle oleh rule seleksi komutatif terpisah.
+    
+    Mutation strategies:
+    - group: Gabungkan 2 kondisi adjacent menjadi satu grup AND
+    - ungroup: Pisahkan grup AND menjadi cascaded individual filters
+    - regroup: Ubah struktur grouping yang ada
+    """
+    if not params:
+        return params
+    
+    import random
+    
+    mutation_type = random.choice(['group', 'ungroup', 'regroup'])
+    mutated = [item.copy() if isinstance(item, list) else item for item in params]
+    
+    if mutation_type == 'group':
+        # Group 2 adjacent singles into a group
+        singles = [i for i, item in enumerate(mutated) if not isinstance(item, list)]
+        if len(singles) >= 2:
+            # Find adjacent singles
+            for i in range(len(singles) - 1):
+                idx1 = singles[i]
+                idx2 = singles[i + 1]
+                if idx2 == idx1 + 1:
+                    # Merge idx1 and idx2
+                    item1 = mutated[idx1]
+                    item2 = mutated[idx2]
+                    mutated[idx1:idx2+1] = [[item1, item2]]
+                    break
+    
+    elif mutation_type == 'ungroup':
+        # Ungroup a group into singles
+        groups = [i for i, item in enumerate(mutated) if isinstance(item, list) and len(item) > 1]
+        if groups:
+            idx = random.choice(groups)
+            group = mutated[idx]
+            mutated[idx:idx+1] = list(group)
+    
+    elif mutation_type == 'regroup':
+        # Change grouping structure - split a group into 2 groups
+        groups = [i for i, item in enumerate(mutated) if isinstance(item, list) and len(item) >= 2]
+        if groups:
+            idx = random.choice(groups)
+            group = mutated[idx]
+            # Split into 2 groups
+            split_point = random.randint(1, len(group) - 1)
+            mutated[idx:idx+1] = [group[:split_point], group[split_point:]]
+    
+    return mutated
+
+
 def clone_tree(node: QueryTree) -> QueryTree:
     """Deep clone query tree."""
     if node is None:

@@ -37,6 +37,7 @@ def print_help():
     print("  python -m query_optimizer.demo 1  # Run demo parse")
     print("  python -m query_optimizer.demo 2  # Run demo optimized")
     print("  python -m query_optimizer.demo 3  # Run demo rule 1 (cascade filters)")
+    print("  python -m query_optimizer.demo 4  # Run demo genetic with Rule 1 + Rule 2")
     print_separator()
 
 def demo_parse():
@@ -146,6 +147,125 @@ def demo_rule_1():
     print_separator("DEMO 3 COMPLETED")
     return query
 
+def demo_genetic_with_rules():
+    """Demo 4: Genetic Optimizer with Rule 1 + Rule 2 Integration"""
+    print_separator("DEMO 4: Genetic Optimizer with Rule 1 + Rule 2")
+    
+    from query_optimizer.query_tree import QueryTree
+    from query_optimizer.optimization_engine import ParsedQuery
+    from query_optimizer.genetic_optimizer import GeneticOptimizer
+    
+    # Build query with multiple AND conditions
+    print("\nBuilding query with 4 conjunctive conditions...")
+    
+    relation = QueryTree("RELATION", "orders")
+    
+    comp1 = QueryTree("COMPARISON", ">")   # amount > 1000
+    comp2 = QueryTree("COMPARISON", "=")   # status = 'pending'
+    comp3 = QueryTree("COMPARISON", "<")   # date < '2024-01-01'
+    comp4 = QueryTree("COMPARISON", "!=")  # customer_id != null
+    
+    and_operator = QueryTree("OPERATOR", "AND")
+    and_operator.add_child(comp1)
+    and_operator.add_child(comp2)
+    and_operator.add_child(comp3)
+    and_operator.add_child(comp4)
+    
+    filter_node = QueryTree("FILTER")
+    filter_node.add_child(relation)
+    filter_node.add_child(and_operator)
+    
+    query = ParsedQuery(
+        filter_node,
+        "SELECT * FROM orders WHERE amount > 1000 AND status = 'pending' AND date < '2024-01-01' AND customer_id != null"
+    )
+    
+    print("\nOriginal Query Tree:")
+    print_query_tree(query.query_tree)
+    
+    print("\n" + "="*70)
+    print("Running Genetic Optimizer...")
+    print("="*70)
+    print(f"Population Size: 20")
+    print(f"Generations: 10")
+    print(f"Mutation Rate: 0.2")
+    print(f"Using Rule 1 (Seleksi Konjungtif) + Rule 2 (Seleksi Komutatif)")
+    
+    ga = GeneticOptimizer(
+        population_size=20,
+        generations=10,
+        mutation_rate=0.2,
+        crossover_rate=0.8,
+        elitism=2,
+    )
+    
+    optimized_query = ga.optimize(query)
+    
+    print("\n" + "="*70)
+    print("Optimization Results")
+    print("="*70)
+    
+    print("\nOptimized Query Tree:")
+    print_query_tree(optimized_query.query_tree)
+    
+    print("\n" + "="*70)
+    print("Statistics")
+    print("="*70)
+    
+    stats = ga.get_statistics()
+    print(f"\nBest Fitness: {stats['best_fitness']:.2f}")
+    print(f"Total Generations: {stats['generations']}")
+    
+    if stats['best_params']:
+        print("\nBest Parameters Found:")
+        for rule_name, node_params in stats['best_params'].items():
+            if node_params:
+                print(f"\n  {rule_name}:")
+                for node_id, params in node_params.items():
+                    print(f"    Node {node_id}: {params}")
+                    if rule_name == 'rule_1' and isinstance(params, list):
+                        explanations = []
+                        for item in params:
+                            if isinstance(item, list):
+                                explanations.append(f"({', '.join(map(str, item))} grouped)")
+                            else:
+                                explanations.append(f"{item} single")
+                        if explanations:
+                            print(f"      → {' -> '.join(explanations)}")
+                    elif rule_name == 'rule_2' and isinstance(params, list):
+                        print(f"      → Reorder sequence: {params}")
+    
+    print("\n" + "="*70)
+    print("Fitness Progress")
+    print("="*70)
+    print("\nGen | Best    | Average | Worst")
+    print("----|---------|---------|--------")
+    
+    for record in stats['history'][::max(1, len(stats['history'])//5)]:  # Show 5 samples
+        print(f"{record['generation']:3d} | "
+              f"{record['best_fitness']:7.2f} | "
+              f"{record['avg_fitness']:7.2f} | "
+              f"{record['worst_fitness']:7.2f}")
+    
+    # Show last generation
+    if stats['history']:
+        last = stats['history'][-1]
+        if last not in stats['history'][::max(1, len(stats['history'])//5)]:
+            print(f"{last['generation']:3d} | "
+                  f"{last['best_fitness']:7.2f} | "
+                  f"{last['avg_fitness']:7.2f} | "
+                  f"{last['worst_fitness']:7.2f}")
+    
+    print_separator("DEMO 4 COMPLETED")
+    print("\nKey Insights:")
+    print("- Rule 2 (Reorder) is applied BEFORE Rule 1 (Cascade) when both present")
+    print("- Genetic Algorithm explores different combinations of:")
+    print("  * Condition reordering (Rule 2)")
+    print("  * Cascade grouping patterns (Rule 1)")
+    print("- Best solution balances tree structure for optimal execution")
+    
+    return optimized_query
+
 def main():
     """Main program"""
     print("\n")
@@ -164,6 +284,8 @@ def main():
             print("\nUsage:")
             print("  python -m query_optimizer.demo 1  # Run demo parse")
             print("  python -m query_optimizer.demo 2  # Run demo optimized")
+            print("  python -m query_optimizer.demo 3  # Run demo rule 1")
+            print("  python -m query_optimizer.demo 4  # Run demo genetic")
             return
     else:
         demo_num = 0
@@ -177,6 +299,8 @@ def main():
             print_separator("DEMO COMPLETED")
         elif demo_num == 3:
             demo_rule_1()
+        elif demo_num == 4:
+            demo_genetic_with_rules()
         else:
             print_help()
         

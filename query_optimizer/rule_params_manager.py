@@ -85,65 +85,43 @@ class RuleParamsManager:
         return list(self._rules.keys())
     
     def _register_default_rules(self):
-        """Register default rules (Rule 1 - Seleksi Konjungtif)."""
+        """Register default rules."""
+        # Rule 1 - Seleksi Konjungtif (Cascading)
         from query_optimizer.rule_1 import (
             analyze_and_operators,
             generate_random_rule_1_params,
             copy_rule_1_params,
+            mutate_rule_1_params,
         )
         
-        def mutate_rule_1(params: list[int | list[int]]) -> list[int | list[int]]:
-            """Mutate rule 1 params dengan strategy yang berbeda."""
-            if not params or len(params) < 2:
-                return params
-            
-            mutation_type = random.choice(['swap', 'group', 'ungroup', 'regroup'])
-            mutated = [item.copy() if isinstance(item, list) else item for item in params]
-            
-            if mutation_type == 'swap':
-                # Swap 2 positions
-                idx1, idx2 = random.sample(range(len(mutated)), 2)
-                mutated[idx1], mutated[idx2] = mutated[idx2], mutated[idx1]
-            
-            elif mutation_type == 'group':
-                # Group 2 adjacent singles into a group
-                singles = [i for i, item in enumerate(mutated) if not isinstance(item, list)]
-                if len(singles) >= 2:
-                    idx = random.choice(singles[:-1])
-                    if idx + 1 in singles:
-                        # Merge idx and idx+1
-                        item1 = mutated[idx]
-                        item2 = mutated[idx + 1]
-                        mutated[idx:idx+2] = [[item1, item2]]
-            
-            elif mutation_type == 'ungroup':
-                # Ungroup a group into singles
-                groups = [i for i, item in enumerate(mutated) if isinstance(item, list) and len(item) > 1]
-                if groups:
-                    idx = random.choice(groups)
-                    group = mutated[idx]
-                    mutated[idx:idx+1] = list(group)
-            
-            elif mutation_type == 'regroup':
-                # Change grouping structure
-                groups = [i for i, item in enumerate(mutated) if isinstance(item, list)]
-                if groups:
-                    idx = random.choice(groups)
-                    group = mutated[idx]
-                    if len(group) >= 2:
-                        # Split into 2 groups
-                        split_point = random.randint(1, len(group) - 1)
-                        mutated[idx:idx+1] = [group[:split_point], group[split_point:]]
-            
-            return mutated
-        
-        # Register Rule 1
         self.register_rule(
             rule_name='rule_1',
             analyze_func=analyze_and_operators,
             generate_func=generate_random_rule_1_params,
             copy_func=copy_rule_1_params,
-            mutate_func=mutate_rule_1
+            mutate_func=mutate_rule_1_params
+        )
+        
+        # Rule 2 - Seleksi Komutatif (Reordering)
+        from query_optimizer.rule_2 import (
+            analyze_and_operators_for_reorder,
+            generate_random_rule_2_params,
+            copy_rule_2_params,
+            mutate_rule_2_params,
+        )
+        
+        def validate_rule_2(params: list[int]) -> bool:
+            """Validate rule 2 params - requires metadata for num_conditions."""
+            # Basic validation: must be a list
+            return isinstance(params, list) and len(params) > 0
+        
+        self.register_rule(
+            rule_name='rule_2',
+            analyze_func=analyze_and_operators_for_reorder,
+            generate_func=generate_random_rule_2_params,
+            copy_func=copy_rule_2_params,
+            mutate_func=mutate_rule_2_params,
+            validate_func=validate_rule_2
         )
 
 
