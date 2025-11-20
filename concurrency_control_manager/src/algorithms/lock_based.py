@@ -8,7 +8,7 @@ from .base import ConcurrencyAlgorithm
 from ..transaction import Transaction
 from ..row import Row
 from ..enums import ActionType, LockType, TransactionStatus
-from ..response import Response, AlgorithmResponse
+from ..response import Response, Response
 
 
 class LockEntry:
@@ -304,7 +304,7 @@ class LockBasedAlgorithm(ConcurrencyAlgorithm):
         )
         
         if lock_granted:
-            return AlgorithmResponse(
+            return Response(
                 allowed=True, 
                 message=f"Lock {required_lock_type.name} for obj {obj_id} granted."
             )
@@ -314,17 +314,17 @@ class LockBasedAlgorithm(ConcurrencyAlgorithm):
                 
                 if victim_id == trans_id:
                     self.abort_transaction(t) 
-                    return AlgorithmResponse(
+                    return Response(
                         allowed=False, 
                         message=f"Transaction {trans_id} aborted due to deadlock."
                     )
                 else:
-                    return AlgorithmResponse(
+                    return Response(
                         allowed=False, 
                         message=f"Transaction {trans_id} must wait (deadlock detected, victim is {victim_id})."
                     )
             else:
-                return AlgorithmResponse(
+                return Response(
                     allowed=False, 
                     message=f"Transaction {trans_id} must wait for lock on {obj_id}."
                 )
