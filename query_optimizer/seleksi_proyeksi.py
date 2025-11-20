@@ -49,6 +49,9 @@ def collapse_projection(outer_node: QueryTree) -> QueryTree:
 
     """
     inner_node = outer_node.get_child(0)
+
+    if outer_node.val.strip() == "*":
+        outer_node.val = inner_node.val
     
     if len(inner_node.childs) > 0:
         source = inner_node.get_child(0)
