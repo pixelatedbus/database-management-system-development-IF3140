@@ -105,66 +105,6 @@ cost = engine.get_cost(query)
 print(f"Cost: {cost}")
 ```
 
-#### Genetic Algorithm Optimization
-
-```python
-from query_optimizer.optimization_engine import OptimizationEngine, ParsedQuery
-from query_optimizer.query_tree import QueryTree
-
-# Initialize engine
-engine = OptimizationEngine()
-
-# Build query tree (manual atau dari parser)
-relation = QueryTree("RELATION", "users")
-filter1 = QueryTree("FILTER", "WHERE age > 25")
-filter2 = QueryTree("FILTER", "WHERE status = 'active'")
-filter3 = QueryTree("FILTER", "WHERE city = 'Jakarta'")
-
-# Create OPERATOR_S structure dengan explicit source
-operator_and = QueryTree("OPERATOR_S", "AND")
-operator_and.add_child(relation)  # Child 0: source
-operator_and.add_child(filter1)   # Child 1+: kondisi
-operator_and.add_child(filter2)
-operator_and.add_child(filter3)
-
-project = QueryTree("PROJECT", "*")
-project.add_child(operator_and)
-
-query = ParsedQuery(project, "SELECT * FROM users WHERE ...")
-
-# Optimize using Genetic Algorithm (integrated in OptimizationEngine)
-optimized_query = engine.optimize_query(
-    query,
-    use_genetic=True,        # Enable GA optimization
-    population_size=50,      # Ukuran populasi
-    generations=100,         # Jumlah generasi
-    mutation_rate=0.1,       # Probabilitas mutasi (0.0-1.0)
-    crossover_rate=0.8,      # Probabilitas crossover (0.0-1.0)
-    elitism=2               # Jumlah individu terbaik yang dipertahankan
-)
-
-# Calculate costs
-original_cost = engine.get_cost(query)
-optimized_cost = engine.get_cost(optimized_query)
-
-print(f"Original Cost: {original_cost}")
-print(f"Optimized Cost: {optimized_cost}")
-print(f"Improvement: {original_cost - optimized_cost}")
-```
-
-**Alternative: Quick Optimization dengan Default Settings**
-
-```python
-# Simpler usage with default GA parameters
-engine = OptimizationEngine()
-query = engine.parse_query("SELECT * FROM users WHERE age > 25 AND status = 'active'")
-
-# Optimize with default settings (population_size=50, generations=100)
-optimized = engine.optimize_query(query)
-
-print(f"Cost: {engine.get_cost(query)} → {engine.get_cost(optimized)}")
-```
-
 #### Custom Fitness Function
 
 ```python
@@ -194,25 +134,6 @@ optimized = engine.optimize_query(
 print(f"Optimized with custom fitness: {custom_fitness(optimized)}")
 ```
 
-#### Using Optimization Rules
-
-```python
-from query_optimizer.rules_registry import get_all_rules, apply_random_rule
-
-# Get all available rules
-rules = get_all_rules()
-for name, func in rules:
-    print(f"Rule: {name}")
-
-# Apply specific rule
-from query_optimizer.seleksi_konjungtif import seleksi_konjungtif
-optimized_query = seleksi_konjungtif(query)
-
-# Apply random rule
-transformed_query, rule_name = apply_random_rule(query)
-print(f"Applied rule: {rule_name}")
-```
-
 ### 2.4 Running Tests
 
 ```bash
@@ -234,81 +155,105 @@ python -m unittest query_optimizer.tests.test_rule_1 -v
 
 ### 3.1 Query Tree Structure
 
-Query Tree adalah representasi internal dari SQL query dalam bentuk tree structure. Setiap node merepresentasikan operator atau operand dalam query.
+Query Tree adalah representasi internal dari SQL query dengan atomic node structure. Setiap node merepresentasikan operator atau operand dalam query.
 
-#### Node Types & Categories
+#### Node Design Philosophy
 
-**UNARY OPERATORS (1 child):**
+**Main Query Structure Nodes:**
 
-- `PROJECT` - Selection projection (SELECT clause)
-- `SORT` - Ordering (ORDER BY clause)
-
-**BINARY OPERATORS (2 children):**
-
-- `JOIN` - Join operations
-
-**LEAF NODES (0 children):**
-
+- `PROJECT` - SELECT clause dengan column references
+- `FILTER` - WHERE clause container dengan explicit source (2 children: source + condition)
+- `OPERATOR` - Logical operators (AND/OR/NOT) untuk combining conditions
+- `SORT` - ORDER BY (single attribute with direction)
 - `RELATION` - Table reference
-- `ARRAY` - Array literal (untuk IN clause)
-- `LIMIT` - Limit value
+- `JOIN` - JOIN operations (INNER/NATURAL)
+- `LIMIT` - LIMIT clause
 
-**LOGICAL_OPERATORS (custom rules):**
+**Atomic Detail Nodes:**
 
-- `OPERATOR_S` - Logical AND/OR dengan explicit source (≥3 children)
-- `OPERATOR` - Nested AND/OR/NOT tanpa explicit source (AND/OR: ≥2 children, NOT: 1 child)
+- `IDENTIFIER` - Nama dasar (atomic leaf)
+- `LITERAL_NUMBER`, `LITERAL_STRING`, `LITERAL_BOOLEAN`, `LITERAL_NULL` - Nilai literal
+- `COLUMN_NAME` - Wrapper untuk nama kolom (berisi IDENTIFIER)
+- `TABLE_NAME` - Wrapper untuk nama table/alias (berisi IDENTIFIER)
+- `COLUMN_REF` - Referensi kolom (simple: 1 child, qualified: 2 children)
 
-**SPECIAL OPERATORS (custom rules):**
+**Condition Expression Nodes:**
 
-- `FILTER` - Conditional expressions (WHERE/IN/EXIST) (1-2 children)
-- `UPDATE` - Update operation (1 child)
-- `INSERT` - Insert operation (1 child)
-- `DELETE` - Delete operation (1 child)
-- `BEGIN_TRANSACTION` - Transaction start (0+ children)
+- `COMPARISON` - Operasi perbandingan (=, <>, >, >=, <, <=)
+- `IN_EXPR`, `NOT_IN_EXPR` - IN / NOT IN expressions
+- `EXISTS_EXPR`, `NOT_EXISTS_EXPR` - EXISTS / NOT EXISTS
+- `BETWEEN_EXPR`, `NOT_BETWEEN_EXPR` - BETWEEN / NOT BETWEEN
+- `IS_NULL_EXPR`, `IS_NOT_NULL_EXPR` - IS NULL / IS NOT NULL
+- `ARITH_EXPR` - Ekspresi aritmatika (+, -, \*, /, %)
 
-#### Node Details
+**DML Nodes:**
 
-**FILTER Node (Conditional Expressions)**
+- `UPDATE_QUERY`, `INSERT_QUERY`, `DELETE_QUERY` - DML operations
+- `ASSIGNMENT` - SET clause assignment
 
-FILTER adalah node untuk conditional expressions (WHERE/IN/EXIST):
+**Transaction Nodes:**
 
-**Pattern 1: Single Child (WHERE condition)**
+- `BEGIN_TRANSACTION`, `COMMIT` - Transaction control
 
-```
-FILTER("WHERE condition")
-└── <any_operator>   # Bisa RELATION, JOIN, SORT, dll
-```
+#### Key Node Structures
 
-**Pattern 2: Two Children (IN/EXISTS)**
-
-```
-FILTER("IN column")
-├── <source_tree>    # Source data
-└── ARRAY("(1,2,3)") # Value list
-```
-
-**OPERATOR_S Node (Logical Operators dengan Source)**
-
-OPERATOR_S untuk logical operations (AND/OR) dengan explicit source:
+**COLUMN_REF Node (Column References)**
 
 ```
-OPERATOR_S("AND")
-├── <source_tree>           # Child 0: source (eksplisit)
-├── FILTER("WHERE cond1")   # Child 1: kondisi 1
-├── FILTER("WHERE cond2")   # Child 2: kondisi 2
-└── FILTER("WHERE cond3")   # Child N: kondisi N
+# Simple column reference
+COLUMN_REF
+└── COLUMN_NAME            # Child 0: wajib
+    └── IDENTIFIER("age")
+
+# Qualified column reference (table.column)
+COLUMN_REF
+├── COLUMN_NAME            # Child 0: column name
+│   └── IDENTIFIER("age")
+└── TABLE_NAME             # Child 1: table/alias
+    └── IDENTIFIER("users")
 ```
 
-**OPERATOR Node (Nested Logical Operators)**
+**FILTER Node (WHERE Clause Container)**
 
-OPERATOR untuk nested logic (AND/OR/NOT) yang mewarisi source dari parent:
+FILTER selalu memiliki 2 children: source + condition tree
 
 ```
-OPERATOR("NOT")
-└── FILTER("WHERE condition")  # Negasi kondisi
+FILTER
+├── RELATION("users")      # Child 0: source
+└── COMPARISON(">")         # Child 1: condition tree
+    ├── COLUMN_REF("age")
+    └── LITERAL_NUMBER(25)
 ```
 
-Lihat **[Filter.md](Filter.md)** untuk detail lengkap tentang OPERATOR, OPERATOR_S, dan FILTER structure.
+**OPERATOR Node (Logical Operations)**
+
+OPERATOR untuk combining conditions (AND/OR/NOT):
+
+```
+OPERATOR("AND")
+├── COMPARISON(">")
+│   ├── COLUMN_REF("age")
+│   └── LITERAL_NUMBER(25)
+└── COMPARISON("=")
+    ├── COLUMN_REF("status")
+    └── LITERAL_STRING("active")
+```
+
+**PROJECT Node (SELECT Clause)**
+
+```
+# Select specific columns
+PROJECT
+├── COLUMN_REF             # Selected columns
+├── COLUMN_REF
+└── [source_tree]          # Last child = source
+
+# Select all
+PROJECT("*")               # value = "*"
+└── [source_tree]
+```
+
+Lihat **[Parse_Query.md](doc/Parse_Query.md)** untuk detail lengkap semua node types.
 
 #### Query Tree Example
 
@@ -341,44 +286,37 @@ PROJECT("id, name")
 
 ### 3.2 Tokenization & Parsing
 
+#### Grammar Overview
+
+Parser menggunakan formal BNF grammar untuk parsing SQL. Lihat **[Parse_Query.md](doc/Parse_Query.md)** untuk grammar lengkap.
+
+**Lexical Elements:**
+
+- Identifiers: `<letter>(<letter>|<digit>|'_')*`
+- Literals: numbers, strings, boolean, null
+- Operators: `=`, `<>`, `>`, `>=`, `<`, `<=`, `+`, `-`, `*`, `/`, `%`
+- Keywords: `SELECT`, `FROM`, `WHERE`, `JOIN`, `ORDER BY`, dll
+
+**Expression Hierarchy:**
+
+1. Value expressions: `COLUMN_REF`, `LITERAL_*`, `ARITH_EXPR`
+2. Atomic conditions: `COMPARISON`, `IN_EXPR`, `BETWEEN_EXPR`, `IS_NULL_EXPR`
+3. Logical conditions: `OPERATOR` (AND/OR/NOT)
+
 #### Tokenizer
 
-Tokenizer melakukan lexical analysis, memecah SQL string menjadi tokens.
-
-**Token Types:**
-
-- Keywords: `SELECT`, `FROM`, `WHERE`, `JOIN`, `AND`, `OR`, dll
-- Operators: `=`, `>`, `<`, `>=`, `<=`, `<>`, `+`, `-`, `*`, `/`
-- Identifiers: table names, column names
-- Literals: strings, numbers, booleans
-- Delimiters: `,`, `;`, `(`, `)`
-
-**Example:**
+Tokenizer melakukan lexical analysis:
 
 ```python
 from query_optimizer.tokenizer import Tokenizer
 
 sql = "SELECT id, name FROM users WHERE age > 25"
 tokenizer = Tokenizer(sql)
-
-# Tokenizer akan menghasilkan:
-# [SELECT] [id] [,] [name] [FROM] [users] [WHERE] [age] [>] [25]
 ```
 
 #### Parser
 
-Parser melakukan syntax analysis dan membangun Query Tree.
-
-**Parsing Steps:**
-
-1. Parse SELECT → Create PROJECT node
-2. Parse FROM → Create RELATION node
-3. Parse WHERE → Create FILTER node(s)
-4. Parse JOIN → Create JOIN node
-5. Parse ORDER BY → Create SORT node
-6. Validate structure
-
-**Example:**
+Parser menghasilkan detailed query tree:
 
 ```python
 from query_optimizer.parser import Parser
@@ -392,7 +330,20 @@ query_tree = parser.parse()
 print(query_tree.tree())
 ```
 
-Lihat **[Rule.md](Rule.md)** dan **[Filter.md](Filter.md)** untuk detail lengkap.
+**Query Tree Structure:**
+
+```
+PROJECT("*")
+└── FILTER
+    ├── RELATION("users")
+    └── COMPARISON(">")
+        ├── COLUMN_REF
+        │   └── COLUMN_NAME
+        │       └── IDENTIFIER("age")
+        └── LITERAL_NUMBER(25)
+```
+
+Lihat **[Parse_Query.md](doc/Parse_Query.md)** untuk detail lengkap grammar dan node types.
 
 ### 3.3 Genetic Algorithm Implementation
 
@@ -522,6 +473,7 @@ Optimization rules mengimplementasikan equivalency rules untuk query transformat
 `σ(c1 ∧ c2 ∧ ... ∧ cn)(R)` ≡ `σ(cπ(1))(σ(cπ(2))(...(σ(cπ(n))(R))...))`
 
 **Format:** `list[int | list[int]]`
+
 - int: condition cascade sebagai single filter
 - list[int]: conditions stay grouped dalam AND
 
@@ -551,6 +503,7 @@ FILTER [status = 'active']  # idx=1 single (most selective)
 ```
 
 Penjelasan:
+
 - Order: [1, [0, 2]] = reorder to [status, age, city]
 - Cascade: 1 single, [0,2] grouped
 - Result: Most selective filter first, others stay in AND
@@ -558,21 +511,27 @@ Penjelasan:
 #### Unified Format Examples
 
 **Example 1: All singles (full cascade)**
+
 ```python
 params = [2, 1, 0]  # Reorder + all single filters
 ```
+
 Result: `FILTER(c2) → FILTER(c1) → FILTER(c0) → RELATION`
 
 **Example 2: Mixed (some grouped)**
+
 ```python
 params = [2, [0, 1]]  # c2 single, [c0, c1] grouped
 ```
+
 Result: `FILTER(c2) → FILTER(AND(c0, c1)) → RELATION`
 
 **Example 3: All grouped (no cascade)**
+
 ```python
 params = [[2, 1, 0]]  # All stay in AND (just reordered)
 ```
+
 Result: `FILTER(AND(c2, c1, c0)) → RELATION`
 
 ### 3.5 Query Validation
@@ -582,6 +541,7 @@ Query validation memastikan query tree structure valid dan semantically correct.
 **Validation Rules:**
 
 **Atomic Nodes (0 children):**
+
 - **IDENTIFIER**: Value = identifier name (required)
 - **LITERAL_NUMBER**: Value = numeric value (required)
 - **LITERAL_STRING**: Value = string value (required)
@@ -589,22 +549,26 @@ Query validation memastikan query tree structure valid dan semantically correct.
 - **LITERAL_NULL**: No value required
 
 **Wrapper Nodes (1 child):**
+
 - **COLUMN_NAME**: Child must be IDENTIFIER
 - **TABLE_NAME**: Child must be IDENTIFIER
 
 **Column Reference:**
+
 - **COLUMN_REF**: 1-2 children. Child[0] = COLUMN_NAME (required), Child[1] = TABLE_NAME (optional for qualified reference)
 
 **Source Nodes:**
+
 - **RELATION**: 0 children. Value = table name (must exist in database)
 - **ALIAS**: 1 child. Value = alias name (required)
-- **PROJECT**: ≥1 children. Last child = source. If value = "*", must have exactly 1 child (source only)
+- **PROJECT**: ≥1 children. Last child = source. If value = "\*", must have exactly 1 child (source only)
 - **FILTER**: 2 children. Child[0] = source, Child[1] = condition tree
 - **JOIN**: 2-3 children. Value = "INNER" or "NATURAL". NATURAL = 2 children, INNER = 3 children (2 relations + condition)
 - **SORT**: 2 children. Child[0] = COLUMN_REF, Child[1] = source. Value = "ASC" or "DESC" (optional)
 - **LIMIT**: 1 child (source). Value = limit number
 
 **Condition Nodes:**
+
 - **OPERATOR**: ≥1 children. Value = "AND"/"OR"/"NOT" (required). AND/OR = ≥2 children, NOT = 1 child
 - **COMPARISON**: 2 children (left, right expressions). Value = operator ("=", "<>", "!=", ">", ">=", "<", "<=")
 - **IN_EXPR**: 2 children (column_ref, LIST or subquery)
@@ -617,24 +581,28 @@ Query validation memastikan query tree structure valid dan semantically correct.
 - **IS_NOT_NULL_EXPR**: 1 child (column_ref)
 
 **Value Expression Nodes:**
-- **ARITH_EXPR**: 2 children (left, right). Value = operator ("+", "-", "*", "/", "%")
+
+- **ARITH_EXPR**: 2 children (left, right). Value = operator ("+", "-", "\*", "/", "%")
 
 **Other Nodes:**
+
 - **LIST**: 0+ children (list items)
 
 **DML Nodes:**
+
 - **UPDATE_QUERY**: ≥2 children (relation, assignments, optional filter)
 - **INSERT_QUERY**: 3 children (relation, column_list, values_clause)
 - **DELETE_QUERY**: 1-2 children (relation, optional filter)
 - **ASSIGNMENT**: 2 children (column_ref, value_expr)
 
 **Transaction Nodes:**
+
 - **BEGIN_TRANSACTION**: 0+ children (statements)
 - **COMMIT**: 0 children
 
 **Important Notes:**
 
-- Atomic nodes (IDENTIFIER, LITERAL_*) are leaf nodes with no children
+- Atomic nodes (IDENTIFIER, LITERAL\_\*) are leaf nodes with no children
 - Wrapper nodes (COLUMN_NAME, TABLE_NAME) wrap IDENTIFIER
 - COLUMN_REF represents column references (simple or qualified with table/alias)
 - FILTER has exactly 2 children: source + condition tree
