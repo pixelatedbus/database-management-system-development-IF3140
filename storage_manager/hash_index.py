@@ -1,4 +1,6 @@
 from collections import defaultdict
+import pickle
+import os
 
 class HashIndex:
 
@@ -14,11 +16,15 @@ class HashIndex:
         return self.index.get(key, [])
     
     def save(self, filepath: str):
-        #TODO: Save index to a file for persistance
-
-        return NotImplementedError("TODO")
+        #save index ke binary file agar persistence 
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, 'wb') as f:
+            pickle.dump(self.index, f)
     
     def load(self, filepath: str):
-        #TODO: load an index from a file for persistance
-
-        return NotImplementedError("TODO")
+        #Load index dari binary, jika tidak ada buat baru kosongan
+        if not os.path.exists(filepath):
+            self.index = defaultdict(list)
+            return
+        with open(filepath, 'rb') as f:
+            self.index = pickle.load(f)
