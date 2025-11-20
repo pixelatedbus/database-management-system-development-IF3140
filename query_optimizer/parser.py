@@ -4,7 +4,6 @@ from query_optimizer.tokenizer import Tokenizer
 from query_optimizer.query_tree import QueryTree
 from query_optimizer.query_token import Token, TokenType
 
-
 class ParserError(Exception):
     def __init__(self, message: str, token: Optional[Token] = None):
         if token:
@@ -14,7 +13,6 @@ class ParserError(Exception):
             )
         else:
             super().__init__(f"Parser Error: {message}")
-
 
 class Parser:
     def __init__(self, tokenizer: Tokenizer):
@@ -511,11 +509,13 @@ class Parser:
             exists_node.add_child(subquery)
             return exists_node
 
-        # Standard comparison / IN / NOT IN
+        # Standard comparison
         left_expr = self.parse_value_expr()
 
         # NOT IN
-        if self.match(TokenType.KEYWORD_NOT) and self.peek_token and self.peek_token.value.upper() == "IN":
+        if self.match(TokenType.KEYWORD_NOT) and self.peek_token and (
+            self.peek_token.type == TokenType.KEYWORD_IN or self.peek_token.value.upper() == "IN"
+        ):
             self.advance()
             self.advance()
             list_node = self.parse_in_list_or_subquery()
@@ -525,7 +525,7 @@ class Parser:
             return in_node
 
         # IN
-        if self.match(TokenType.IDENTIFIER) and self.match_value("IN"):
+        if self.match(TokenType.KEYWORD_IN) or (self.match(TokenType.IDENTIFIER) and self.match_value("IN")):
             self.advance()
             list_node = self.parse_in_list_or_subquery()
             in_node = QueryTree("IN_EXPR", "")
@@ -604,7 +604,6 @@ class Parser:
             comp_node.add_child(right_expr)
             return comp_node
 
-        # Fallback: lone expression considered comparison truthy
         return left_expr
 
     def parse_in_array(self) -> QueryTree:
@@ -754,3 +753,4 @@ class Parser:
         for child in children:
             node.add_child(child)
         return node
+    
