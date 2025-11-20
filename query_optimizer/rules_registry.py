@@ -9,6 +9,9 @@ from query_optimizer.seleksi_konjungtif import (
     cascade_filters,
     clone_tree
 )
+from query_optimizer.seleksi_proyeksi import (
+    seleksi_proyeksi
+)
 import random
 
 
@@ -43,10 +46,14 @@ def rule_seleksi_komutatif(query: ParsedQuery) -> ParsedQuery:
     result_tree = swap_filters(cloned)
     return ParsedQuery(result_tree, query.query)
 
+def rule_seleksi_proyeksi(query: ParsedQuery) -> ParsedQuery:
+    return seleksi_proyeksi(query)
+
 
 ALL_RULES = [
     ("seleksi_konjungtif", rule_seleksi_konjungtif),
     ("seleksi_komutatif", rule_seleksi_komutatif),
+    ("seleksi_proyeksi", rule_seleksi_proyeksi),
 ]
 
 
