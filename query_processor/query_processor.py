@@ -6,10 +6,10 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from misc import *
 from query_optimizer import *
-from adapter_ccm import AdapterCCM, AlgorithmType
-from adapter_storage import AdapterStorage
-from adapter_optimizer import AdapterOptimizer
-from query_execution import QueryExecution
+from .adapter_ccm import AdapterCCM, AlgorithmType
+from .adapter_storage import AdapterStorage
+from .adapter_optimizer import AdapterOptimizer
+from .query_execution import QueryExecution
 
 class Rows:
     def __init__(self, data: list, rows_count: int = 0):
