@@ -146,9 +146,6 @@ class CCManager:
         transaction.set_status(TransactionStatus.Terminated)
         self.log_handler.log_transaction_event(transaction_id, "TERMINATED")
         
-        # Remove transaction actions from schedule
-        self.schedule.remove_transaction_actions(transaction_id)
-    
     def set_algorithm(self, algorithm: AlgorithmType) -> None:
         """Set the concurrency control algorithm"""
         if algorithm == self.algorithm:
@@ -198,10 +195,7 @@ class CCManager:
         # Set status to aborted
         transaction.set_status(TransactionStatus.Aborted)
         self.log_handler.log_transaction_event(transaction_id, "ABORTED")
-        
-        # Remove transaction actions from schedule
-        self.schedule.remove_transaction_actions(transaction_id)
-    
+
     def get_transaction_status(self, transaction_id: int) -> Optional[TransactionStatus]:
         """Get the status of a transaction"""
         transaction = self._get_transaction(transaction_id)

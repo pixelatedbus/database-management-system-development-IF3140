@@ -5,7 +5,6 @@ from .base import ConcurrencyAlgorithm
 from ..transaction import Transaction
 from ..row import Row
 from ..action import Action
-from ..schedule import Schedule
 from ..log_handler import LogHandler
 from ..response import Response
 from ..enums import TransactionStatus, ActionType, ActionStatus
@@ -67,7 +66,6 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
         
         self.data_versions: Dict[str, List[DataVersion]] = {}       # Data store: menyimpan list versi untuk setiap object_id
         self.transaction_info: Dict[int, TransactionInfo] = {}      # Extended transaction info
-        self.schedule: Schedule = Schedule()                        # Schedule untuk manage blocked actions
         self.log_handler: Optional[LogHandler] = log_handler        # LogHandler untuk logging
         self.ts_counter: int = 0                                    # Global timestamp counter (untuk MV2PL dan SI)
         self.operation_count: int = 0                               # Operation counter (untuk MVTO rollback)
@@ -132,14 +130,6 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
         else:  # SNAPSHOT_ISOLATION
             success, value, message = self._read_snapshot(transaction, row, action)
         
-        # Update action status
-        if success:
-            action.mark_executed()
-            self.schedule.mark_ready(action)
-        else:
-            action.mark_blocked()
-            self.schedule.mark_blocked(action)
-        
         # Log access
         if self.log_handler:
             status = "SUCCESS" if success else "BLOCKED"
@@ -179,17 +169,6 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
             success, message = self._write_mv2pl(transaction, row, action)
         else:  # SNAPSHOT_ISOLATION
             success, message = self._write_snapshot(transaction, row, action)
-        
-        # Update action status
-        if success:
-            action.mark_executed()
-            self.schedule.mark_ready(action)
-        else:
-            if "ROLLBACK" in message or "ABORTED" in message:
-                action.mark_denied()
-            else:
-                action.mark_blocked()
-                self.schedule.mark_blocked(action)
         
         # Log access
         if self.log_handler:
@@ -247,9 +226,6 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
         # Cleanup berdasarkan variant
         if self.variant == MVCCVariant.MV2PL:
             self._release_all_locks(transaction.transaction_id)
-        
-        # Remove actions dari schedule
-        self.schedule.remove_transaction_actions(transaction.transaction_id)
         
         # Log event
         if self.log_handler:
