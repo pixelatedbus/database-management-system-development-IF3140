@@ -5,6 +5,7 @@ import os
 from typing import List
 import re
 from ast import literal_eval
+from fake_exec_result import ExecutionResult
 
 class logFile:
 
@@ -106,8 +107,26 @@ class logFile:
         def write_log(self, logItem: log):
             if(not self.path):
                self.make_new_file()
+            
+            try:
+                with open(self.path, 'a') as f:
+                    f.write(str(logItem) + '\n')
+            
+            except Exception as e:
+                print(f"Error writing log to file: {e}")
+        
+        # TODO: DISCUSS WITH QUERY PROCESSOR ON THE CLARITY OF ExecutionResult
+        def write_log_execRes(self, er: ExecutionResult):
 
-            with open(self.path, 'a') as f:
-                f.write(str(logItem) + '\n')
+            l = log(
+                transaction_id=er.transaction_id,
+                action=er.action,
+                timestamp=er.timestamp,
+                old_data=er.old_data,
+                new_data=er.new_data,
+                table_name=er.table_name
+            )
 
+            self.write_log(l)
 
+            pass
