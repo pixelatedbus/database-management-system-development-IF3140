@@ -4,6 +4,7 @@ import os
 import struct
 from typing import Any, Dict, List, Optional, Union, Tuple
 from .hash_index import HashIndex
+from .btree_index import BPlusTreeIndex
 
 from .models import (
     Condition,
@@ -867,7 +868,28 @@ class StorageManager:
             raise ValueError(f"Type {index_type} tidak ada")
 
         if index_type == "btree":
-            raise NotImplementedError("b+ tree index belum di implementasi")
+            index = BPlusTreeIndex(table, column, order=4)
+
+            index_file = self._get_index_file_path(table, column)
+            index.load(index_file)
+
+            table_file = self._get_table_file_path(table)
+            if os.path.exists(table_file):
+                record_id = 0
+                for row in read_binary_table_streaming(table_file):
+                    if column in row:
+                        key = row[column]
+                        key_str = str(key) if key is not None else "NULL"
+                        index.insert(key_str, record_id)
+                    record_id += 1
+
+                print(f"index dibuat dengan {record_id} entries")
+
+                index.save(index_file)
+            else:
+                print("tabel kosong, index tidak dibuat")
+            self.indexes[(table, column)] = index
+
         elif index_type == "hash":
             # bikin hash index baru
             index = HashIndex(table, column)
@@ -896,6 +918,21 @@ class StorageManager:
 
             # simpan index ke memory buat dipake nanti
             self.indexes[(table, column)] = index
+
+    def delete_index(self, table: str, column: str) -> None:
+        # hapus index dari tabel dan kolom tertentu
+        if (table, column) not in self.indexes:
+            raise ValueError(f"Index untuk {table}.{column} tidak ditemukan")
+
+        # hapus file index dari disk
+        index_file = self._get_index_file_path(table, column)
+        if os.path.exists(index_file):
+            os.remove(index_file)
+
+        # hapus index dari memory
+        del self.indexes[(table, column)]
+
+        print(f"index untuk {table}.{column} berhasil dihapus")
 
     def _get_index_file_path(self, table: str, column: str) -> str:
         # dapetin path file index
