@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import struct
+import pickle
 from typing import Any, Dict, List, Optional, Union, Tuple
 from .hash_index import HashIndex
 from .btree_index import BPlusTreeIndex
@@ -82,11 +83,22 @@ class StorageManager:
                 parts = name_part.split("_", 1)  # split jadi table dan column
                 if len(parts) == 2:
                     table, column = parts
-
-                    # load index
-                    index = HashIndex(table, column)
                     index_path = os.path.join(self.data_dir, index_file)
-                    index.load(index_path)
+
+                    # coba detect index type dari file content
+                    # load as pickle dan cek tipe object
+                    with open(index_path, 'rb') as f:
+                        loaded_index = pickle.load(f)
+
+                    # cek tipe index dari loaded object
+                    if hasattr(loaded_index, 'root'):  # BPlusTree has 'root' attribute
+                        # ini b+ tree
+                        index = BPlusTreeIndex(table, column)
+                        index.index = loaded_index
+                    else:
+                        # ini hash index (defaultdict)
+                        index = HashIndex(table, column)
+                        index.index = loaded_index
 
                     # simpan ke memory
                     self.indexes[(table, column)] = index
@@ -533,12 +545,21 @@ class StorageManager:
 
     def _find_usable_index(self, table: str, conditions: List[Condition]) -> Optional[Tuple[Any, Condition]]:
         # cari index yang bisa dipake buat optimasi query
-        # hash index cuma bisa dipake buat equality condition (operation = '=')
+        # hash index: cuma bisa dipake buat equality condition (operation = '=')
+        # b+ tree: bisa dipake buat equality dan range (=, <, <=, >, >=)
         for condition in conditions:
-            if condition.operation == '=':
-                index_key = (table, condition.column)
-                if index_key in self.indexes:
-                    return (self.indexes[index_key], condition)
+            index_key = (table, condition.column)
+            if index_key in self.indexes:
+                index = self.indexes[index_key]
+
+                # hash index: hanya untuk '='
+                if isinstance(index, HashIndex) and condition.operation == '=':
+                    return (index, condition)
+
+                # b+ tree: untuk '=', '<', '<=', '>', '>='
+                if isinstance(index, BPlusTreeIndex) and condition.operation in ['=', '<', '<=', '>', '>=']:
+                    return (index, condition)
+
         return None
 
     def _read_with_index(
@@ -548,14 +569,22 @@ class StorageManager:
         indexed_condition: Condition,
         all_conditions: List[Condition]
     ) -> List[Dict[str, Any]]:
-        # baca data pake hash index
+        # baca data pake index (hash atau b+ tree)
         # 1. pake index buat dapetin record_ids yang match
         # 2. load cuma rows yang match
         # 3. apply kondisi lain yang ga di-index
 
         # cari record_ids dari index
-        search_key = str(indexed_condition.operand) if indexed_condition.operand is not None else "NULL"
-        record_ids = index.search(search_key)
+        if isinstance(index, BPlusTreeIndex):
+            # b+ tree: support range operations
+            record_ids = index.search_by_operation(
+                indexed_condition.operation,
+                indexed_condition.operand
+            )
+        else:
+            # hash index: cuma equality
+            search_key = str(indexed_condition.operand) if indexed_condition.operand is not None else "NULL"
+            record_ids = index.search(search_key)
 
         if not record_ids:
             return []
@@ -818,9 +847,13 @@ class StorageManager:
             for i, row in enumerate(new_rows):
                 if column in row:
                     key = row[column]
-                    key_str = str(key) if key is not None else "NULL"
+                    # preserve key type buat b+ tree, convert to str buat hash
+                    if isinstance(index, BPlusTreeIndex):
+                        key_value = "NULL" if key is None else key
+                    else:
+                        key_value = str(key) if key is not None else "NULL"
                     record_id = starting_record_id + i
-                    index.insert(key_str, record_id)
+                    index.insert(key_value, record_id)
 
             # save updated index
             index_file = self._get_index_file_path(table, column)
@@ -834,8 +867,14 @@ class StorageManager:
         for table, column in indexes_to_rebuild:
             print(f"  rebuilding index {table}.{column}...")
 
-            # bikin index baru
-            index = HashIndex(table, column)
+            # dapetin index type yang lama buat bikin yang baru dengan tipe sama
+            old_index = self.indexes[(table, column)]
+
+            # bikin index baru dengan tipe yang sama
+            if isinstance(old_index, BPlusTreeIndex):
+                index = BPlusTreeIndex(table, column, order=old_index.order)
+            else:
+                index = HashIndex(table, column)
 
             # scan ulang semua rows
             table_file = self._get_table_file_path(table)
@@ -844,8 +883,12 @@ class StorageManager:
                 for row in read_binary_table_streaming(table_file):
                     if column in row:
                         key = row[column]
-                        key_str = str(key) if key is not None else "NULL"
-                        index.insert(key_str, record_id)
+                        # preserve key type buat b+ tree, convert to str buat hash
+                        if isinstance(index, BPlusTreeIndex):
+                            key_value = "NULL" if key is None else key
+                        else:
+                            key_value = str(key) if key is not None else "NULL"
+                        index.insert(key_value, record_id)
                     record_id += 1
 
                 # save index ke disk
@@ -868,7 +911,9 @@ class StorageManager:
             raise ValueError(f"Type {index_type} tidak ada")
 
         if index_type == "btree":
-            index = BPlusTreeIndex(table, column, order=4)
+            # use default order from BPlusTree implementation
+            # best practice: let the data structure use its tested default
+            index = BPlusTreeIndex(table, column)
 
             index_file = self._get_index_file_path(table, column)
             index.load(index_file)
@@ -879,8 +924,10 @@ class StorageManager:
                 for row in read_binary_table_streaming(table_file):
                     if column in row:
                         key = row[column]
-                        key_str = str(key) if key is not None else "NULL"
-                        index.insert(key_str, record_id)
+                        # b+ tree: keep original type biar comparison work (int, float)
+                        # cuma convert NULL
+                        key_value = "NULL" if key is None else key
+                        index.insert(key_value, record_id)
                     record_id += 1
 
                 print(f"index dibuat dengan {record_id} entries")

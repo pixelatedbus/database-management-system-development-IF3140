@@ -1,20 +1,139 @@
 import os
 import pickle
 
-class BPlusTreeIndex: 
+class BPlusTreeIndex:
     def __init__(self, table_name : str, column_name : str, order=5):
+        self.order = order
         self.index = BPlusTree(order)
         self.table_name = table_name
         self.column_name = column_name
 
-    def insert(self, key: str, record_id: int):
+    def insert(self, key, record_id: int):
         # masukin key-value pair ke index
+        # key bisa any type (int, float, str) biar comparison work correctly
         self.index.insert(key, record_id)
 
     def search(self, key):
-        # cari record_id yang match dengan key
-        return self.index.search(key)
-    
+        # cari record_id yang match dengan key (untuk '=')
+        # return list buat konsistensi dengan HashIndex
+        result = self.index.search(key)
+        return [result] if result is not None else []
+
+    def search_range(self, start_key, end_key):
+        # cari record_ids dalam range [start_key, end_key] inclusive
+        return self.index.search_range(start_key, end_key)
+
+    def search_by_operation(self, operation: str, operand):
+        # search berdasarkan operation type
+        # support: '=', '<', '<=', '>', '>='
+
+        if operation == '=':
+            return self.search(operand)
+        elif operation == '<':
+            # semua key < operand
+            return self._scan_less_than(operand)
+        elif operation == '<=':
+            # semua key <= operand
+            return self._scan_less_equal(operand)
+        elif operation == '>':
+            # semua key > operand
+            return self._scan_greater_than(operand)
+        elif operation == '>=':
+            # semua key >= operand
+            return self._scan_greater_equal(operand)
+        else:
+            return []
+
+    def _scan_less_than(self, target_key):
+        # scan semua keys < target_key
+        # traverse dari leftmost leaf sampai ketemu target
+        results = []
+        node = self._get_leftmost_leaf()
+
+        while node:
+            for i, key in enumerate(node.keys):
+                if key < target_key:
+                    results.append(node.children[i])
+                else:
+                    return results
+
+            # next leaf via linked list
+            if len(node.children) > len(node.keys):
+                node = node.children[-1]
+            else:
+                break
+
+        return results
+
+    def _scan_less_equal(self, target_key):
+        # scan semua keys <= target_key
+        results = []
+        node = self._get_leftmost_leaf()
+
+        while node:
+            for i, key in enumerate(node.keys):
+                if key <= target_key:
+                    results.append(node.children[i])
+                else:
+                    return results
+
+            # next leaf
+            if len(node.children) > len(node.keys):
+                node = node.children[-1]
+            else:
+                break
+
+        return results
+
+    def _scan_greater_than(self, target_key):
+        # scan semua keys > target_key
+        # find first key > target, then scan ke kanan
+        results = []
+        node = self._get_leftmost_leaf()
+
+        started = False
+        while node:
+            for i, key in enumerate(node.keys):
+                if key > target_key:
+                    started = True
+                    results.append(node.children[i])
+                elif started:
+                    # udah lewat range
+                    pass
+
+            # next leaf
+            if len(node.children) > len(node.keys):
+                node = node.children[-1]
+            else:
+                break
+
+        return results
+
+    def _scan_greater_equal(self, target_key):
+        # scan semua keys >= target_key
+        results = []
+        node = self._get_leftmost_leaf()
+
+        while node:
+            for i, key in enumerate(node.keys):
+                if key >= target_key:
+                    results.append(node.children[i])
+
+            # next leaf
+            if len(node.children) > len(node.keys):
+                node = node.children[-1]
+            else:
+                break
+
+        return results
+
+    def _get_leftmost_leaf(self):
+        # dapetin leftmost leaf node buat scanning
+        node = self.index.root
+        while not node.leaf:
+            node = node.children[0]
+        return node
+
     def save(self, filepath: str):
         # save index ke binary file pake pickle
         dir_path = os.path.dirname(filepath)
