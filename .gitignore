@@ -7,3 +7,4 @@ __pycache__/
 venv/
 env/
 ENV/
+query_optimizer/lokal/
