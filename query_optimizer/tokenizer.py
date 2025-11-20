@@ -1,5 +1,5 @@
 import re
-from .token import Token, TokenType
+from .query_token import Token, TokenType
 
 class Tokenizer:
 
@@ -19,14 +19,31 @@ class Tokenizer:
             (TokenType.KEYWORD_SELECT,    r'\bSELECT\b'),
             (TokenType.KEYWORD_FROM,      r'\bFROM\b'),
             (TokenType.KEYWORD_WHERE,     r'\bWHERE\b'),
+            (TokenType.KEYWORD_EXIST,     r'\bEXIST\b'),
             (TokenType.KEYWORD_JOIN,      r'\bJOIN\b'),
+            (TokenType.KEYWORD_INNER,     r'\bINNER\b'),
             (TokenType.KEYWORD_ON,        r'\bON\b'),
+            (TokenType.KEYWORD_IN,        r'\bIN\b'),
             (TokenType.KEYWORD_NATURAL,   r'\bNATURAL\b'),
             (TokenType.KEYWORD_UPDATE,    r'\bUPDATE\b'),
             (TokenType.KEYWORD_SET,       r'\bSET\b'),
             (TokenType.KEYWORD_INSERT,    r'\bINSERT\b'),
             (TokenType.KEYWORD_INTO,      r'\bINTO\b'),
             (TokenType.KEYWORD_DELETE,    r'\bDELETE\b'),
+            (TokenType.KEYWORD_CREATE,    r'\bCREATE\b'),
+            (TokenType.KEYWORD_TABLE,     r'\bTABLE\b'),
+            (TokenType.KEYWORD_DROP,      r'\bDROP\b'),
+            (TokenType.KEYWORD_CASCADE,   r'\bCASCADE\b'),
+            (TokenType.KEYWORD_RESTRICT,  r'\bRESTRICT\b'),
+            (TokenType.KEYWORD_AS,        r'\bAS\b'),
+            (TokenType.KEYWORD_EXISTS,    r'\bEXISTS\b'),
+            (TokenType.KEYWORD_BETWEEN,   r'\bBETWEEN\b'),
+            (TokenType.KEYWORD_IS,        r'\bIS\b'),
+            (TokenType.KEYWORD_LIKE,      r'\bLIKE\b'),
+            (TokenType.KEYWORD_FOREIGN,   r'\bFOREIGN\b'),
+            (TokenType.KEYWORD_PRIMARY,   r'\bPRIMARY\b'),
+            (TokenType.KEYWORD_KEY,       r'\bKEY\b'),
+            (TokenType.KEYWORD_REFERENCES,r'\bREFERENCES\b'),
             (TokenType.KEYWORD_LIMIT,     r'\bLIMIT\b'),
             (TokenType.KEYWORD_COMMIT,    r'\bCOMMIT\b'),
             (TokenType.KEYWORD_AND,       r'\bAND\b'),

@@ -4,7 +4,11 @@ Ini adalah rencana lanjutan untuk implementasi filter, Perkiraan dikerjakan di *
 
 **Key Design Decisions:**
 
-- **Source di awal:** Logical operators (AND/OR/NOT) menaruh source tree di child pertama untuk natural reading order
+- **Separate Operators:** Logical operators (AND/OR/NOT) menggunakan type OPERATOR dan OPERATOR_S, bukan FILTER
+- **OPERATOR:** Untuk nested logical operators tanpa explicit source (inherit dari parent)
+- **OPERATOR_S:** Untuk logical operators dengan explicit source tree di child pertama
+- **FILTER:** Hanya untuk conditional expressions (WHERE/IN/EXIST)
+- **Source di awal (OPERATOR_S):** Source tree ditempatkan di child[0] untuk natural reading order
 - **No duplication:** Menghindari duplikasi source tree dengan menempatkan source hanya sekali
 - **Nested operators:** Nested logical operators tidak perlu source sendiri (inherit dari parent)
 - **Special Keyword:** Perlukah dibuat special keyword seperti PARENT untuk filter paling awal ? sepertinya tidak perlu jadi untuk sekarang tidak dibuat.
@@ -14,14 +18,14 @@ Kalau ada saran / koreksi chat aja di grup atau pc
 
 ## Problem
 
-**Current Issue:** FILTER menggunakan string untuk kondisi kompleks (contoh: `"WHERE (age > 25 AND name = 'John') OR status = 'active'"`), yang menyulitkan query optimizer untuk:
+**Original Issue:** FILTER menggunakan string untuk kondisi kompleks (contoh: `"WHERE (age > 25 AND name = 'John') OR status = 'active'"`), yang menyulitkan query optimizer untuk:
 
 1. Melakukan selection pushdown
 2. Reorder conditions untuk performa
 3. Split/merge conditions (equivalency rules)
 4. Menentukan precedence dengan jelas (Sebenarnya lebih ke processor)
 
-**Proposed Solution:** Implementasi nested FILTER nodes dengan logical operators (AND/OR/NOT) sebagai tree structure, dengan **source tree di awal** untuk mengurangi overhead.
+**Solution Implemented:** Pemisahan logical operators menjadi OPERATOR/OPERATOR_S dan FILTER untuk conditional expressions, dengan tree structure yang jelas.
 
 ---
 
@@ -36,7 +40,7 @@ Kalau ada saran / koreksi chat aja di grup atau pc
 
 ## Implementation
 
-### Current Implementation
+### Implementation Sebelum Milestone 1
 
 **Structure:**
 
@@ -52,14 +56,14 @@ FILTER("WHERE (age > 25 AND name = 'John') OR status = 'active'")
 - Sulit untuk split/reorder
 - Precedence tidak eksplisit
 
-### Future Implementation
+### Implementasi sekarang
 
-**Structure (Source di Awal):**
+**Structure (OPERATOR_S with Source):**
 
 ```
-FILTER("OR")
+OPERATOR_S("OR")
 ├── RELATION("users")                # SOURCE - Child 0
-├── FILTER("AND")                    # Nested logical (no source)
+├── OPERATOR("AND")                  # Nested logical (no source)
 │   ├── FILTER("WHERE age > 25")
 │   └── FILTER("WHERE name = 'John'")
 └── FILTER("WHERE status = 'active'")
@@ -67,6 +71,7 @@ FILTER("OR")
 
 **Benefits:**
 
+- Clean separation: OPERATOR/OPERATOR_S untuk logic, FILTER untuk conditions
 - Kondisi atomic sudah separated
 - Tree structure mudah untuk manipulasi
 - Precedence jelas dari hierarchy
@@ -78,16 +83,16 @@ FILTER("OR")
 
 ## Design Details
 
-### 1. FILTER Node Types
+### 1. Node Types
 
-**A. Atomic FILTER**
+**A. Atomic FILTER (Conditional Expression)**
 
 ```python
 FILTER("WHERE column op value")
 └── <source_tree>  # 1 child
 ```
 
-Examples:
+Contoh:
 
 - `FILTER("WHERE id = 1")`
 - `FILTER("WHERE age > 25")`
@@ -108,84 +113,85 @@ FILTER("EXIST")
 └── <subquery_tree>  # 1 child
 ```
 
-**D. Logical AND FILTER**
+**D. OPERATOR_S (Logical AND/OR with Source)**
 
 ```python
-FILTER("AND")
-├── <source_tree>      # Child 0 - SOURCE (if present)
-├── FILTER(...)        # Child 1 - Condition 1
-├── FILTER(...)        # Child 2 - Condition 2
-└── FILTER(...)        # Child N - Condition N-1
-
-# OR nested (no source, inherit from parent)
-FILTER("AND")
-├── FILTER(...)        # All children are conditions
-├── FILTER(...)
-└── FILTER(...)
+OPERATOR_S("AND" | "OR")
+├── <source_tree>              # Child 0 - SOURCE (eksplisit)
+├── FILTER(...) | OPERATOR(...) | OPERATOR_S(...)  # Child 1 - Kondisi 1
+├── FILTER(...) | OPERATOR(...) | OPERATOR_S(...)  # Child 2 - Kondisi 2
+└── FILTER(...) | OPERATOR(...) | OPERATOR_S(...)  # Child N - Kondisi N-1
 ```
 
-**E. Logical OR FILTER**
+**Key Rules:**
+
+- Minimum 3 children (1 source + 2+ kondisi)
+- Child[0] HARUS operator yang menghasilkan source (RELATION, JOIN, SORT, PROJECT, OPERATOR_S, atau FILTER dengan children)
+- Child[0] TIDAK BOLEH OPERATOR (tidak menghasilkan data) atau FILTER leaf (tidak ada data)
+- Children[1..N] bisa FILTER, OPERATOR, atau OPERATOR_S
+
+**E. OPERATOR (Logical AND/OR/NOT without Explicit Source)**
 
 ```python
-FILTER("OR")
-├── <source_tree>      # Child 0 - SOURCE (if present)
-├── FILTER(...)        # Child 1 - Condition 1
-├── FILTER(...)        # Child 2 - Condition 2
-└── FILTER(...)        # Child N - Condition N-1
+# AND/OR - Nested logic (inherits source from parent)
+OPERATOR("AND" | "OR")
+├── FILTER(...) | OPERATOR(...) | OPERATOR_S(...)  # Child 0 - Kondisi 1
+├── FILTER(...) | OPERATOR(...) | OPERATOR_S(...)  # Child 1 - Kondisi 2
+└── FILTER(...) | OPERATOR(...) | OPERATOR_S(...)  # Child N - Kondisi N-1
 
-# OR nested (no source, inherit from parent)
-FILTER("OR")
-├── FILTER(...)        # All children are conditions
-├── FILTER(...)
-└── FILTER(...)
+# NOT - Operator negasi
+OPERATOR("NOT")
+└── FILTER(...) | OPERATOR(...) | OPERATOR_S(...)  # Tepat 1 child
 ```
 
-**F. Logical NOT FILTER**
+**Key Rules:**
 
-```python
-FILTER("NOT")
-└── FILTER(...)        # Exactly 1 child - condition to negate
-```
+- AND/OR: Minimum 2 children, semua harus FILTER/OPERATOR/OPERATOR_S
+- NOT: Tepat 1 child, harus FILTER/OPERATOR/OPERATOR_S
+- OPERATOR inherit data source dari parent (biasanya OPERATOR_S)
+- Semua children harus berupa kondisi (FILTER/OPERATOR/OPERATOR_S)
 
 ### 2. Validation Rules
 
-#### Rule 1: Atomic FILTER
+#### Rule 1: FILTER (Hanya Conditional Expressions)
 
-- **Value:** `"WHERE condition"`, `"IN column"`, `"EXIST"`
+- **Type:** `"FILTER"`
+- **Value:** `"WHERE condition"`, `"IN column"`, `"EXIST"` (satu atau beberapa kata)
+- **Pembatasan:** Value TIDAK BOLEH hanya `"AND"`, `"OR"`, atau `"NOT"` (gunakan OPERATOR/OPERATOR_S)
 - **Children:**
-  - 1 child: source tree (any operator)
-  - 2 children: source tree + value (ARRAY/RELATION/PROJECT)
+  - 1 child: source tree (operator apapun)
+  - 2 children: source tree + value (ARRAY/RELATION/PROJECT untuk IN/EXIST)
+  - 0 children: Invalid (FILTER harus punya source)
 
-#### Rule 2: Logical FILTER (AND/OR)
+#### Rule 2: OPERATOR_S (Logical AND/OR dengan Source Eksplisit)
 
-- **Value:** `"AND"` atau `"OR"` (single word)
-- **Children (dengan source):**
+- **Type:** `"OPERATOR_S"`
+- **Value:** `"AND"` atau `"OR"` (hanya satu kata)
+- **Children:**
   - Minimum 3 children (1 source + 2+ conditions)
-  - Child 1 MUST NOT be FILTER (it's the source)
-  - Children 2..N MUST all be FILTER nodes
-- **Children (nested, no source):**
-  - Minimum 2 children (2+ conditions)
-  - All children MUST be FILTER nodes
-  - Inherits source from parent logical FILTER
+  - **Child[0] (Source):** MUST be source-producing operator:
+    -  Allowed: RELATION, JOIN, SORT, PROJECT, OPERATOR_S, FILTER(≥1 children)
+    -  Rejected: OPERATOR (no data), FILTER(0 children / leaf)
+  - **Children[1..N] (Conditions):** MUST be FILTER, OPERATOR, or OPERATOR_S
+- **Semantics:** Applies logical operation on conditions using explicit source
 
-**Detection:** If child[0].type != "FILTER", it's a source. Otherwise, it's nested (no source).
+#### Rule 3: OPERATOR (Logical AND/OR/NOT tanpa Source)
 
-#### Rule 3: Logical NOT FILTER
-
-- **Value:** `"NOT"` (single word)
+- **Type:** `"OPERATOR"`
+- **Value:** `"AND"`, `"OR"`, atau `"NOT"` (hanya satu kata)
 - **Children:**
-  - Exactly 1 child
-  - Child MUST be FILTER node
-- **Semantics:** Negates the result of child condition
+  - **AND/OR:** Minimum 2 children, semua harus FILTER/OPERATOR/OPERATOR_S
+  - **NOT:** Tepat 1 child, harus FILTER/OPERATOR/OPERATOR_S
+- **Semantics:** Nested logical operations that inherit source from parent OPERATOR_S
 
 #### Rule 4: Precedence
 
-- Parentheses `()` (highest)
+- Parentheses `()` (tertinggi)
 - NOT
 - AND
-- OR (lowest)
+- OR (terendah)
 - `NOT A AND B OR C` = `((NOT A) AND B) OR C`
-- Parser handles precedence automatically
+- Parser handles precedence automatically with OPERATOR nesting
 
 ## Parser Guidelines
 
@@ -196,7 +202,7 @@ FILTER("NOT")
 3. AND
 4. OR (lowest precedence)
 
-**Parsing Algorithm for** `WHERE (age > 25 AND name = 'John') OR status = 'active'`
+**Algoritma Parsing untuk** `WHERE (age > 25 AND name = 'John') OR status = 'active'`
 
 ```
 Step 1: Split by OR → ["(age > 25 AND name = 'John')", "status = 'active'"]
@@ -210,56 +216,92 @@ Step 5: Build OR node with source + AND node + atomic FILTER
 
 ```
 # Simple AND (source di awal)
-FILTER("AND")
+OPERATOR_S("AND")
 ├── RELATION("users")               # SOURCE - Child 0
-├── FILTER("WHERE age > 25")        # Condition 1
-└── FILTER("WHERE name = 'John'")   # Condition 2
+├── FILTER("WHERE age > 25")        # Kondisi 1
+└── FILTER("WHERE name = 'John'")   # Kondisi 2
 
 # Simple OR (source di awal)
-FILTER("OR")
+OPERATOR_S("OR")
 ├── RELATION("users")               # SOURCE - Child 0
-├── FILTER("WHERE status = 'active'")    # Condition 1
-└── FILTER("WHERE status = 'pending'")   # Condition 2
+├── FILTER("WHERE status = 'active'")    # Kondisi 1
+└── FILTER("WHERE status = 'pending'")   # Kondisi 2
 
 # Complex: (age > 25 AND name = 'John') OR status = 'active'
-FILTER("OR")
-├── RELATION("users")               # SOURCE - Child 0
-├── FILTER("AND")                   # Nested (no source)
+OPERATOR_S("OR")
+├── RELATION("users")               # SOURCE - Child 0 (eksplisit)
+├── OPERATOR("AND")                 # Nested (no source, inherits from parent)
 │   ├── FILTER("WHERE age > 25")
 │   └── FILTER("WHERE name = 'John'")
 └── FILTER("WHERE status = 'active'")
 
 # With NOT
-FILTER("AND")
+OPERATOR_S("AND")
 ├── RELATION("users")               # SOURCE
 ├── FILTER("WHERE age > 25")
-└── FILTER("NOT")
+└── OPERATOR("NOT")
     └── FILTER("WHERE status = 'inactive'")
 
-# JOIN source dengan conditions dari multiple tables
-FILTER("AND")
+# JOIN source dengan kondisi dari multiple tables
+OPERATOR_S("AND")
 ├── JOIN("users.dept_id = dept.id") # SOURCE menghasilkan users + dept
 │   ├── RELATION("users")
 │   └── RELATION("dept")
-├── FILTER("WHERE users.age > 25")      # From users table
-└── FILTER("WHERE dept.budget > 100000") # From dept table
+├── FILTER("WHERE users.age > 25")      # Dari tabel users
+└── FILTER("WHERE dept.budget > 100000") # Dari tabel dept
 
-# Complete query with PROJECT
+# Query lengkap dengan PROJECT
 PROJECT("id, name")
-└── FILTER("AND")
-    ├── SORT("age DESC")            # SOURCE (sorted relation)
+└── OPERATOR_S("AND")
+    ├── SORT("age DESC")            # SOURCE (relation terurut)
     │   └── RELATION("users")
     ├── FILTER("WHERE age > 25")
     └── FILTER("WHERE salary > 50000")
 
 # Complex nested with NOT
-FILTER("AND")
+OPERATOR_S("AND")
 ├── RELATION("users")
 ├── FILTER("WHERE age > 25")
-└── FILTER("NOT")
-    └── FILTER("OR")
+└── OPERATOR("NOT")
+    └── OPERATOR("OR")              # Nested OR inherits source
         ├── FILTER("WHERE status = 'inactive'")
         └── FILTER("WHERE deleted = true")
+
+# Nested OPERATOR_S as source (valid)
+OPERATOR_S("OR")
+├── OPERATOR_S("AND")               # SOURCE - menghasilkan data terfilter
+│   ├── RELATION("users")
+│   ├── FILTER("WHERE age > 18")
+│   └── FILTER("WHERE verified = true")
+├── FILTER("WHERE status = 'admin'")
+└── FILTER("WHERE role = 'moderator'")
+
+# OPERATOR sebagai child (valid - kondisi, bukan source)
+OPERATOR_S("AND")
+├── RELATION("users")               # SOURCE
+├── OPERATOR("OR")                  # Kondisi (inherit source)
+│   ├── FILTER("WHERE status = 'active'")
+│   └── FILTER("WHERE status = 'pending'")
+└── FILTER("WHERE age > 25")
+
+# FILTER sebagai source (valid - karena bukan leaf)
+OPERATOR_S("AND")
+├── FILTER("WHERE verified = true")
+│   └── RELATION("users")
+├── FILTER("WHERE status = 'admin'")
+└── FILTER("WHERE age > 25")
 ```
+
+**NOTE** untuk filter sebagai source kalau filternya bertingkat kek gini:
+```
+# FILTER sebagai source (valid - karena bukan leaf)
+OPERATOR_S("AND")
+├── FILTER("WHERE verified = true")
+│   └── FILTER("WHERE role = 'moderator'")
+│       └── RELATION("users")
+├── FILTER("WHERE status = 'admin'")
+└── FILTER("WHERE age > 25")
+```
+kalau RELATION di sana ga ada bakal keliatan bener untuk implementasi **sekarang** sebelum milestone-2. Nanti bakal kutambahin
 
 ---
