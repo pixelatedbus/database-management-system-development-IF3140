@@ -19,22 +19,35 @@ class Individual:
     Kromosom dalam populasi GA yang merepresentasikan satu solusi query.
     
     Attributes:
-        rule_params: Dict[rule_name, Dict[node_id, params]]
-                     Example: {
-                         'rule_1': {42: [2, [0,1]], 57: [1, 0]},
-                         'rule_2': {123: {...}},
-                         ...
-                     }
+        operation_params: Dict[operation_type, Dict[node_id, order]]
+                         Example: {
+                             'filter_params': {
+                                 42: [2, [0, 1]],  # Unified order: cond2 single, [0,1] grouped
+                                 57: [1, 0]        # All singles
+                             },
+                             'join_params': {}
+                         }
         fitness: Fitness value (lower is better)
+    
+    Unified Order Format:
+        - Type: list[int | list[int]]
+        - int: single condition (akan di-cascade)
+        - list[int]: grouped conditions (tetap dalam AND)
+        
+        Examples:
+        - [0, 1, 2]: All singles, full cascade
+        - [2, 0, 1]: Reordered, all singles
+        - [2, [0, 1]]: cond2 single, [0,1] grouped
+        - [[0, 1, 2]]: All grouped (no cascade)
     """
     
     def __init__(
         self, 
-        rule_params: dict[str, dict[int, Any]],
+        operation_params: dict[str, dict[int, Any]],
         base_query: ParsedQuery,
         lazy_eval: bool = False
     ):
-        self.rule_params = rule_params
+        self.operation_params = operation_params
         self.base_query = base_query
         self._query_cache = None
         self.fitness: float | None = None
@@ -50,33 +63,51 @@ class Individual:
         return self._query_cache
     
     def _apply_transformations(self, base_query: ParsedQuery) -> ParsedQuery:
-        """Terapkan transformations ke query berdasarkan rule params."""
+        """
+        Terapkan transformations ke query berdasarkan operation params.
+        
+        Unified order format [2, [0,1]] sudah mengandung:
+        - Reordering (urutan): 2 dulu, lalu 0&1
+        - Cascading (grouping): 2 single, [0,1] grouped
+        """
         cloned_tree = clone_tree(base_query.query_tree)
         current_query = ParsedQuery(cloned_tree, base_query.query)
         
-        # Apply Rule 1 with integrated reordering (Seleksi Konjungtif)
-        # Rule 1 now handles both reordering (rule_2) and cascading
-        if 'rule_1' in self.rule_params:
+        # Apply filter operations dengan unified order format
+        if 'filter_params' in self.operation_params and self.operation_params['filter_params']:
+            # Uncascade existing filters first
             query_and = uncascade_filters(current_query)
-            if self.rule_params['rule_1']:
-                # Check if we have rule_2 params for reordering
-                reorder_params = self.rule_params.get('rule_2', {})
-                if reorder_params:
-                    # Apply reordering first, then cascade
-                    query_and = reorder_and_conditions(query_and, operator_orders=reorder_params)
-                current_query = cascade_filters(query_and, operator_orders=self.rule_params['rule_1'])
+            
+            # Extract unified orders
+            unified_orders = self.operation_params['filter_params']
+            
+            # Step 1: Apply reordering (flatten order untuk reorder_and_conditions)
+            reorder_orders = {}
+            for node_id, order in unified_orders.items():
+                # Flatten to get pure permutation
+                flat = []
+                for item in order:
+                    if isinstance(item, list):
+                        flat.extend(item)
+                    else:
+                        flat.append(item)
+                reorder_orders[node_id] = flat
+            
+            if reorder_orders:
+                query_and = reorder_and_conditions(query_and, operator_orders=reorder_orders)
+            
+            # Step 2: Apply cascading dengan grouping structure
+            if unified_orders:
+                current_query = cascade_filters(query_and, operator_orders=unified_orders)
             else:
                 current_query = query_and
-        # Apply Rule 2 standalone if Rule 1 is not present
-        elif 'rule_2' in self.rule_params and self.rule_params['rule_2']:
-            current_query = reorder_and_conditions(current_query, operator_orders=self.rule_params['rule_2'])
         
-        # TODO: Apply other rules (rule_3, rule_4, etc.) when implemented
+        # TODO: Apply join operations when implemented
         
         return current_query
     
     def __repr__(self):
-        return f"Individual(fitness={self.fitness}, params={self.rule_params})"
+        return f"Individual(fitness={self.fitness}, params={self.operation_params})"
 
 
 class GeneticOptimizer:
@@ -184,16 +215,16 @@ class GeneticOptimizer:
     
     def _analyze_query_for_rules(self, query: ParsedQuery) -> dict[str, dict[int, Any]]:
         """
-        Analisa query untuk semua rules yang ter-register.
+        Analisa query untuk semua operations yang ter-register.
         
         Returns:
-            Dict[rule_name, Dict[node_id, metadata]]
+            Dict[operation_name, Dict[node_id, metadata]]
         """
         manager = get_rule_params_manager()
         analysis_results = {}
         
-        for rule_name in manager.get_registered_rules():
-            analysis_results[rule_name] = manager.analyze_query(query, rule_name)
+        for operation_name in manager.get_registered_operations():
+            analysis_results[operation_name] = manager.analyze_query(query, operation_name)
         
         return analysis_results
     
@@ -202,21 +233,21 @@ class GeneticOptimizer:
         base_query: ParsedQuery,
         rule_analysis: dict[str, dict[int, Any]]
     ) -> list[Individual]:
-        """Inisialisasi populasi dengan random params untuk semua rules."""
+        """Inisialisasi populasi dengan random params untuk semua operations."""
         population = []
         manager = get_rule_params_manager()
         
         for _ in range(self.population_size):
-            # Generate random params untuk setiap rule
-            rule_params = {}
+            # Generate random params untuk setiap operation
+            operation_params = {}
             
-            for rule_name, analysis_data in rule_analysis.items():
-                rule_params[rule_name] = {}
+            for operation_name, analysis_data in rule_analysis.items():
+                operation_params[operation_name] = {}
                 for node_id, metadata in analysis_data.items():
-                    params = manager.generate_random_params(rule_name, metadata)
-                    rule_params[rule_name][node_id] = params
+                    params = manager.generate_random_params(operation_name, metadata)
+                    operation_params[operation_name][node_id] = params
             
-            individual = Individual(rule_params, base_query)
+            individual = Individual(operation_params, base_query)
             population.append(individual)
         
         return population
@@ -241,19 +272,19 @@ class GeneticOptimizer:
         """
         import copy
         
-        # Simple uniform crossover per rule
+        # Simple uniform crossover per operation
         child1_params = {}
         child2_params = {}
         
-        all_rules = set(parent1.rule_params.keys()) | set(parent2.rule_params.keys())
+        all_operations = set(parent1.operation_params.keys()) | set(parent2.operation_params.keys())
         
-        for rule_name in all_rules:
+        for operation_name in all_operations:
             if random.random() < 0.5:
-                child1_params[rule_name] = copy.deepcopy(parent1.rule_params.get(rule_name, {}))
-                child2_params[rule_name] = copy.deepcopy(parent2.rule_params.get(rule_name, {}))
+                child1_params[operation_name] = copy.deepcopy(parent1.operation_params.get(operation_name, {}))
+                child2_params[operation_name] = copy.deepcopy(parent2.operation_params.get(operation_name, {}))
             else:
-                child1_params[rule_name] = copy.deepcopy(parent2.rule_params.get(rule_name, {}))
-                child2_params[rule_name] = copy.deepcopy(parent1.rule_params.get(rule_name, {}))
+                child1_params[operation_name] = copy.deepcopy(parent2.operation_params.get(operation_name, {}))
+                child2_params[operation_name] = copy.deepcopy(parent1.operation_params.get(operation_name, {}))
         
         # Lazy evaluation
         child1 = Individual(child1_params, base_query, lazy_eval=True)
@@ -273,21 +304,21 @@ class GeneticOptimizer:
         import copy
         
         # Shallow copy dulu (fast)
-        mutated_params = {k: v.copy() for k, v in individual.rule_params.items()}
+        mutated_params = {k: v.copy() for k, v in individual.operation_params.items()}
         
         if mutated_params:
             manager = get_rule_params_manager()
-            rule_name = random.choice(list(mutated_params.keys()))
-            node_params = mutated_params[rule_name]
+            operation_name = random.choice(list(mutated_params.keys()))
+            node_params = mutated_params[operation_name]
             
             if node_params:
                 node_id = random.choice(list(node_params.keys()))
-                # Deep copy hanya rule yang dimutate
-                mutated_params[rule_name] = copy.deepcopy(mutated_params[rule_name])
-                # Use rule-specific mutation
-                mutated_params[rule_name][node_id] = manager.mutate_params(
-                    rule_name,
-                    mutated_params[rule_name][node_id]
+                # Deep copy hanya operation yang dimutate
+                mutated_params[operation_name] = copy.deepcopy(mutated_params[operation_name])
+                # Use operation-specific mutation
+                mutated_params[operation_name][node_id] = manager.mutate_params(
+                    operation_name,
+                    mutated_params[operation_name][node_id]
                 )
         
         # Lazy evaluation
@@ -297,7 +328,7 @@ class GeneticOptimizer:
         """Dapatkan statistik optimasi."""
         return {
             'best_fitness': self.best_fitness,
-            'best_params': self.best_individual.rule_params if self.best_individual else None,
+            'best_params': self.best_individual.operation_params if self.best_individual else None,
             'generations': len(self.history),
             'history': self.history
         }
@@ -314,24 +345,22 @@ class GeneticOptimizer:
         print(f"Best Fitness: {self.best_fitness:.2f}")
         
         if self.best_individual:
-            print(f"\nBest Rule Parameters:")
-            for rule_name, node_params in self.best_individual.rule_params.items():
-                print(f"\n  {rule_name}:")
-                for node_id, params in node_params.items():
-                    print(f"    Node {node_id}: {params}")
-                    # Special formatting for rule_1
-                    if rule_name == 'rule_1' and isinstance(params, list):
+            print(f"\nBest Operation Parameters:")
+            for operation_name, node_params in self.best_individual.operation_params.items():
+                print(f"\n  {operation_name}:")
+                for node_id, order in node_params.items():
+                    print(f"    Node {node_id}: {order}")
+                    # Special formatting for filter_params (unified order format)
+                    if operation_name == 'filter_params' and isinstance(order, list):
+                        # Show the unified order explanation
                         explanations = []
-                        for item in params:
+                        for item in order:
                             if isinstance(item, list):
                                 explanations.append(f"({', '.join(map(str, item))} dalam AND)")
                             else:
                                 explanations.append(f"{item} single")
                         if explanations:
-                            print(f"      → {' -> '.join(explanations)}")
-                    # Special formatting for rule_2
-                    elif rule_name == 'rule_2' and isinstance(params, list):
-                        print(f"      → Reorder: {params}")
+                            print(f"      → Order: {' -> '.join(explanations)}")
         
         print("\nProgress:")
         print("Gen | Best    | Average | Worst")

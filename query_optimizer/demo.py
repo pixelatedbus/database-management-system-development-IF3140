@@ -189,7 +189,7 @@ def demo_genetic_with_rules():
     print(f"Population Size: 20")
     print(f"Generations: 10")
     print(f"Mutation Rate: 0.2")
-    print(f"Using Rule 1 (Seleksi Konjungtif) + Rule 2 (Seleksi Komutatif)")
+    print(f"Using Unified Filter Parameters (combines reordering and cascading)")
     
     ga = GeneticOptimizer(
         population_size=20,
@@ -218,12 +218,13 @@ def demo_genetic_with_rules():
     
     if stats['best_params']:
         print("\nBest Parameters Found:")
-        for rule_name, node_params in stats['best_params'].items():
+        for param_type, node_params in stats['best_params'].items():
             if node_params:
-                print(f"\n  {rule_name}:")
+                print(f"\n  {param_type}:")
                 for node_id, params in node_params.items():
                     print(f"    Node {node_id}: {params}")
-                    if rule_name == 'rule_1' and isinstance(params, list):
+                    if param_type == 'filter_params' and isinstance(params, list):
+                        # Unified format: explains both reorder and cascade
                         explanations = []
                         for item in params:
                             if isinstance(item, list):
@@ -232,8 +233,7 @@ def demo_genetic_with_rules():
                                 explanations.append(f"{item} single")
                         if explanations:
                             print(f"      → {' -> '.join(explanations)}")
-                    elif rule_name == 'rule_2' and isinstance(params, list):
-                        print(f"      → Reorder sequence: {params}")
+                            print(f"      → Unified format combines reordering and cascading")
     
     print("\n" + "="*70)
     print("Fitness Progress")
@@ -258,11 +258,13 @@ def demo_genetic_with_rules():
     
     print_separator("DEMO 4 COMPLETED")
     print("\nKey Insights:")
-    print("- Rule 2 (Reorder) is applied BEFORE Rule 1 (Cascade) when both present")
+    print("- Unified filter_params format combines reordering and cascading in one parameter")
     print("- Genetic Algorithm explores different combinations of:")
-    print("  * Condition reordering (Rule 2)")
-    print("  * Cascade grouping patterns (Rule 1)")
+    print("  * Condition reordering (position in list)")
+    print("  * Cascade grouping patterns (int vs list[int])")
     print("- Best solution balances tree structure for optimal execution")
+    print("- Example: [2, [0,1]] means condition 2 cascades as single filter,")
+    print("           then conditions 0 and 1 stay grouped in AND operator")
     
     return optimized_query
 
