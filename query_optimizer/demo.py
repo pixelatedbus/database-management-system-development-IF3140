@@ -36,117 +36,237 @@ def print_help():
     print("Usage:")
     print("  python -m query_optimizer.demo 1  # Run demo parse")
     print("  python -m query_optimizer.demo 2  # Run demo optimized")
+    print("  python -m query_optimizer.demo 3  # Run demo rule 1 (cascade filters)")
+    print("  python -m query_optimizer.demo 4  # Run demo genetic with Rule 1 + Rule 2")
     print_separator()
 
-
 def demo_parse():
-    """Demo 1: Basic optimization tanpa GA"""
-    print_separator("DEMO 1: Basic Query Optimization")
-    
-    engine = OptimizationEngine()
-    
-    # Parse query dengan multiple conditions
-    sql = "SELECT id, name, email FROM users WHERE age > 25 AND status = 'active' AND city = 'Jakarta'"
-    print(f"\nOriginal SQL:\n{sql}")
-    
-    query = engine.parse_query(sql)
-    
-    print("\n Query Tree Structure:")
-    print_query_tree(query.query_tree)
-    
-    # Calculate cost
-    cost = engine.get_cost(query)
-    print(f"\n Estimated Cost: {cost}")
-    
-    return query
-
+    pass
 
 def demo_optimized():
-    """Demo 2: Optimization menggunakan Genetic Algorithm"""
-    print_separator("DEMO 2: Genetic Algorithm Optimization")
+    pass
+
+def demo_rule_1():
+    """Demo 3: Rule 1 - Seleksi Konjungtif (Cascade Filters)"""
+    print_separator("DEMO 3: Rule 1 - Seleksi Konjungtif")
     
-    engine = OptimizationEngine()
-    
-    # Query yang lebih kompleks untuk optimization
-    sql = "SELECT * FROM users WHERE age > 25 AND name = 'John' AND status = 'active' AND city = 'Jakarta'"
-    print(f"\nOriginal SQL:\n{sql}")
-    
-    # Manual ParsedQuery dengan struktur AND yang benar untuk GA
     from query_optimizer.query_tree import QueryTree
     from query_optimizer.optimization_engine import ParsedQuery
-    
-    # Build query tree manually with proper AND structure
-    # PROJECT
-    #   FILTER(AND)
-    #     RELATION(users)
-    #     FILTER(age > 25)
-    #     FILTER(name = John)
-    #     FILTER(status = active)
-    #     FILTER(city = Jakarta)
-    
-    relation = QueryTree("RELATION", "users")
-    filter1 = QueryTree("FILTER", "age > 25")
-    filter2 = QueryTree("FILTER", "name = John")
-    filter3 = QueryTree("FILTER", "status = active")
-    filter4 = QueryTree("FILTER", "city = Jakarta")
-    
-    filter_and = QueryTree("FILTER", "AND")
-    filter_and.add_child(relation)
-    filter_and.add_child(filter1)
-    filter_and.add_child(filter2)
-    filter_and.add_child(filter3)
-    filter_and.add_child(filter4)
-    
-    project = QueryTree("PROJECT", "*")
-    project.add_child(filter_and)
-    
-    query = ParsedQuery(project, sql)
-    
-    print("\n Original Query Tree:")
-    print_query_tree(query.query_tree)
-    
-    original_cost = engine.get_cost(query)
-    print(f"\n Original Cost: {original_cost}")
-    
-    # Setup Genetic Algorithm via OptimizationEngine
-    print("\n Running Genetic Algorithm...")
-    print("Parameters:")
-    print("  - Population Size: 30")
-    print("  - Generations: 50")
-    print("  - Mutation Rate: 0.15")
-    print("  - Crossover Rate: 0.8")
-    print("  - Elitism: 3")
-    
-    # Use OptimizationEngine.optimize_query() with GA
-    optimized_query = engine.optimize_query(
-        query,
-        use_genetic=True,
-        population_size=30,
-        generations=50,
-        mutation_rate=0.15,
-        crossover_rate=0.8,
-        elitism=3
+    from query_optimizer.rule_1 import (
+        cascade_filters,
+        analyze_and_operators,
+        generate_random_rule_1_params,
+        seleksi_konjungtif,
+        uncascade_filters
     )
     
-    print("\n Optimized Query Tree:")
+    # Build query with FILTER + OPERATOR(AND)
+    # FILTER
+    # ├── RELATION("users")
+    # └── OPERATOR("AND")
+    #     ├── COMPARISON(">") [age > 25]
+    #     ├── COMPARISON("=") [status = 'active']
+    #     └── COMPARISON("=") [city = 'Jakarta']
+    
+    print("\nBuilding query with conjunctive conditions...")
+    
+    relation = QueryTree("RELATION", "users")
+    
+    comp1 = QueryTree("COMPARISON", ">")  # age > 25
+    comp2 = QueryTree("COMPARISON", "=")  # status = 'active'
+    comp3 = QueryTree("COMPARISON", "=")  # city = 'Jakarta'
+    
+    and_operator = QueryTree("OPERATOR", "AND")
+    and_operator.add_child(comp1)
+    and_operator.add_child(comp2)
+    and_operator.add_child(comp3)
+    
+    filter_node = QueryTree("FILTER")
+    filter_node.add_child(relation)
+    filter_node.add_child(and_operator)
+    
+    query = ParsedQuery(filter_node, "SELECT * FROM users WHERE age > 25 AND status = 'active' AND city = 'Jakarta'")
+    
+    print("\nOriginal Query Tree (with OPERATOR(AND)):")
+    print_query_tree(query.query_tree)
+    
+    # Analyze AND operators
+    print("\nAnalyzing AND operators...")
+    operators = analyze_and_operators(query)
+    print(f"Found {len(operators)} AND operator(s):")
+    for op_id, num_conditions in operators.items():
+        print(f"  - Operator ID {op_id}: {num_conditions} conditions")
+    
+    # Demo 1: Cascade with default order (all single)
+    print("\n" + "="*70)
+    print("Demo 3a: Cascade all conditions (default order)")
+    print("="*70)
+    
+    cascaded = seleksi_konjungtif(query)
+    
+    print("\nCascaded Query Tree (fully cascaded):")
+    print_query_tree(cascaded.query_tree)
+    
+    # Demo 2: Cascade with mixed order
+    print("\n" + "="*70)
+    print("Demo 3b: Cascade with mixed order [2, [0, 1]]")
+    print("="*70)
+    print("This means: condition2 single, then (condition0 AND condition1) grouped")
+    
+    # Generate operator_orders for mixed cascade
+    operator_orders = {and_operator.id: [2, [0, 1]]}
+    mixed_cascaded = cascade_filters(query, operator_orders)
+    
+    print("\nMixed Cascaded Query Tree:")
+    print_query_tree(mixed_cascaded.query_tree)
+    
+    # Demo 3: Random order
+    print("\n" + "="*70)
+    print("Demo 3c: Cascade with random order")
+    print("="*70)
+    
+    random_order = generate_random_rule_1_params(3)
+    print(f"Generated random order: {random_order}")
+    
+    operator_orders_random = {and_operator.id: random_order}
+    random_cascaded = cascade_filters(query, operator_orders_random)
+    
+    print("\nRandom Order Cascaded Query Tree:")
+    print_query_tree(random_cascaded.query_tree)
+    
+    # Demo 4: Uncascade back to AND
+    print("\n" + "="*70)
+    print("Demo 3d: Uncascade back to OPERATOR(AND)")
+    print("="*70)
+    
+    uncascaded = uncascade_filters(cascaded)
+    
+    print("\nUncascaded Query Tree (back to AND structure):")
+    print_query_tree(uncascaded.query_tree)
+    
+    print_separator("DEMO 3 COMPLETED")
+    return query
+
+def demo_genetic_with_rules():
+    """Demo 4: Genetic Optimizer with Rule 1 + Rule 2 Integration"""
+    print_separator("DEMO 4: Genetic Optimizer with Rule 1 + Rule 2")
+    
+    from query_optimizer.query_tree import QueryTree
+    from query_optimizer.optimization_engine import ParsedQuery
+    from query_optimizer.genetic_optimizer import GeneticOptimizer
+    
+    # Build query with multiple AND conditions
+    print("\nBuilding query with 4 conjunctive conditions...")
+    
+    relation = QueryTree("RELATION", "orders")
+    
+    comp1 = QueryTree("COMPARISON", ">")   # amount > 1000
+    comp2 = QueryTree("COMPARISON", "=")   # status = 'pending'
+    comp3 = QueryTree("COMPARISON", "<")   # date < '2024-01-01'
+    comp4 = QueryTree("COMPARISON", "!=")  # customer_id != null
+    
+    and_operator = QueryTree("OPERATOR", "AND")
+    and_operator.add_child(comp1)
+    and_operator.add_child(comp2)
+    and_operator.add_child(comp3)
+    and_operator.add_child(comp4)
+    
+    filter_node = QueryTree("FILTER")
+    filter_node.add_child(relation)
+    filter_node.add_child(and_operator)
+    
+    query = ParsedQuery(
+        filter_node,
+        "SELECT * FROM orders WHERE amount > 1000 AND status = 'pending' AND date < '2024-01-01' AND customer_id != null"
+    )
+    
+    print("\nOriginal Query Tree:")
+    print_query_tree(query.query_tree)
+    
+    print("\n" + "="*70)
+    print("Running Genetic Optimizer...")
+    print("="*70)
+    print(f"Population Size: 20")
+    print(f"Generations: 10")
+    print(f"Mutation Rate: 0.2")
+    print(f"Using Unified Filter Parameters (combines reordering and cascading)")
+    
+    ga = GeneticOptimizer(
+        population_size=20,
+        generations=10,
+        mutation_rate=0.2,
+        crossover_rate=0.8,
+        elitism=2,
+    )
+    
+    optimized_query = ga.optimize(query)
+    
+    print("\n" + "="*70)
+    print("Optimization Results")
+    print("="*70)
+    
+    print("\nOptimized Query Tree:")
     print_query_tree(optimized_query.query_tree)
     
-    optimized_cost = engine.get_cost(optimized_query)
-    print(f"\n Optimized Cost: {optimized_cost}")
+    print("\n" + "="*70)
+    print("Statistics")
+    print("="*70)
     
-    # Show improvement
-    improvement = original_cost - optimized_cost
-    improvement_pct = (improvement / original_cost * 100) if original_cost > 0 else 0
+    stats = ga.get_statistics()
+    print(f"\nBest Fitness: {stats['best_fitness']:.2f}")
+    print(f"Total Generations: {stats['generations']}")
     
-    print(f"\n Improvement:")
-    print(f"  - Cost Reduction: {improvement:.2f}")
-    print(f"  - Percentage: {improvement_pct:.2f}%")
+    if stats['best_params']:
+        print("\nBest Parameters Found:")
+        for param_type, node_params in stats['best_params'].items():
+            if node_params:
+                print(f"\n  {param_type}:")
+                for node_id, params in node_params.items():
+                    print(f"    Node {node_id}: {params}")
+                    if param_type == 'filter_params' and isinstance(params, list):
+                        # Unified format: explains both reorder and cascade
+                        explanations = []
+                        for item in params:
+                            if isinstance(item, list):
+                                explanations.append(f"({', '.join(map(str, item))} grouped)")
+                            else:
+                                explanations.append(f"{item} single")
+                        if explanations:
+                            print(f"      → {' -> '.join(explanations)}")
+                            print(f"      → Unified format combines reordering and cascading")
     
-    print("\n Note: For detailed GA statistics, access the GeneticOptimizer directly.")
-    print("      This demo uses the simplified OptimizationEngine.optimize_query() API.")
+    print("\n" + "="*70)
+    print("Fitness Progress")
+    print("="*70)
+    print("\nGen | Best    | Average | Worst")
+    print("----|---------|---------|--------")
+    
+    for record in stats['history'][::max(1, len(stats['history'])//5)]:  # Show 5 samples
+        print(f"{record['generation']:3d} | "
+              f"{record['best_fitness']:7.2f} | "
+              f"{record['avg_fitness']:7.2f} | "
+              f"{record['worst_fitness']:7.2f}")
+    
+    # Show last generation
+    if stats['history']:
+        last = stats['history'][-1]
+        if last not in stats['history'][::max(1, len(stats['history'])//5)]:
+            print(f"{last['generation']:3d} | "
+                  f"{last['best_fitness']:7.2f} | "
+                  f"{last['avg_fitness']:7.2f} | "
+                  f"{last['worst_fitness']:7.2f}")
+    
+    print_separator("DEMO 4 COMPLETED")
+    print("\nKey Insights:")
+    print("- Unified filter_params format combines reordering and cascading in one parameter")
+    print("- Genetic Algorithm explores different combinations of:")
+    print("  * Condition reordering (position in list)")
+    print("  * Cascade grouping patterns (int vs list[int])")
+    print("- Best solution balances tree structure for optimal execution")
+    print("- Example: [2, [0,1]] means condition 2 cascades as single filter,")
+    print("           then conditions 0 and 1 stay grouped in AND operator")
     
     return optimized_query
-
 
 def main():
     """Main program"""
@@ -166,6 +286,8 @@ def main():
             print("\nUsage:")
             print("  python -m query_optimizer.demo 1  # Run demo parse")
             print("  python -m query_optimizer.demo 2  # Run demo optimized")
+            print("  python -m query_optimizer.demo 3  # Run demo rule 1")
+            print("  python -m query_optimizer.demo 4  # Run demo genetic")
             return
     else:
         demo_num = 0
@@ -177,6 +299,10 @@ def main():
         elif demo_num == 2:
             demo_optimized()
             print_separator("DEMO COMPLETED")
+        elif demo_num == 3:
+            demo_rule_1()
+        elif demo_num == 4:
+            demo_genetic_with_rules()
         else:
             print_help()
         

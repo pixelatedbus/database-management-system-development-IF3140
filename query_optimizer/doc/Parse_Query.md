@@ -41,7 +41,7 @@ Dokumen ini berisi rencana untuk merombak parser query optimizer agar memiliki s
 <literal>        ::= <number> | <string> | <boolean> | <null>
 
 # Operators
-<comp_op>        ::= '=' | '<>' | '!=' | '>' | '>=' | '<' | '<=' | 'LIKE' | 'ILIKE'
+<comp_op>        ::= '=' | '<>' | '!=' | '>' | '>=' | '<' | '<='
 <arith_op>       ::= '+' | '-' | '*' | '/' | '%'
 <logical_op>     ::= 'AND' | 'OR' | 'NOT'
 
@@ -201,7 +201,7 @@ Dokumen ini berisi rencana untuk merombak parser query optimizer agar memiliki s
 - `PROJECT` - SELECT clause dengan column references
 - `FILTER` - WHERE clause container dengan explicit source
 - `OPERATOR` - Logical operators (AND/OR/NOT)
-- `SORT` - ORDER BY dengan order items
+- `SORT` - ORDER BY (single attribute with direction)
 - `RELATION` - Table reference
 - `JOIN` - JOIN operations
 
@@ -218,7 +218,7 @@ Dokumen ini berisi rencana untuk merombak parser query optimizer agar memiliki s
   - Child 1 = TABLE_NAME (opsional)
 - `COMPARISON` - Operasi perbandingan
 - `ARITH_EXPR` - Ekspresi aritmatika
-- `IN_EXPR`, `EXISTS_EXPR`, `BETWEEN_EXPR`, `IS_NULL_EXPR`, `LIKE_EXPR` - Ekspresi kondisi
+- `IN_EXPR`, `EXISTS_EXPR`, `BETWEEN_EXPR`, `IS_NULL_EXPR` - Ekspresi kondisi
 - Negated versions: `NOT_IN_EXPR`, `NOT_EXISTS_EXPR`, `NOT_BETWEEN_EXPR`, `IS_NOT_NULL_EXPR`
 
 **Node Terminology:**
@@ -336,12 +336,11 @@ OPERATOR("AND")
 **SORT Node**
 
 ```
-SORT
-├── ORDER_ITEM("DESC")  # value = direction ("ASC" or "DESC")
-│   └── COLUMN_REF
-│       └── COLUMN_NAME
-│           └── IDENTIFIER("age")
-└── [source_tree]
+SORT("DESC")  # value = direction ("ASC" or "DESC"), default "ASC"
+├── COLUMN_REF  # Child 0: column to sort by
+│   └── COLUMN_NAME
+│       └── IDENTIFIER("age")
+└── [source_tree]  # Child 1: source
 ```
 
 **RELATION Node**
@@ -480,7 +479,6 @@ SELECT * FROM products
 WHERE category IN ('Electronics', 'Books')
   AND price BETWEEN 100 AND 500
   AND description IS NOT NULL
-  AND name LIKE '%Phone%'
 ```
 
 **Query Tree:**
@@ -503,20 +501,15 @@ PROJECT("*")
         │   │       └── IDENTIFIER("price")
         │   ├── LITERAL_NUMBER(100)
         │   └── LITERAL_NUMBER(500)
-        ├── IS_NULL_EXPR(negated=True)
-        │   └── COLUMN_REF
-        │       └── COLUMN_NAME
-        │           └── IDENTIFIER("description")
-        └── LIKE_EXPR
-            ├── COLUMN_REF
-            │   └── COLUMN_NAME
-            │       └── IDENTIFIER("name")
-            └── LITERAL_STRING("%Phone%")
+        └── IS_NULL_EXPR(negated=True)
+            └── COLUMN_REF
+                └── COLUMN_NAME
+                    └── IDENTIFIER("description")
 ```
 
 **Key Points:**
 
-- ✅ OPERATOR children dapat berupa berbagai expression types: COMPARISON, IN_EXPR, BETWEEN_EXPR, IS_NULL_EXPR, LIKE_EXPR
+- ✅ OPERATOR children dapat berupa berbagai expression types: COMPARISON, IN_EXPR, BETWEEN_EXPR, IS_NULL_EXPR
 - ✅ Negation menggunakan node type terpisah: NOT_IN_EXPR, IS_NOT_NULL_EXPR, NOT_BETWEEN_EXPR, dll
 
 ---
@@ -768,14 +761,13 @@ PROJECT
 │   └── TABLE_NAME
 │       └── IDENTIFIER("p")        # Child 1: table alias
 └── LIMIT(10)
-    └── SORT
-        ├── ORDER_ITEM("ASC")  # value = direction
-        │   └── COLUMN_REF
-        │       ├── COLUMN_NAME
-        │       │   └── IDENTIFIER("name")
-        │       └── TABLE_NAME
-        │           └── IDENTIFIER("u")
-        └── FILTER
+    └── SORT("ASC")  # value = direction
+        ├── COLUMN_REF  # Child 0: sort column
+        │   ├── COLUMN_NAME
+        │   │   └── IDENTIFIER("name")
+        │   └── TABLE_NAME
+        │       └── IDENTIFIER("u")
+        └── FILTER  # Child 1: source
             ├── JOIN("INNER")  # value = join type
             │   ├── ALIAS("u")
             │   │   └── RELATION("users")
@@ -963,13 +955,14 @@ CREATE_TABLE
 
 **Node Categories:**
 
-1. **Atomic Nodes**: IDENTIFIER, LITERAL\_\*
-2. **Expression Nodes**: COLUMN_REF, COMPARISON, ARITH_EXPR, IN_EXPR, EXISTS_EXPR, BETWEEN_EXPR, IS_NULL_EXPR, LIKE_EXPR
-3. **Logical Nodes**: OPERATOR
-4. **Structure Nodes**: PROJECT, FILTER, SORT, RELATION, JOIN
-5. **DML Nodes**: UPDATE, INSERT, DELETE, ASSIGNMENT
-6. **DDL Nodes**: CREATE_TABLE, DROP_TABLE, COLUMN_DEF
-7. **Transaction Nodes**: BEGIN_TRANSACTION, COMMIT
+**By Tree Type:**
+
+1. **Source Tree Nodes** (menghasilkan data/rows): RELATION, ALIAS, JOIN, PROJECT, FILTER, SORT, LIMIT
+2. **Condition Tree Nodes** (logical expressions): OPERATOR, COMPARISON, IN_EXPR, NOT_IN_EXPR, EXISTS_EXPR, NOT_EXISTS_EXPR, BETWEEN_EXPR, NOT_BETWEEN_EXPR, IS_NULL_EXPR, IS_NOT_NULL_EXPR
+3. **Value Expression Tree Nodes** (menghasilkan nilai): COLUMN_REF, ARITH_EXPR, FUNCTION_CALL, LITERAL_NUMBER, LITERAL_STRING, LITERAL_BOOLEAN, LITERAL_NULL, IDENTIFIER
+4. **Wrapper Nodes** (semantic containers): COLUMN_NAME, TABLE_NAME, LIST
+
+**By Function Type:** 5. **DML Statement Nodes**: UPDATE_QUERY, INSERT_QUERY, DELETE_QUERY, ASSIGNMENT 6. **DDL Statement Nodes**: CREATE_TABLE, DROP_TABLE, COLUMN_DEF, DATA_TYPE, PRIMARY_KEY, FOREIGN_KEY, REFERENCES 7. **Transaction Nodes**: BEGIN_TRANSACTION, COMMIT 8. **Utility Nodes**: COLUMN_LIST, VALUES_CLAUSE, COLUMN_DEF_LIST
 
 **Supported Features:**
 
