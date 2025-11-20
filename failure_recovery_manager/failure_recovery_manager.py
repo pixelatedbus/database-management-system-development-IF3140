@@ -10,7 +10,23 @@ from fake_exec_result import ExecutionResult
 
 # TODO: MAKE THIS SINGLETON BRUH
 class FailureRecovery:
+
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            with cls._lock:
+                # Double-checked locking to ensure thread safety
+                if not cls._instance:
+                    cls._instance = super(FailureRecovery, cls).__new__(cls)
+        return cls._instance
+
     def __init__(self, wal_size=50):
+        
+        # singleton check if init or not
+        if getattr(self, "_initialized", False):
+            return
 
         self.lock = threading.RLock()
         self.buffer: buffer = []
@@ -18,6 +34,9 @@ class FailureRecovery:
         self.logFile: logFile = logFile()
         self.wal_size: int = wal_size
         self.undo_list: List[int] = []
+
+        # singleton class attr
+        self._initialized = True
     
     def write_log(self, info: ExecutionResult):
         '''
@@ -55,3 +74,4 @@ class FailureRecovery:
     
     def recover(self, criteria: RecoveryCriteria = None):
         pass
+
