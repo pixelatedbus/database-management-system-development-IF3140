@@ -178,20 +178,32 @@ class Parser:
     def parse_where(self, source: QueryTree) -> QueryTree:
         self.expect(TokenType.KEYWORD_WHERE)
 
-        if self.match(TokenType.IDENTIFIER) and self.match_value("EXISTS"):
-            return self.parse_exists(source)
+        condition_tree = self.parse_boolean_expr()
 
-        if self.match(TokenType.IDENTIFIER):
-            if self.peek_token and self.peek_token.type == TokenType.IDENTIFIER and self.peek_token.value.upper() == "IN":
-                return self.parse_in(source)
+        if condition_tree.type == "OPERATOR":
+            if condition_tree.val in {"AND", "OR"}:
+                operator_node = QueryTree("OPERATOR_S", condition_tree.val)
+                operator_node.add_child(source)
+                for child in condition_tree.childs:
+                    operator_node.add_child(child)
+                return operator_node
+            if condition_tree.val == "NOT":
+                operator_node = QueryTree("OPERATOR_S", "AND")
+                operator_node.add_child(source)
+                operator_node.add_child(condition_tree)
+                operator_node.add_child(QueryTree("FILTER", "WHERE TRUE"))
+                return operator_node
 
-        condition = self.parse_condition()
-        filter_node = QueryTree("FILTER", f"WHERE {condition}")
-        filter_node.add_child(source)
+        if condition_tree.type == "FILTER":
+            self._attach_source(condition_tree, source)
+            return condition_tree
 
-        return filter_node
+        rendered = self._condition_to_string(condition_tree)
+        fallback_filter = QueryTree("FILTER", f"WHERE {rendered}")
+        fallback_filter.add_child(source)
+        return fallback_filter
 
-    def parse_in(self, source: QueryTree) -> QueryTree:
+    def parse_in_condition(self) -> QueryTree:
         column_name = self.current_token.value
         self.advance()
 
@@ -204,14 +216,12 @@ class Parser:
         self.expect(TokenType.DELIMITER_RPAREN)
 
         filter_node = QueryTree("FILTER", f"IN {column_name}")
-        filter_node.add_child(source)
-
         array_node = QueryTree("ARRAY", f"({array_values})")
         filter_node.add_child(array_node)
 
         return filter_node
 
-    def parse_exists(self, source: QueryTree) -> QueryTree:
+    def parse_exists_condition(self) -> QueryTree:
         self.advance()
 
         self.expect(TokenType.DELIMITER_LPAREN)
@@ -219,7 +229,6 @@ class Parser:
         self.expect(TokenType.DELIMITER_RPAREN)
 
         filter_node = QueryTree("FILTER", "EXIST")
-        filter_node.add_child(source)
         filter_node.add_child(subquery)
 
         return filter_node
@@ -467,6 +476,144 @@ class Parser:
         return transaction_node
 
     # Helper Method
+
+    def parse_boolean_expr(self) -> QueryTree:
+        return self.parse_or_expr()
+
+    def parse_or_expr(self) -> QueryTree:
+        left = self.parse_and_expr()
+        children = [left]
+
+        while self.match(TokenType.KEYWORD_OR):
+            self.advance()
+            children.append(self.parse_and_expr())
+
+        if len(children) == 1:
+            return left
+
+        return self._build_flat_operator("OR", children)
+
+    def parse_and_expr(self) -> QueryTree:
+        left = self.parse_not_expr()
+        children = [left]
+
+        while self.match(TokenType.KEYWORD_AND):
+            self.advance()
+            children.append(self.parse_not_expr())
+
+        if len(children) == 1:
+            return left
+
+        return self._build_flat_operator("AND", children)
+
+    def parse_not_expr(self) -> QueryTree:
+        if self.match(TokenType.KEYWORD_NOT):
+            self.advance()
+            operand = self.parse_not_expr()
+            node = QueryTree("OPERATOR", "NOT")
+            node.add_child(operand)
+            return node
+        return self.parse_primary_condition()
+
+    def parse_primary_condition(self) -> QueryTree:
+        if self.match(TokenType.DELIMITER_LPAREN):
+            self.advance()
+            expr = self.parse_boolean_expr()
+            self.expect(TokenType.DELIMITER_RPAREN)
+            return expr
+
+        if self.match(TokenType.IDENTIFIER) and self.match_value("EXISTS"):
+            return self.parse_exists_condition()
+
+        if self.match(TokenType.IDENTIFIER):
+            if self.peek_token and self.peek_token.type == TokenType.IDENTIFIER and self.peek_token.value.upper() == "IN":
+                return self.parse_in_condition()
+
+        condition_text = self._collect_condition_tokens()
+        filter_node = QueryTree("FILTER", f"WHERE {condition_text}")
+        return filter_node
+
+    def _collect_condition_tokens(self) -> str:
+        tokens = []
+        paren_depth = 0
+        terminating = {
+            TokenType.KEYWORD_ORDER_BY, TokenType.KEYWORD_LIMIT, TokenType.DELIMITER_SEMICOLON,
+            TokenType.KEYWORD_JOIN, TokenType.KEYWORD_NATURAL,
+            TokenType.EOF
+        }
+        logical_tokens = {TokenType.KEYWORD_AND, TokenType.KEYWORD_OR}
+
+        while self.current_token:
+            if paren_depth == 0 and (self.current_token.type in terminating or self.current_token.type in logical_tokens):
+                break
+
+            if self.current_token.type == TokenType.DELIMITER_RPAREN and paren_depth == 0:
+                break
+
+            if self.current_token.type == TokenType.DELIMITER_LPAREN:
+                paren_depth += 1
+                tokens.append(self.current_token.value)
+                self.advance()
+                continue
+
+            if self.current_token.type == TokenType.DELIMITER_RPAREN:
+                paren_depth -= 1
+                tokens.append(self.current_token.value)
+                self.advance()
+                continue
+
+            if self.match(TokenType.IDENTIFIER) and self.current_token.value.upper() == "IN":
+                tokens.append("IN")
+                self.advance()
+                self.expect(TokenType.DELIMITER_LPAREN)
+                array_values = self.parse_array()
+                self.expect(TokenType.DELIMITER_RPAREN)
+                tokens.append(f"({array_values})")
+                continue
+
+            if self.match(TokenType.LITERAL_STRING):
+                tokens.append(f"'{self.current_token.value}'")
+            else:
+                tokens.append(self.current_token.value)
+
+            self.advance()
+
+        if not tokens:
+            raise ParserError("Expected condition expression", self.current_token)
+
+        return " ".join(tokens)
+
+    def _build_flat_operator(self, operator: str, children: list[QueryTree]) -> QueryTree:
+        node = QueryTree("OPERATOR", operator)
+        for child in children:
+            node.add_child(child)
+        return node
+
+    def _attach_source(self, filter_node: QueryTree, source: QueryTree) -> None:
+        if filter_node.childs:
+            filter_node.childs.insert(0, source)
+            source.parent = filter_node
+        else:
+            filter_node.add_child(source)
+
+    def _condition_to_string(self, node: QueryTree) -> str:
+        if node.type == "FILTER":
+            parts = node.val.split(maxsplit=1)
+            if len(parts) == 2:
+                base = parts[1]
+            else:
+                base = parts[0]
+            if node.childs and node.childs[0].type == "ARRAY":
+                return f"{base} {node.childs[0].val}"
+            return base
+
+        if node.type == "OPERATOR":
+            if node.val == "NOT":
+                return f"NOT ({self._condition_to_string(node.childs[0])})"
+            joined = f" {node.val} ".join(self._condition_to_string(child) for child in node.childs)
+            return f"({joined})"
+
+        return node.val
 
     def parse_condition(self) -> str:
         condition_tokens = []
