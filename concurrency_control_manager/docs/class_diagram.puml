@@ -61,7 +61,6 @@ AlgorithmType -[hidden]-> Response
 class CCManager { 
   - algorithm : AlgorithmType 
   - transactions : Dict<int, Transaction> 
-  - schedule : Schedule 
   - log_handler : LogHandler 
   - concurrency_algorithm : ConcurrencyAlgorithm 
   - next_transaction_id : int
@@ -108,48 +107,6 @@ class Action {
   + get_wait_time() : float
   + should_abort() : bool
 } 
- 
-class Schedule { 
-  - input_queue : Queue<Action>
-  - ready_list : List<Action> 
-  - blocked_queue : PriorityQueue<Action>
-  - max_retry_count : int
-  -- 
-  + enqueue(action: Action) : None 
-  + get_next_action() : Action
-  + mark_ready(action: Action) : None
-  + mark_blocked(action: Action) : None
-  + remove_transaction_actions(transaction_id: int) : None
-  + is_empty() : bool
-  + get_blocked_count() : int
-  + get_queue_size() : int
-  + clear_ready_list() : None
-} 
-
-class PriorityQueue<T> {
-  - heap : List<PriorityItem<T>>
-  --
-  + enqueue(item: T, priority: float) : None
-  + dequeue() : T
-  + is_empty() : bool
-  + size() : int
-}
-
-class PriorityItem<T> {
-  - item : T
-  - priority : float
-  --
-  + __lt__(other: PriorityItem) : bool
-}
-
-class Queue<T> {
-  - items : List<T>
-  --
-  + enqueue(item: T) : None
-  + dequeue() : T
-  + is_empty() : bool
-  + size() : int
-}
  
 class LogHandler { 
   - log_entries : List<LogEntry> 
@@ -321,7 +278,6 @@ class RowVersion {
 ' ========================================= 
 ' Relationships 
 ' ========================================= 
-CCManager "1" *-- "1" Schedule 
 CCManager "1" *-- "1" LogHandler 
 CCManager "1" o-- "*" Transaction 
 CCManager "1" --> "1" ConcurrencyAlgorithm : uses >
@@ -330,12 +286,6 @@ Transaction "1" o-- "*" Action
 Action --> Row : acts on > 
 LogHandler "1" o-- "*" LogEntry 
 
-' Schedule relationships (SIMPLIFIED - no ReorderStrategy)
-Schedule "1" *-- "1" PriorityQueue : blocked_queue >
-Schedule "1" *-- "1" Queue : input_queue >
-Schedule "1" o-- "*" Action : manages >
-PriorityQueue "1" o-- "*" PriorityItem
-PriorityItem --> Action : wraps >
 
 ' Algorithm-specific compositions 
 LockBasedAlgorithm "1" *-- "1" LockManager 

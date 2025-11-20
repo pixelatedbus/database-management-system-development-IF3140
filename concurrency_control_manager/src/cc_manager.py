@@ -5,7 +5,6 @@ Concurrency Control Manager - Main interface
 from typing import Dict, Optional
 from .enums import AlgorithmType, ActionType, TransactionStatus
 from .transaction import Transaction
-from .schedule import Schedule
 from .log_handler import LogHandler
 from .row import Row
 from .response import Response
@@ -22,7 +21,6 @@ class CCManager:
     def __init__(self, algorithm: AlgorithmType, log_file: str = "cc_log.txt"):
         self.algorithm: AlgorithmType = algorithm
         self.transactions: Dict[int, Transaction] = {}
-        self.schedule: Schedule = Schedule()
         self.log_handler: LogHandler = LogHandler(log_file)
         self.concurrency_algorithm: Optional[ConcurrencyAlgorithm] = None
         self.next_transaction_id: int = 1
