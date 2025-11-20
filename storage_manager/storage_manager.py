@@ -678,6 +678,9 @@ class StorageManager:
                 else:
                     append_block_to_table(table_file, rows_to_insert, schema_names, self.block_size)
 
+                # update index kalo ada
+                self._update_indexes_after_insert(table_name, rows_to_insert)
+
                 print(f"BATCH inserted {len(rows_to_insert)} rows ke tabel '{table_name}' (efficient!)")
                 return len(rows_to_insert)
 
@@ -696,6 +699,9 @@ class StorageManager:
                     write_binary_table(table_file, [new_row_data], schema_names, self.block_size)
                 else:
                     append_row_to_table(table_file, new_row_data, schema_names, self.block_size)
+
+                # update index kalo ada
+                self._update_indexes_after_insert(table_name, [new_row_data])
 
                 print(f"inserted 1 row ke tabel '{table_name}'")
                 return 1
@@ -743,6 +749,9 @@ class StorageManager:
             if rows_affected > 0:
                 write_binary_table(table_file, new_rows, schema_names, self.block_size)
 
+                # rebuild index karena data berubah
+                self._rebuild_table_indexes(table_name)
+
             print(f"updated {rows_affected} rows di tabel '{table_name}'")
             return rows_affected
 
@@ -782,8 +791,68 @@ class StorageManager:
         # simpen rows yang tersisa balik ke disk
         self._save_table_rows(table_name, rows_to_keep)
 
+        # rebuild semua index buat tabel ini karena record_id berubah
+        self._rebuild_table_indexes(table_name)
+
         print(f"dihapus {deleted_count} baris dari tabel '{table_name}'")
         return deleted_count
+
+    def _update_indexes_after_insert(self, table_name: str, new_rows: List[Dict[str, Any]]) -> None:
+        # update index setelah insert rows baru
+        # cuma insert entry baru ke index, ga perlu rebuild
+        indexes_to_update = [(t, c) for t, c in self.indexes.keys() if t == table_name]
+
+        if not indexes_to_update:
+            return
+
+        # dapetin current total rows buat tau record_id awal
+        table_file = self._get_table_file_path(table_name)
+        all_rows = list(read_binary_table_streaming(table_file))
+        starting_record_id = len(all_rows) - len(new_rows)
+
+        for table, column in indexes_to_update:
+            index = self.indexes[(table, column)]
+
+            # insert entry baru ke index
+            for i, row in enumerate(new_rows):
+                if column in row:
+                    key = row[column]
+                    key_str = str(key) if key is not None else "NULL"
+                    record_id = starting_record_id + i
+                    index.insert(key_str, record_id)
+
+            # save updated index
+            index_file = self._get_index_file_path(table, column)
+            index.save(index_file)
+
+    def _rebuild_table_indexes(self, table_name: str) -> None:
+        # rebuild semua index yang ada buat tabel ini
+        # dipanggil setelah delete/update yang bisa ubah record_id
+        indexes_to_rebuild = [(t, c) for t, c in self.indexes.keys() if t == table_name]
+
+        for table, column in indexes_to_rebuild:
+            print(f"  rebuilding index {table}.{column}...")
+
+            # bikin index baru
+            index = HashIndex(table, column)
+
+            # scan ulang semua rows
+            table_file = self._get_table_file_path(table)
+            if os.path.exists(table_file):
+                record_id = 0
+                for row in read_binary_table_streaming(table_file):
+                    if column in row:
+                        key = row[column]
+                        key_str = str(key) if key is not None else "NULL"
+                        index.insert(key_str, record_id)
+                    record_id += 1
+
+                # save index ke disk
+                index_file = self._get_index_file_path(table, column)
+                index.save(index_file)
+
+                # update di memory
+                self.indexes[(table, column)] = index
 
     def set_index(self, table: str, column: str, index_type: str) -> None:
         # bikin index buat kolom tertentu di tabel
