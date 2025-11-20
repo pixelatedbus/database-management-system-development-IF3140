@@ -4,7 +4,7 @@ Registry untuk Rules Optimasi Query
 
 from query_optimizer.optimization_engine import ParsedQuery
 from query_optimizer.query_tree import QueryTree
-from query_optimizer.seleksi_konjungtif import (
+from query_optimizer.rule_1 import (
     seleksi_konjungtif,
     cascade_filters,
     clone_tree
