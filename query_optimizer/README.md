@@ -581,61 +581,66 @@ def check_query(query_tree: QueryTree) -> bool:
 
 **Validation Rules:**
 
-- **PROJECT**: Must have exactly 1 child
-- **SORT**: Must have exactly 1 child
-- **JOIN**: Must have exactly 2 children (both RELATION or tree)
-- **FILTER** (Conditional Expressions):
-  - **1 child**: Filter operator dengan source tree (misal: `WHERE ...` → RELATION)
-  - **2 children**:
-    - Child pertama: source tree (RELATION, JOIN, atau operator lain)
-    - Child kedua: value (ARRAY untuk IN, RELATION/PROJECT untuk subquery)
-  - **Value**: "WHERE ...", "IN ...", "EXIST" (TIDAK BOLEH "AND", "OR", "NOT")
+**Atomic Nodes (0 children):**
+- **IDENTIFIER**: Value = identifier name (required)
+- **LITERAL_NUMBER**: Value = numeric value (required)
+- **LITERAL_STRING**: Value = string value (required)
+- **LITERAL_BOOLEAN**: Value = boolean value (required)
+- **LITERAL_NULL**: No value required
 
-- **OPERATOR_S** (Logical AND/OR dengan Source):
-  - **≥3 children**: Child[0] = source, Children[1..N] = kondisi
-  - **Child[0]**: Harus operator yang menghasilkan data (RELATION, JOIN, SORT, PROJECT, OPERATOR_S, FILTER dengan children)
-  - **Child[0] TIDAK BOLEH**: OPERATOR (tidak ada data) atau FILTER leaf (tidak ada data)
-  - **Children[1..N]**: Harus FILTER, OPERATOR, atau OPERATOR_S
-  - **Value**: "AND" atau "OR" saja
+**Wrapper Nodes (1 child):**
+- **COLUMN_NAME**: Child must be IDENTIFIER
+- **TABLE_NAME**: Child must be IDENTIFIER
 
-  **Contoh dengan SORT sebagai source:**
+**Column Reference:**
+- **COLUMN_REF**: 1-2 children. Child[0] = COLUMN_NAME (required), Child[1] = TABLE_NAME (optional for qualified reference)
 
-  ```
-  OPERATOR_S("AND")
-  ├── SORT("name")              # Child 0: source (SORT operator)
-  │   └── RELATION("users")
-  ├── FILTER("WHERE age > 25")  # Child 1: kondisi
-  └── FILTER("WHERE active")    # Child 2: kondisi
-  ```
+**Source Nodes:**
+- **RELATION**: 0 children. Value = table name (must exist in database)
+- **ALIAS**: 1 child. Value = alias name (required)
+- **PROJECT**: ≥1 children. Last child = source. If value = "*", must have exactly 1 child (source only)
+- **FILTER**: 2 children. Child[0] = source, Child[1] = condition tree
+- **JOIN**: 2-3 children. Value = "INNER" or "NATURAL". NATURAL = 2 children, INNER = 3 children (2 relations + condition)
+- **SORT**: 2 children. Child[0] = COLUMN_REF, Child[1] = source. Value = "ASC" or "DESC" (optional)
+- **LIMIT**: 1 child (source). Value = limit number
 
-  SQL: `SELECT * FROM users WHERE age > 25 AND active ORDER BY name`
+**Condition Nodes:**
+- **OPERATOR**: ≥1 children. Value = "AND"/"OR"/"NOT" (required). AND/OR = ≥2 children, NOT = 1 child
+- **COMPARISON**: 2 children (left, right expressions). Value = operator ("=", "<>", "!=", ">", ">=", "<", "<=")
+- **IN_EXPR**: 2 children (column_ref, LIST or subquery)
+- **NOT_IN_EXPR**: 2 children (column_ref, LIST or subquery)
+- **EXISTS_EXPR**: 1 child (subquery)
+- **NOT_EXISTS_EXPR**: 1 child (subquery)
+- **BETWEEN_EXPR**: 3 children (value, lower, upper)
+- **NOT_BETWEEN_EXPR**: 3 children (value, lower, upper)
+- **IS_NULL_EXPR**: 1 child (column_ref)
+- **IS_NOT_NULL_EXPR**: 1 child (column_ref)
 
-- **OPERATOR** (Nested Logical Operators):
-  - **AND/OR**: ≥2 children, semua harus FILTER/OPERATOR/OPERATOR_S
-  - **NOT**: Tepat 1 child, harus FILTER/OPERATOR/OPERATOR_S
-  - **Tanpa source**: Mewarisi source dari parent OPERATOR_S
-  - **Value**: "AND", "OR", atau "NOT"
-  
-  **Contoh nested:**
-  ```
-  OPERATOR_S("AND")
-  ├── RELATION("users")
-  ├── FILTER("WHERE age > 25")
-  └── OPERATOR("OR")            # Nested, mewarisi source
-      ├── FILTER("WHERE city = 'Jakarta'")
-      └── FILTER("WHERE city = 'Bandung'")
-  ```
+**Value Expression Nodes:**
+- **ARITH_EXPR**: 2 children (left, right). Value = operator ("+", "-", "*", "/", "%")
 
-- **RELATION, ARRAY, LIMIT**: Must have 0 children
-- **UPDATE, INSERT, DELETE**: Must have exactly 1 child (RELATION atau FILTER/OPERATOR_S → RELATION)
+**Other Nodes:**
+- **LIST**: 0+ children (list items)
+
+**DML Nodes:**
+- **UPDATE_QUERY**: ≥2 children (relation, assignments, optional filter)
+- **INSERT_QUERY**: 3 children (relation, column_list, values_clause)
+- **DELETE_QUERY**: 1-2 children (relation, optional filter)
+- **ASSIGNMENT**: 2 children (column_ref, value_expr)
+
+**Transaction Nodes:**
+- **BEGIN_TRANSACTION**: 0+ children (statements)
+- **COMMIT**: 0 children
 
 **Important Notes:**
 
-- Logical operators (AND/OR/NOT) TIDAK menggunakan FILTER, tapi menggunakan OPERATOR atau OPERATOR_S
-- OPERATOR_S digunakan ketika logical operator memiliki explicit source
-- OPERATOR digunakan untuk nested logic yang mewarisi source dari parent
-- Equivalency rules (seperti seleksi konjungtif) menghasilkan query tree yang tetap valid setelah transformasi
-- Validasi dilakukan secara rekursif pada seluruh tree structure
+- Atomic nodes (IDENTIFIER, LITERAL_*) are leaf nodes with no children
+- Wrapper nodes (COLUMN_NAME, TABLE_NAME) wrap IDENTIFIER
+- COLUMN_REF represents column references (simple or qualified with table/alias)
+- FILTER has exactly 2 children: source + condition tree
+- Logical operators use OPERATOR node with AND/OR/NOT values
+- Comparison and condition expressions are separate node types (COMPARISON, IN_EXPR, etc.)
+- Validation is performed recursively on the entire tree structure
 
 ### 3.6 Cost Estimation
 
