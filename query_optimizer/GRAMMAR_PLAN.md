@@ -207,12 +207,19 @@ Dokumen ini berisi rencana untuk merombak parser query optimizer agar memiliki s
 
 **Atomic Detail Nodes:**
 
-- `IDENTIFIER` - Nama table/column
+- `IDENTIFIER` - Nama dasar (atomic leaf)
 - `LITERAL_*` - Nilai literal (number, string, boolean, null)
-- `COLUMN_REF` - Referensi kolom
+- `COLUMN_NAME` - Wrapper untuk nama kolom (berisi IDENTIFIER)
+- `TABLE_NAME` - Wrapper untuk nama table/alias (berisi IDENTIFIER)
+- `COLUMN_REF` - Referensi kolom (dapat simple atau qualified)
+  - Simple: 1 child (COLUMN_NAME)
+  - Qualified: 2 children (COLUMN_NAME, TABLE_NAME)
+  - Child 0 = COLUMN_NAME (wajib)
+  - Child 1 = TABLE_NAME (opsional)
 - `COMPARISON` - Operasi perbandingan
 - `ARITH_EXPR` - Ekspresi aritmatika
 - `IN_EXPR`, `EXISTS_EXPR`, `BETWEEN_EXPR`, `IS_NULL_EXPR`, `LIKE_EXPR` - Ekspresi kondisi
+- Negated versions: `NOT_IN_EXPR`, `NOT_EXISTS_EXPR`, `NOT_BETWEEN_EXPR`, `IS_NOT_NULL_EXPR`
 
 **Node Terminology:**
 
@@ -223,13 +230,55 @@ Dokumen ini berisi rencana untuk merombak parser query optimizer agar memiliki s
 
 ### Node Structure Overview
 
+**Atomic Nodes**
+
+```
+IDENTIFIER("users")          # Simple identifier (leaf), value = "users"
+LITERAL_NUMBER(25)           # Numeric literal (leaf), value = "25"
+LITERAL_STRING("active")     # String literal (leaf), value = "active"
+LITERAL_BOOLEAN(True)        # Boolean literal (leaf), value = "True"
+LITERAL_NULL()               # NULL literal (leaf), no value
+COLUMN_NAME                  # Wrapper for column name
+└── IDENTIFIER("age")
+TABLE_NAME                   # Wrapper for table/alias name
+└── IDENTIFIER("users")
+```
+
+**COLUMN_REF Node**
+
+```
+# Simple column reference (tanpa table/alias)
+COLUMN_REF
+└── COLUMN_NAME            # Child 0: column name (wajib)
+    └── IDENTIFIER("age")
+
+# Qualified column reference (dengan table/alias)
+COLUMN_REF
+├── COLUMN_NAME            # Child 0: column name (wajib)
+│   └── IDENTIFIER("age")
+└── TABLE_NAME             # Child 1: table/alias name (opsional)
+    └── IDENTIFIER("users")
+
+# Dengan alias
+COLUMN_REF
+├── COLUMN_NAME            # Child 0: column name (wajib)
+│   └── IDENTIFIER("name")
+└── TABLE_NAME             # Child 1: table/alias name (opsional)
+    └── IDENTIFIER("u")
+```
+
 **PROJECT Node**
 
 ```
-PROJECT
+# Select specific columns
+PROJECT  # no value
 ├── COLUMN_REF        # Selected columns (1+)
 ├── COLUMN_REF
 └── [source_tree]     # Last child is always the source
+
+# Select all
+PROJECT("*")  # value = "*"
+└── [source_tree]
 ```
 
 **FILTER Node**
@@ -261,7 +310,7 @@ FILTER
 **OPERATOR Node**
 
 ```
-OPERATOR("AND" | "OR" | "NOT")
+OPERATOR("AND" | "OR" | "NOT")  # value = operator string
 ├── [comparison_tree] # 2+ for AND/OR, 1 for NOT
 ├── [comparison_tree] # Can be COMPARISON, IN_EXPR, OPERATOR (nested), etc
 └── [comparison_tree]
@@ -269,15 +318,18 @@ OPERATOR("AND" | "OR" | "NOT")
 # Can be used as:
 # - Child of FILTER (top-level WHERE logic)
 # - Nested inside another OPERATOR (complex logic)
-# - Child of LOGICAL_* nodes
 
 # Example: age > 25 AND city = 'Jakarta'
 OPERATOR("AND")
 ├── COMPARISON(">")
-│   ├── COLUMN_REF("age")
+│   ├── COLUMN_REF
+│   │   └── COLUMN_NAME
+│   │       └── IDENTIFIER("age")
 │   └── LITERAL_NUMBER(25)
 └── COMPARISON("=")
-    ├── COLUMN_REF("city")
+    ├── COLUMN_REF
+    │   └── COLUMN_NAME
+    │       └── IDENTIFIER("city")
     └── LITERAL_STRING("Jakarta")
 ```
 
@@ -285,26 +337,49 @@ OPERATOR("AND")
 
 ```
 SORT
-├── ORDER_ITEM(direction="DESC")
-│   └── COLUMN_REF("age")
+├── ORDER_ITEM("DESC")  # value = direction ("ASC" or "DESC")
+│   └── COLUMN_REF
+│       └── COLUMN_NAME
+│           └── IDENTIFIER("age")
 └── [source_tree]
 ```
 
 **RELATION Node**
 
 ```
-RELATION(table_name="users", alias="u")
+# Without alias
+RELATION("users")  # value = table name
+
+# With alias (ALIAS sebagai parent)
+ALIAS("u")         # value = alias name
+└── RELATION("users")  # What is being aliased
+```
+
+**COMPARISON Node**
+
+```
+COMPARISON("=" | "<>" | ">" | ">=" | "<" | "<=")  # value = operator
+├── [left_expr]   # COLUMN_REF, ARITH_EXPR, LITERAL_*, etc
+└── [right_expr]  # COLUMN_REF, ARITH_EXPR, LITERAL_*, etc
 ```
 
 **JOIN Node**
 
 ```
-JOIN(join_type="INNER")
+JOIN("INNER" | "NATURAL")  # value = join type
 ├── RELATION("users")
 ├── RELATION("profiles")
-└── COMPARISON("=")
-    ├── COLUMN_REF("users.id")
-    └── COLUMN_REF("profiles.user_id")
+└── COMPARISON("=")  # Optional for INNER JOIN, omitted for NATURAL
+    ├── COLUMN_REF
+    │   ├── COLUMN_NAME
+    │   │   └── IDENTIFIER("id")
+    │   └── TABLE_NAME
+    │       └── IDENTIFIER("users")
+    └── COLUMN_REF
+        ├── COLUMN_NAME
+        │   └── IDENTIFIER("user_id")
+        └── TABLE_NAME
+            └── IDENTIFIER("profiles")
 ```
 
 **DML Nodes**
@@ -342,11 +417,14 @@ SELECT name FROM users WHERE age > 25
 ```
 PROJECT
 ├── COLUMN_REF
-│   └── IDENTIFIER("name")
-└── FILTER  ← FILTER untuk single condition dengan source
+│   └── COLUMN_NAME
+│       └── IDENTIFIER("name")
+└── FILTER
     ├── RELATION("users")
     └── COMPARISON(">")
-        ├── COLUMN_REF("age")
+        ├── COLUMN_REF
+        │   └── COLUMN_NAME
+        │       └── IDENTIFIER("age")
         └── LITERAL_NUMBER(25)
 ```
 
@@ -369,15 +447,19 @@ SELECT * FROM users WHERE age > 25 AND status = 'active'
 **Query Tree:**
 
 ```
-PROJECT("*")
+PROJECT("*")  # value = "*" untuk select all, atau null untuk select columns
 └── FILTER
     ├── RELATION("users")
     └── OPERATOR("AND")
         ├── COMPARISON(">")
-        │   ├── COLUMN_REF("age")
+        │   ├── COLUMN_REF
+        │   │   └── COLUMN_NAME
+        │   │       └── IDENTIFIER("age")
         │   └── LITERAL_NUMBER(25)
         └── COMPARISON("=")
-            ├── COLUMN_REF("status")
+            ├── COLUMN_REF
+            │   └── COLUMN_NAME
+            │       └── IDENTIFIER("status")
             └── LITERAL_STRING("active")
 ```
 
@@ -409,25 +491,33 @@ PROJECT("*")
     ├── RELATION("products")
     └── OPERATOR("AND")
         ├── IN_EXPR
-        │   ├── COLUMN_REF("category")
+        │   ├── COLUMN_REF
+        │   │   └── COLUMN_NAME
+        │   │       └── IDENTIFIER("category")
         │   └── LIST
         │       ├── LITERAL_STRING("Electronics")
         │       └── LITERAL_STRING("Books")
         ├── BETWEEN_EXPR(negated=False)
-        │   ├── COLUMN_REF("price")
+        │   ├── COLUMN_REF
+        │   │   └── COLUMN_NAME
+        │   │       └── IDENTIFIER("price")
         │   ├── LITERAL_NUMBER(100)
         │   └── LITERAL_NUMBER(500)
         ├── IS_NULL_EXPR(negated=True)
-        │   └── COLUMN_REF("description")
+        │   └── COLUMN_REF
+        │       └── COLUMN_NAME
+        │           └── IDENTIFIER("description")
         └── LIKE_EXPR
-            ├── COLUMN_REF("name")
+            ├── COLUMN_REF
+            │   └── COLUMN_NAME
+            │       └── IDENTIFIER("name")
             └── LITERAL_STRING("%Phone%")
 ```
 
 **Key Points:**
 
 - ✅ OPERATOR children dapat berupa berbagai expression types: COMPARISON, IN_EXPR, BETWEEN_EXPR, IS_NULL_EXPR, LIKE_EXPR
-- ✅ Parameter `negated` untuk negation (NOT IN, IS NOT NULL, dll)
+- ✅ Negation menggunakan node type terpisah: NOT_IN_EXPR, IS_NOT_NULL_EXPR, NOT_BETWEEN_EXPR, dll
 
 ---
 
@@ -444,14 +534,20 @@ SELECT salary * 1.1 FROM employees WHERE salary + bonus > 50000
 ```
 PROJECT
 ├── ARITH_EXPR("*")
-│   ├── COLUMN_REF("salary")
+│   ├── COLUMN_REF
+│   │   └── COLUMN_NAME
+│   │       └── IDENTIFIER("salary")
 │   └── LITERAL_NUMBER(1.1)
 └── FILTER
     ├── RELATION("employees")
     └── COMPARISON(">")
         ├── ARITH_EXPR("+")
-        │   ├── COLUMN_REF("salary")
-        │   └── COLUMN_REF("bonus")
+        │   ├── COLUMN_REF
+        │   │   └── COLUMN_NAME
+        │   │       └── IDENTIFIER("salary")
+        │   └── COLUMN_REF
+        │       └── COLUMN_NAME
+        │           └── IDENTIFIER("bonus")
         └── LITERAL_NUMBER(50000)
 ```
 
@@ -479,13 +575,19 @@ PROJECT("*")
     └── OPERATOR("OR")  ← Top-level OR
         ├── OPERATOR("AND")  ← Nested AND
         │   ├── COMPARISON(">")
-        │   │   ├── COLUMN_REF("age")
+        │   │   ├── COLUMN_REF
+        │   │   │   └── COLUMN_NAME
+        │   │   │       └── IDENTIFIER("age")
         │   │   └── LITERAL_NUMBER(25)
         │   └── COMPARISON("=")
-        │       ├── COLUMN_REF("city")
+        │       ├── COLUMN_REF
+        │       │   └── COLUMN_NAME
+        │       │       └── IDENTIFIER("city")
         │       └── LITERAL_STRING("Jakarta")
         └── COMPARISON("=")
-            ├── COLUMN_REF("status")
+            ├── COLUMN_REF
+            │   └── COLUMN_NAME
+            │       └── IDENTIFIER("status")
             └── LITERAL_STRING("admin")
 ```
 
@@ -512,17 +614,37 @@ WHERE users.age > 25
 
 ```
 PROJECT
-├── COLUMN_REF("users.name")
-├── COLUMN_REF("profiles.bio")
+├── COLUMN_REF
+│   ├── COLUMN_NAME
+│   │   └── IDENTIFIER("name")     # Child 0: column
+│   └── TABLE_NAME
+│       └── IDENTIFIER("users")    # Child 1: table
+├── COLUMN_REF
+│   ├── COLUMN_NAME
+│   │   └── IDENTIFIER("bio")      # Child 0: column
+│   └── TABLE_NAME
+│       └── IDENTIFIER("profiles") # Child 1: table
 └── FILTER
-    ├── JOIN(join_type="INNER")
+    ├── JOIN("INNER")
     │   ├── RELATION("users")
     │   ├── RELATION("profiles")
     │   └── COMPARISON("=")
-    │       ├── COLUMN_REF("users.id")
-    │       └── COLUMN_REF("profiles.user_id")
+    │       ├── COLUMN_REF
+    │       │   ├── COLUMN_NAME
+    │       │   │   └── IDENTIFIER("id")
+    │       │   └── TABLE_NAME
+    │       │       └── IDENTIFIER("users")
+    │       └── COLUMN_REF
+    │           ├── COLUMN_NAME
+    │           │   └── IDENTIFIER("user_id")
+    │           └── TABLE_NAME
+    │               └── IDENTIFIER("profiles")
     └── COMPARISON(">")
-        ├── COLUMN_REF("users.age")
+        ├── COLUMN_REF
+        │   ├── COLUMN_NAME
+        │   │   └── IDENTIFIER("age")
+        │   └── TABLE_NAME
+        │       └── IDENTIFIER("users")
         └── LITERAL_NUMBER(25)
 ```
 
@@ -551,12 +673,16 @@ PROJECT("*")
 └── FILTER
     ├── RELATION("products")
     └── OPERATOR("AND")
-        ├── BETWEEN_EXPR(negated=False)
-        │   ├── COLUMN_REF("price")
+        ├── BETWEEN_EXPR  # Use NOT_BETWEEN_EXPR for NOT BETWEEN
+        │   ├── COLUMN_REF
+        │   │   └── COLUMN_NAME
+        │   │       └── IDENTIFIER("price")
         │   ├── LITERAL_NUMBER(100)
         │   └── LITERAL_NUMBER(500)
-        └── IS_NULL_EXPR(negated=True)
-            └── COLUMN_REF("description")
+        └── IS_NOT_NULL_EXPR  # Separate node type
+            └── COLUMN_REF
+                └── COLUMN_NAME
+                    └── IDENTIFIER("description")
 ```
 
 **Key Points:**
@@ -582,17 +708,25 @@ WHERE department = 'IT'
 ```
 UPDATE
 ├── ASSIGNMENT
-│   ├── COLUMN_REF("salary")
+│   ├── COLUMN_REF
+│   │   └── COLUMN_NAME
+│   │       └── IDENTIFIER("salary")
 │   └── ARITH_EXPR("*")
-│       ├── COLUMN_REF("salary")
+│       ├── COLUMN_REF
+│       │   └── COLUMN_NAME
+│       │       └── IDENTIFIER("salary")
 │       └── LITERAL_NUMBER(1.1)
 ├── ASSIGNMENT
-│   ├── COLUMN_REF("bonus")
+│   ├── COLUMN_REF
+│   │   └── COLUMN_NAME
+│   │       └── IDENTIFIER("bonus")
 │   └── LITERAL_NUMBER(1000)
 └── FILTER  ← FILTER untuk WHERE dengan source
     ├── RELATION("employees")
     └── COMPARISON("=")
-        ├── COLUMN_REF("department")
+        ├── COLUMN_REF
+        │   └── COLUMN_NAME
+        │       └── IDENTIFIER("department")
         └── LITERAL_STRING("IT")
 ```
 
@@ -624,26 +758,46 @@ LIMIT 10
 ```
 PROJECT
 ├── COLUMN_REF
-│   └── IDENTIFIER("u.name")
+│   ├── COLUMN_NAME
+│   │   └── IDENTIFIER("name")    # Child 0: column name
+│   └── TABLE_NAME
+│       └── IDENTIFIER("u")        # Child 1: table alias
 ├── COLUMN_REF
-│   └── IDENTIFIER("p.city")
+│   ├── COLUMN_NAME
+│   │   └── IDENTIFIER("city")     # Child 0: column name
+│   └── TABLE_NAME
+│       └── IDENTIFIER("p")        # Child 1: table alias
 └── LIMIT(10)
     └── SORT
-        ├── ORDER_ITEM(direction="ASC")
+        ├── ORDER_ITEM("ASC")  # value = direction
         │   └── COLUMN_REF
-        │       └── IDENTIFIER("u.name")
+        │       ├── COLUMN_NAME
+        │       │   └── IDENTIFIER("name")
+        │       └── TABLE_NAME
+        │           └── IDENTIFIER("u")
         └── FILTER
-            ├── JOIN(join_type="INNER")
-            │   ├── RELATION(table_name="users", alias="u")
-            │   ├── RELATION(table_name="profiles", alias="p")
+            ├── JOIN("INNER")  # value = join type
+            │   ├── ALIAS("u")
+            │   │   └── RELATION("users")
+            │   ├── ALIAS("p")
+            │   │   └── RELATION("profiles")
             │   └── COMPARISON("=")
             │       ├── COLUMN_REF
-            │       │   └── IDENTIFIER("u.id")
+            │       │   ├── COLUMN_NAME
+            │       │   │   └── IDENTIFIER("id")
+            │       │   └── TABLE_NAME
+            │       │       └── IDENTIFIER("u")
             │       └── COLUMN_REF
-            │           └── IDENTIFIER("p.user_id")
+            │           ├── COLUMN_NAME
+            │           │   └── IDENTIFIER("user_id")
+            │           └── TABLE_NAME
+            │               └── IDENTIFIER("p")
             └── COMPARISON(">")
                 ├── COLUMN_REF
-                │   └── IDENTIFIER("u.age")
+                │   ├── COLUMN_NAME
+                │   │   └── IDENTIFIER("age")
+                │   └── TABLE_NAME
+                │       └── IDENTIFIER("u")
                 └── LITERAL_NUMBER(18)
 ```
 
@@ -663,27 +817,31 @@ WHERE (category IN ('Electronics', 'Books') AND price < 1000)
 ```
 PROJECT("*")
 └── FILTER
-    ├── RELATION(table_name="products")
+    ├── RELATION("products")
     └── OPERATOR("OR")
         ├── OPERATOR("AND")
-        │   ├── IN_EXPR(negated=False)
+        │   ├── IN_EXPR  # Use NOT_IN_EXPR for negated version
         │   │   ├── COLUMN_REF
-        │   │   │   └── IDENTIFIER("category")
+        │   │   │   └── COLUMN_NAME
+        │   │   │       └── IDENTIFIER("category")
         │   │   └── LIST
         │   │       ├── LITERAL_STRING("Electronics")
         │   │       └── LITERAL_STRING("Books")
         │   └── COMPARISON("<")
         │       ├── COLUMN_REF
-        │       │   └── IDENTIFIER("price")
+        │       │   └── COLUMN_NAME
+        │       │       └── IDENTIFIER("price")
         │       └── LITERAL_NUMBER(1000)
         └── OPERATOR("AND")
             ├── COMPARISON(">")
             │   ├── COLUMN_REF
-            │   │   └── IDENTIFIER("stock")
+            │   │   └── COLUMN_NAME
+            │   │       └── IDENTIFIER("stock")
             │   └── LITERAL_NUMBER(0)
-            └── IS_NULL_EXPR(negated=True)
+            └── IS_NOT_NULL_EXPR  # Separate node type for IS NOT NULL
                 └── COLUMN_REF
-                    └── IDENTIFIER("discount")
+                    └── COLUMN_NAME
+                        └── IDENTIFIER("discount")
 ```
 
 ### Example C: INSERT Statement
@@ -699,7 +857,7 @@ VALUES ('John Doe', 75000, 'Engineering')
 
 ```
 INSERT_QUERY
-├── RELATION(table_name="employees")
+├── RELATION("employees")
 ├── COLUMN_LIST
 │   ├── IDENTIFIER("name")
 │   ├── IDENTIFIER("salary")
@@ -726,34 +884,40 @@ COMMIT;
 ```
 BEGIN_TRANSACTION
 ├── UPDATE_QUERY
-│   ├── RELATION(table_name="accounts")
+│   ├── RELATION("accounts")
 │   ├── ASSIGNMENT
 │   │   ├── COLUMN_REF
-│   │   │   └── IDENTIFIER("balance")
-│   │   └── ARITH_EXPR("-")
+│   │   │   └── COLUMN_NAME
+│   │   │       └── IDENTIFIER("balance")
+│   │   └── ARITH_EXPR("-")  # value = operator
 │   │       ├── COLUMN_REF
-│   │       │   └── IDENTIFIER("balance")
+│   │       │   └── COLUMN_NAME
+│   │       │       └── IDENTIFIER("balance")
 │   │       └── LITERAL_NUMBER(100)
 │   └── FILTER
-│       ├── RELATION(table_name="accounts")
+│       ├── RELATION("accounts")
 │       └── COMPARISON("=")
 │           ├── COLUMN_REF
-│           │   └── IDENTIFIER("id")
+│           │   └── COLUMN_NAME
+│           │       └── IDENTIFIER("id")
 │           └── LITERAL_NUMBER(1)
 ├── UPDATE_QUERY
-│   ├── RELATION(table_name="accounts")
+│   ├── RELATION("accounts")
 │   ├── ASSIGNMENT
 │   │   ├── COLUMN_REF
-│   │   │   └── IDENTIFIER("balance")
+│   │   │   └── COLUMN_NAME
+│   │   │       └── IDENTIFIER("balance")
 │   │   └── ARITH_EXPR("+")
 │   │       ├── COLUMN_REF
-│   │       │   └── IDENTIFIER("balance")
+│   │       │   └── COLUMN_NAME
+│   │       │       └── IDENTIFIER("balance")
 │   │       └── LITERAL_NUMBER(100)
 │   └── FILTER
-│       ├── RELATION(table_name="accounts")
+│       ├── RELATION("accounts")
 │       └── COMPARISON("=")
 │           ├── COLUMN_REF
-│           │   └── IDENTIFIER("id")
+│           │   └── COLUMN_NAME
+│           │       └── IDENTIFIER("id")
 │           └── LITERAL_NUMBER(2)
 └── COMMIT
 ```
@@ -779,20 +943,20 @@ CREATE_TABLE
 └── COLUMN_DEF_LIST
     ├── COLUMN_DEF
     │   ├── IDENTIFIER("id")
-    │   ├── DATA_TYPE("INTEGER")
+    │   ├── DATA_TYPE("INTEGER")  # value = type name
     │   └── PRIMARY_KEY
     ├── COLUMN_DEF
     │   ├── IDENTIFIER("user_id")
     │   ├── DATA_TYPE("INTEGER")
     │   └── FOREIGN_KEY
-    │       ├── REFERENCES("users")
+    │       ├── REFERENCES("users")  # value = table name
     │       └── IDENTIFIER("id")
     ├── COLUMN_DEF
     │   ├── IDENTIFIER("total")
     │   └── DATA_TYPE("FLOAT")
     └── COLUMN_DEF
         ├── IDENTIFIER("status")
-        └── DATA_TYPE("VARCHAR", size=50)
+        └── DATA_TYPE("VARCHAR(50)")  # value = type with size
 ```
 
 ---
