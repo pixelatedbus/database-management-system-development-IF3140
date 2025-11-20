@@ -9,10 +9,10 @@ Query Optimizer adalah modul yang bertanggung jawab untuk mengoptimalkan query S
 ### Fitur Utama
 
 - **SQL Parser**: Mengubah SQL string menjadi Query Tree representation
-- **Genetic Algorithm Optimizer**: Optimasi query menggunakan rule equivalency
+- **Genetic Algorithm Optimizer**: Optimasi query menggunakan unified filter params
 - **Query Tree Manipulation**: Transformasi dan manipulasi struktur query tree
 - **Cost Estimation**: Estimasi cost eksekusi query
-- **Optimization Rules**: Implementasi equivalency rules untuk query transformation
+- **Unified Filter Params**: Format `list[int | list[int]]` menggabungkan reordering dan cascading
 
 ### Komponen Utama
 
@@ -23,14 +23,16 @@ query_optimizer/
 ├── query_tree.py             # Query Tree data structure
 ├── query_check.py            # Query validation
 ├── optimization_engine.py    # Main optimization engine
-├── genetic_optimizer.py      # Genetic Algorithm implementation
-├── seleksi_konjungtif.py     # Rule 1: Conjunctive selection
+├── genetic_optimizer.py      # Genetic Algorithm with unified params
+├── rule_params_manager.py    # Unified parameter management
+├── rule_1.py                 # Filter cascading transformation
 ├── rules_registry.py         # Optimization rules registry
 ├── demo.py                   # Demo program
 └── tests/                    # Unit tests
     ├── test_tokenizer.py
     ├── test_parser.py
     ├── test_rule_1.py
+    ├── test_genetic.py
     └── integration.py
 ```
 
@@ -65,10 +67,12 @@ Output:
 - Query Tree structure
 - Estimated cost
 
-**Demo 2: Genetic Algorithm Optimization**
+**Demo 2-4: Genetic Algorithm Optimization**
 
 ```bash
-python -m query_optimizer.demo 2
+python -m query_optimizer.demo 2  # Rule 1 only
+python -m query_optimizer.demo 3  # Basic GA
+python -m query_optimizer.demo 4  # GA with unified filter params
 ```
 
 Output:
@@ -76,7 +80,7 @@ Output:
 - Original query tree & cost
 - Optimized query tree & cost
 - Improvement statistics
-- Best solution (filter orders & applied rules)
+- Best solution (unified filter_params: reorder + cascade)
 - Evolution progress per generation
 
 ### 2.3 Programmatic Usage
@@ -414,20 +418,27 @@ Rule yang belum ada:
 
 ```python
 class Individual:
-    filter_orders: dict[int, list[int]]  # Urutan filter
-    applied_rules: list[str]             # Rules yang diterapkan
-    query: ParsedQuery                    # Query hasil
-    fitness: float                        # Cost (semakin rendah semakin baik)
+    operation_params: dict[str, dict[int, Any]]  # Unified parameters
+    query: ParsedQuery                            # Query hasil
+    fitness: float                                # Cost (semakin rendah semakin baik)
 ```
 
-Contoh:
+Contoh (Unified Format):
 
 ```python
 Individual(
-    filter_orders={0: [2, 0, 1]},  # Terapkan filter 2, 0, 1 secara berurutan
-    applied_rules=["seleksi_konjungtif"],
+    operation_params={
+        'filter_params': {
+            42: [2, [0, 1]]  # Unified: reorder to [2,0,1] + cascade: 2 single, [0,1] grouped
+        }
+    },
     fitness=220.0
 )
+
+Penjelasan unified format:
+- [2, [0, 1]] = order [cond2, cond0, cond1] dengan cond2 single filter, [cond0,cond1] grouped
+- int = condition cascade sebagai single filter
+- list[int] = conditions stay grouped dalam AND operator
 ```
 
 **Population**
@@ -436,9 +447,9 @@ Kumpulan individu (kromosom) yang merepresentasikan solusi berbeda:
 
 ```
 Population (size=50):
-├── Individual 1: orders=[0,1,2], rules=["seleksi_konjungtif"], fitness=250
-├── Individual 2: orders=[2,1,0], rules=[], fitness=230
-├── Individual 3: orders=[1,0,2], rules=["seleksi_konjungtif"], fitness=240
+├── Individual 1: filter_params={42: [0,1,2]}, fitness=250
+├── Individual 2: filter_params={42: [2,[0,1]]}, fitness=230
+├── Individual 3: filter_params={42: [1,0,2]}, fitness=240
 └── ... (47 more individuals)
 ```
 
@@ -447,10 +458,10 @@ Population (size=50):
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ 1. INITIALIZATION                                           │
-│    • Analyze query for AND filters                          │
+│    • Analyze query for AND operators                        │
 │    • Generate random population:                            │
-│      - Random filter orders                                 │
-│      - Random optimization rules                            │
+│      - Random unified filter_params (reorder + cascade)     │
+│      - Each individual has unique params combination        │
 └────────────────────────┬────────────────────────────────────┘
                          │
                          ▼
@@ -470,17 +481,17 @@ Population (size=50):
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 4. CROSSOVER (Order Crossover)                              │
-│    • Combine filter orders from parents                     │
-│    • Mix optimization rules                                 │
+│ 4. CROSSOVER (Uniform Crossover)                            │
+│    • Combine unified filter_params from parents             │
+│    • Each param type inherited from random parent           │
 │    • Create 2 offspring                                     │
 └────────────────────────┬────────────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ 5. MUTATION                                                 │
-│    • Swap 2 positions in filter order                       │
-│    • Add/remove/replace rules                               │
+│    • Mutate unified params (swap/group/ungroup)             │
+│    • Combines permutation and grouping mutations            │
 │    • Probability: mutation_rate                             │
 └────────────────────────┬────────────────────────────────────┘
                          │
@@ -505,137 +516,131 @@ Population (size=50):
 
 Optimization rules mengimplementasikan equivalency rules untuk query transformation.
 
-#### Rule 1: Seleksi Konjungtif (Conjunctive Selection)
+#### Unified Filter Params (Reordering + Cascading)
 
 **Equivalency:**  
-`σ(c1 ∧ c2 ∧ ... ∧ cn)(R)` ≡ `σ(c1)(σ(c2)(...(σ(cn)(R))...))`
+`σ(c1 ∧ c2 ∧ ... ∧ cn)(R)` ≡ `σ(cπ(1))(σ(cπ(2))(...(σ(cπ(n))(R))...))`
+
+**Format:** `list[int | list[int]]`
+- int: condition cascade sebagai single filter
+- list[int]: conditions stay grouped dalam AND
 
 **Transformasi:**  
-OPERATOR_S(AND) dengan multiple conditions → Cascaded filters
+OPERATOR(AND) dengan multiple conditions → Reordered + Cascaded filters
 
 **Before:**
 
 ```
-OPERATOR_S("AND")
+FILTER
 ├── RELATION("users")
-├── FILTER("WHERE age > 25")
-├── FILTER("WHERE status = 'active'")
-└── FILTER("WHERE city = 'Jakarta'")
+└── OPERATOR("AND")
+    ├── COMPARISON(">") [age > 25, idx=0]
+    ├── COMPARISON("=") [status = 'active', idx=1]
+    └── COMPARISON("=") [city = 'Jakarta', idx=2]
 ```
 
-**After:**
+**After (dengan unified params [1, [0, 2]]):**
 
 ```
-FILTER("WHERE city = 'Jakarta'")
-└── FILTER("WHERE status = 'active'")
-    └── FILTER("WHERE age > 25")
-        └── RELATION("users")
+FILTER [status = 'active']  # idx=1 single (most selective)
+└── FILTER
+    ├── RELATION("users")
+    └── OPERATOR("AND")      # [0,2] grouped
+        ├── COMPARISON(">") [age > 25]
+        └── COMPARISON("=") [city = 'Jakarta']
 ```
 
-#### Rule 2: Seleksi Komutatif (Commutative Selection)
+Penjelasan:
+- Order: [1, [0, 2]] = reorder to [status, age, city]
+- Cascade: 1 single, [0,2] grouped
+- Result: Most selective filter first, others stay in AND
 
-**Equivalency:**  
-`σ(c1)(σ(c2)(R))` ≡ `σ(c2)(σ(c1)(R))`
+#### Unified Format Examples
 
-**Transformasi:**  
-Swap urutan filter berurutan
-
-**Before:**
-
+**Example 1: All singles (full cascade)**
+```python
+params = [2, 1, 0]  # Reorder + all single filters
 ```
-FILTER("WHERE age > 25")
-└── FILTER("WHERE status = 'active'")
-    └── RELATION("users")
-```
+Result: `FILTER(c2) → FILTER(c1) → FILTER(c0) → RELATION`
 
-**After:**
+**Example 2: Mixed (some grouped)**
+```python
+params = [2, [0, 1]]  # c2 single, [c0, c1] grouped
+```
+Result: `FILTER(c2) → FILTER(AND(c0, c1)) → RELATION`
 
+**Example 3: All grouped (no cascade)**
+```python
+params = [[2, 1, 0]]  # All stay in AND (just reordered)
 ```
-FILTER("WHERE status = 'active'")
-└── FILTER("WHERE age > 25")
-    └── RELATION("users")
-```
+Result: `FILTER(AND(c2, c1, c0)) → RELATION`
 
 ### 3.5 Query Validation
 
 Query validation memastikan query tree structure valid dan semantically correct.
 
-```python
-from query_optimizer.query_check import check_query
-
-def check_query(query_tree: QueryTree) -> bool:
-    """
-    Validate query tree structure.
-
-    Checks:
-    - Unary operators have 1 child
-    - Binary operators have 2 children
-    - Leaf nodes have 0 children
-    - FILTER has 1-2 children with correct types
-    - Required clauses present (e.g., SELECT has FROM)
-
-    Raises:
-        ValueError: If validation fails
-    """
-```
-
 **Validation Rules:**
 
-- **PROJECT**: Must have exactly 1 child
-- **SORT**: Must have exactly 1 child
-- **JOIN**: Must have exactly 2 children (both RELATION or tree)
-- **FILTER** (Conditional Expressions):
-  - **1 child**: Filter operator dengan source tree (misal: `WHERE ...` → RELATION)
-  - **2 children**:
-    - Child pertama: source tree (RELATION, JOIN, atau operator lain)
-    - Child kedua: value (ARRAY untuk IN, RELATION/PROJECT untuk subquery)
-  - **Value**: "WHERE ...", "IN ...", "EXIST" (TIDAK BOLEH "AND", "OR", "NOT")
+**Atomic Nodes (0 children):**
+- **IDENTIFIER**: Value = identifier name (required)
+- **LITERAL_NUMBER**: Value = numeric value (required)
+- **LITERAL_STRING**: Value = string value (required)
+- **LITERAL_BOOLEAN**: Value = boolean value (required)
+- **LITERAL_NULL**: No value required
 
-- **OPERATOR_S** (Logical AND/OR dengan Source):
-  - **≥3 children**: Child[0] = source, Children[1..N] = kondisi
-  - **Child[0]**: Harus operator yang menghasilkan data (RELATION, JOIN, SORT, PROJECT, OPERATOR_S, FILTER dengan children)
-  - **Child[0] TIDAK BOLEH**: OPERATOR (tidak ada data) atau FILTER leaf (tidak ada data)
-  - **Children[1..N]**: Harus FILTER, OPERATOR, atau OPERATOR_S
-  - **Value**: "AND" atau "OR" saja
+**Wrapper Nodes (1 child):**
+- **COLUMN_NAME**: Child must be IDENTIFIER
+- **TABLE_NAME**: Child must be IDENTIFIER
 
-  **Contoh dengan SORT sebagai source:**
+**Column Reference:**
+- **COLUMN_REF**: 1-2 children. Child[0] = COLUMN_NAME (required), Child[1] = TABLE_NAME (optional for qualified reference)
 
-  ```
-  OPERATOR_S("AND")
-  ├── SORT("name")              # Child 0: source (SORT operator)
-  │   └── RELATION("users")
-  ├── FILTER("WHERE age > 25")  # Child 1: kondisi
-  └── FILTER("WHERE active")    # Child 2: kondisi
-  ```
+**Source Nodes:**
+- **RELATION**: 0 children. Value = table name (must exist in database)
+- **ALIAS**: 1 child. Value = alias name (required)
+- **PROJECT**: ≥1 children. Last child = source. If value = "*", must have exactly 1 child (source only)
+- **FILTER**: 2 children. Child[0] = source, Child[1] = condition tree
+- **JOIN**: 2-3 children. Value = "INNER" or "NATURAL". NATURAL = 2 children, INNER = 3 children (2 relations + condition)
+- **SORT**: 2 children. Child[0] = COLUMN_REF, Child[1] = source. Value = "ASC" or "DESC" (optional)
+- **LIMIT**: 1 child (source). Value = limit number
 
-  SQL: `SELECT * FROM users WHERE age > 25 AND active ORDER BY name`
+**Condition Nodes:**
+- **OPERATOR**: ≥1 children. Value = "AND"/"OR"/"NOT" (required). AND/OR = ≥2 children, NOT = 1 child
+- **COMPARISON**: 2 children (left, right expressions). Value = operator ("=", "<>", "!=", ">", ">=", "<", "<=")
+- **IN_EXPR**: 2 children (column_ref, LIST or subquery)
+- **NOT_IN_EXPR**: 2 children (column_ref, LIST or subquery)
+- **EXISTS_EXPR**: 1 child (subquery)
+- **NOT_EXISTS_EXPR**: 1 child (subquery)
+- **BETWEEN_EXPR**: 3 children (value, lower, upper)
+- **NOT_BETWEEN_EXPR**: 3 children (value, lower, upper)
+- **IS_NULL_EXPR**: 1 child (column_ref)
+- **IS_NOT_NULL_EXPR**: 1 child (column_ref)
 
-- **OPERATOR** (Nested Logical Operators):
-  - **AND/OR**: ≥2 children, semua harus FILTER/OPERATOR/OPERATOR_S
-  - **NOT**: Tepat 1 child, harus FILTER/OPERATOR/OPERATOR_S
-  - **Tanpa source**: Mewarisi source dari parent OPERATOR_S
-  - **Value**: "AND", "OR", atau "NOT"
-  
-  **Contoh nested:**
-  ```
-  OPERATOR_S("AND")
-  ├── RELATION("users")
-  ├── FILTER("WHERE age > 25")
-  └── OPERATOR("OR")            # Nested, mewarisi source
-      ├── FILTER("WHERE city = 'Jakarta'")
-      └── FILTER("WHERE city = 'Bandung'")
-  ```
+**Value Expression Nodes:**
+- **ARITH_EXPR**: 2 children (left, right). Value = operator ("+", "-", "*", "/", "%")
 
-- **RELATION, ARRAY, LIMIT**: Must have 0 children
-- **UPDATE, INSERT, DELETE**: Must have exactly 1 child (RELATION atau FILTER/OPERATOR_S → RELATION)
+**Other Nodes:**
+- **LIST**: 0+ children (list items)
+
+**DML Nodes:**
+- **UPDATE_QUERY**: ≥2 children (relation, assignments, optional filter)
+- **INSERT_QUERY**: 3 children (relation, column_list, values_clause)
+- **DELETE_QUERY**: 1-2 children (relation, optional filter)
+- **ASSIGNMENT**: 2 children (column_ref, value_expr)
+
+**Transaction Nodes:**
+- **BEGIN_TRANSACTION**: 0+ children (statements)
+- **COMMIT**: 0 children
 
 **Important Notes:**
 
-- Logical operators (AND/OR/NOT) TIDAK menggunakan FILTER, tapi menggunakan OPERATOR atau OPERATOR_S
-- OPERATOR_S digunakan ketika logical operator memiliki explicit source
-- OPERATOR digunakan untuk nested logic yang mewarisi source dari parent
-- Equivalency rules (seperti seleksi konjungtif) menghasilkan query tree yang tetap valid setelah transformasi
-- Validasi dilakukan secara rekursif pada seluruh tree structure
+- Atomic nodes (IDENTIFIER, LITERAL_*) are leaf nodes with no children
+- Wrapper nodes (COLUMN_NAME, TABLE_NAME) wrap IDENTIFIER
+- COLUMN_REF represents column references (simple or qualified with table/alias)
+- FILTER has exactly 2 children: source + condition tree
+- Logical operators use OPERATOR node with AND/OR/NOT values
+- Comparison and condition expressions are separate node types (COMPARISON, IN_EXPR, etc.)
+- Validation is performed recursively on the entire tree structure
 
 ### 3.6 Cost Estimation
 
@@ -645,41 +650,47 @@ Cost estimation menghitung estimasi biaya eksekusi query.
 
 ### 3.7 Extending the Optimizer
 
-#### Adding New Optimization Rule
+#### Adding New Parameter Type
 
-1. Create rule function in `rules_registry.py`:
+1. Create parameter functions in `rule_params_manager.py`:
 
 ```python
-def rule_my_new_rule(query: ParsedQuery) -> ParsedQuery:
-    """
-    Description of the rule.
-    Equivalency: σ(...) ≡ σ(...)
-    """
-    # Clone tree to avoid modifying original
-    cloned = clone_tree(query.query_tree)
+def analyze_for_my_params(query: ParsedQuery) -> dict:
+    """Analyze query to find nodes for new param type."""
+    # Find applicable nodes
+    return {node_id: metadata}
 
-    # Apply transformation
-    transformed = my_transformation(cloned)
+def generate_my_params(metadata):
+    """Generate random parameters."""
+    # Return params structure
+    return params
 
-    return ParsedQuery(transformed, query.query)
+def mutate_my_params(params):
+    """Mutate parameters."""
+    # Return mutated params
+    return mutated_params
 ```
 
-2. Register in `ALL_RULES`:
+2. Register in `RuleParamsManager`:
 
 ```python
-ALL_RULES = [
-    ("seleksi_konjungtif", rule_seleksi_konjungtif),
-    ("seleksi_komutatif", rule_seleksi_komutatif),
-    ("my_new_rule", rule_my_new_rule),  # Add here
-]
+manager.register_rule('my_params', {
+    'analyze': analyze_for_my_params,
+    'generate': generate_my_params,
+    'mutate': mutate_my_params,
+    'copy': lambda p: copy.deepcopy(p),
+    'validate': lambda p, m: True
+})
 ```
 
-3. Use in Genetic Algorithm:
+3. Update `_apply_transformations` in `genetic_optimizer.py`:
 
 ```python
-# GA will automatically use all registered rules
-engine = OptimizationEngine()
-optimized = engine.optimize_query(query)
+if 'my_params' in self.operation_params:
+    current_query = apply_my_transformation(
+        current_query,
+        self.operation_params['my_params']
+    )
 ```
 
 #### Custom Fitness Function
