@@ -55,33 +55,7 @@ A priority queue implemented using a min-heap data structure.
 - Array-based representation
 - Parent at index i, children at 2i+1 and 2i+2
 
-### 4. Schedule
-Manages the scheduling of transaction actions with three internal queues:
-
-**Queues:**
-1. **input_queue**: Newly arrived actions (FIFO Queue)
-2. **ready_list**: Actions ready to execute (List)
-3. **blocked_queue**: Blocked actions with retry priority (PriorityQueue)
-
-**Features:**
-- `enqueue(action)` - Add new action to input queue
-- `get_next_action()` - Get next action respecting priority order
-- `mark_ready(action)` - Mark action as ready
-- `mark_blocked(action)` - Block action with priority calculation
-- `remove_transaction_actions(tid)` - Remove all actions for a transaction
-- `retry_blocked_actions()` - Retry blocked actions
-
-**Priority Order:**
-1. Ready list (highest)
-2. Input queue (medium)
-3. Blocked queue (lowest, but prioritized internally)
-
-**Blocked Action Priority:**
-- Priority = (retry_count × 10) - wait_time
-- Lower value = higher priority
-- Favors: fewer retries and longer wait times
-
-### 5. TimestampBased Algorithm
+### 4. TimestampBased Algorithm
 Implementation of the Timestamp-Based Concurrency Control algorithm.
 
 **Principle:**
@@ -119,7 +93,6 @@ Implementation of the Timestamp-Based Concurrency Control algorithm.
 concurrency_control_manager/
 ├── __init__.py
 ├── cc_manager.py                    # Main CCManager class
-├── schedule.py                       # Queue, PriorityQueue, Schedule
 ├── action.py                         # Action class
 ├── transaction.py                    # Transaction class
 ├── row.py                            # Row (database object) class
@@ -133,7 +106,6 @@ concurrency_control_manager/
 │   ├── lock_based.py                # Lock-Based (other group)
 │   ├── mvcc.py                      # MVCC (other group)
 │   └── validation_based.py          # Validation-Based (other group)
-├── test_schedule.py                 # Unit tests for Queue/Schedule
 ├── test_timestamp_based.py          # Unit tests for algorithm
 ├── driver.py                        # Demo program
 └── README.md                        # This file
