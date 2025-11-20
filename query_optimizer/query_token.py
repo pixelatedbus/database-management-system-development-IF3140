@@ -3,15 +3,16 @@ from dataclasses import dataclass
 
 class TokenType(enum.Enum):
     
-    # Sementara gini dulu kali ya bentuk token typenya ntar kalau mau diubah bilang, kalau ngga juga bilang
 
     KEYWORD_BEGIN_TRANSACTION = "BEGIN TRANSACTION"
     KEYWORD_ORDER_BY = "ORDER BY"
     KEYWORD_SELECT = "SELECT"
     KEYWORD_FROM = "FROM"
     KEYWORD_WHERE = "WHERE"
+    KEYWORD_EXIST = "EXIST"
     KEYWORD_JOIN = "JOIN"
     KEYWORD_ON = "ON"
+    KEYWORD_IN = "IN"
     KEYWORD_NATURAL = "NATURAL"
     KEYWORD_UPDATE = "UPDATE"
     KEYWORD_SET = "SET"
@@ -38,7 +39,7 @@ class TokenType(enum.Enum):
     KEYWORD_AND = "AND"
     KEYWORD_OR = "OR"
     KEYWORD_NOT = "NOT"
-    
+
     OPERATOR_NOT_EQUAL = "<>"
     OPERATOR_GREATER_EQUAL = ">="
     OPERATOR_LESS_EQUAL = "<="
