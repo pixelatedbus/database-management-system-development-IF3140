@@ -1,7 +1,3 @@
-"""
-Transaction class representing a database transaction
-"""
-
 from datetime import datetime
 from typing import List, Optional
 from .enums import TransactionStatus
@@ -35,7 +31,7 @@ class Transaction:
     def set_status(self, status: TransactionStatus) -> None:
         """Set the transaction status"""
         self.status = status
-        if status in [TransactionStatus.COMMITTED, TransactionStatus.ABORTED, TransactionStatus.TERMINATED]:
+        if status in [TransactionStatus.Committed, TransactionStatus.Aborted, TransactionStatus.Terminated]:
             if self.finish_timestamp is None:
                 self.finish_timestamp = datetime.now()
     
