@@ -22,7 +22,7 @@ import sys
 from typing import List, Dict, Any
 
 from .storage_manager import StorageManager
-from .models import Condition, DataRetrieval, DataWrite, DataDeletion, ColumnDefinition
+from .models import Condition, DataRetrieval, DataWrite, DataDeletion, ColumnDefinition, ForeignKey
 
 
 class TestStorageManager:
@@ -404,17 +404,267 @@ class TestStorageManager:
         print("  TODO: Test create B+ tree index")
         print("  TODO: Test index on different column types")
 
-    # ========== Test: get_stats (TODO) ==========
+    # ========== Test: get_stats ==========
 
     def test_get_stats(self):
         """Test get_stats functionality."""
-        self.print_header("GET STATS (TODO)")
-        print("\n[INFO] get_stats belum diimplementasi")
-        print("  TODO: Test n_r (number of tuples)")
-        print("  TODO: Test b_r (number of blocks)")
-        print("  TODO: Test l_r (tuple size)")
-        print("  TODO: Test f_r (blocking factor)")
-        print("  TODO: Test V(A,r) (distinct values)")
+        self.print_header("GET STATS")
+
+        # Setup: Create table untuk testing statistik
+        TABLE_NAME = "stats_test"
+
+        if TABLE_NAME in self.sm.tables:
+            # Skip jika sudah ada
+            pass
+        else:
+            stats_cols = [
+                ColumnDefinition("id", "INTEGER", is_primary_key=True),
+                ColumnDefinition("name", "VARCHAR", size=50),
+                ColumnDefinition("score", "FLOAT"),
+                ColumnDefinition("category", "VARCHAR", size=20)
+            ]
+            self.sm.create_table(TABLE_NAME, stats_cols)
+
+        # Test 1: Empty table stats
+        print("\n[1] Test statistik tabel kosong")
+        try:
+            stats = self.sm.get_stats()
+            if TABLE_NAME in stats:
+                table_stats = stats[TABLE_NAME]
+                self.assert_equal(table_stats.n_r, 0, "n_r untuk tabel kosong harus 0")
+                self.assert_equal(table_stats.b_r, 0, "b_r untuk tabel kosong harus 0")
+            else:
+                self.assert_true(False, f"Tabel '{TABLE_NAME}' tidak ditemukan di stats")
+        except Exception as e:
+            self.assert_true(False, f"get_stats gagal untuk tabel kosong: {e}")
+
+        # Insert test data
+        test_data = [
+            {"id": 1, "name": "Alice", "score": 85.5, "category": "A"},
+            {"id": 2, "name": "Bob", "score": 90.0, "category": "A"},
+            {"id": 3, "name": "Charlie", "score": 75.0, "category": "B"},
+            {"id": 4, "name": "Diana", "score": 88.5, "category": "A"},
+            {"id": 5, "name": "Eve", "score": 92.0, "category": "A"},
+            {"id": 6, "name": "Frank", "score": 70.0, "category": "C"},
+            {"id": 7, "name": "Grace", "score": 85.5, "category": "B"},
+            {"id": 8, "name": "Henry", "score": 78.0, "category": "B"},
+            {"id": 9, "name": "Ivy", "score": 95.0, "category": "A"},
+            {"id": 10, "name": "Jack", "score": 82.0, "category": "B"},
+        ]
+        self.sm.insert_rows(TABLE_NAME, test_data)
+
+        # Test 2: n_r (number of tuples)
+        print("\n[2] Test n_r (jumlah tuple)")
+        try:
+            stats = self.sm.get_stats()
+            table_stats = stats[TABLE_NAME]
+            self.assert_equal(table_stats.n_r, 10, "n_r harus 10 (jumlah rows yang diinsert)")
+        except Exception as e:
+            self.assert_true(False, f"Test n_r gagal: {e}")
+
+        # Test 3: b_r (number of blocks)
+        print("\n[3] Test b_r (jumlah blok)")
+        try:
+            stats = self.sm.get_stats()
+            table_stats = stats[TABLE_NAME]
+            self.assert_true(table_stats.b_r >= 1, f"b_r harus >= 1, got {table_stats.b_r}")
+            print(f"    Info: b_r = {table_stats.b_r} blok")
+        except Exception as e:
+            self.assert_true(False, f"Test b_r gagal: {e}")
+
+        # Test 4: l_r (average tuple size)
+        print("\n[4] Test l_r (rata-rata ukuran tuple)")
+        try:
+            stats = self.sm.get_stats()
+            table_stats = stats[TABLE_NAME]
+            self.assert_true(table_stats.l_r > 0, f"l_r harus > 0, got {table_stats.l_r}")
+            print(f"    Info: l_r = {table_stats.l_r} bytes")
+        except Exception as e:
+            self.assert_true(False, f"Test l_r gagal: {e}")
+
+        # Test 5: f_r (blocking factor)
+        print("\n[5] Test f_r (blocking factor)")
+        try:
+            stats = self.sm.get_stats()
+            table_stats = stats[TABLE_NAME]
+            self.assert_true(table_stats.f_r >= 1, f"f_r harus >= 1, got {table_stats.f_r}")
+            print(f"    Info: f_r = {table_stats.f_r} tuples/block")
+        except Exception as e:
+            self.assert_true(False, f"Test f_r gagal: {e}")
+
+        # Test 6: V(A,r) - distinct values per attribute
+        print("\n[6] Test V(A,r) - distinct values per attribute")
+        try:
+            stats = self.sm.get_stats()
+            table_stats = stats[TABLE_NAME]
+
+            # id harus 10 distinct (semua unik)
+            self.assert_equal(table_stats.V_a_r.get("id", 0), 10, "V(id,r) harus 10 (semua id unik)")
+
+            # name harus 10 distinct (semua unik)
+            self.assert_equal(table_stats.V_a_r.get("name", 0), 10, "V(name,r) harus 10 (semua nama unik)")
+
+            # score: Alice=85.5, Grace=85.5 (duplikat), jadi 9 distinct
+            self.assert_equal(table_stats.V_a_r.get("score", 0), 9, "V(score,r) harus 9 (ada 1 duplikat)")
+
+            # category: A=5, B=4, C=1 -> 3 distinct
+            self.assert_equal(table_stats.V_a_r.get("category", 0), 3, "V(category,r) harus 3 (A, B, C)")
+
+        except Exception as e:
+            self.assert_true(False, f"Test V(A,r) gagal: {e}")
+
+        # Test 7: Verifikasi rumus b_r = ceil(n_r / f_r)
+        print("\n[7] Verifikasi rumus b_r = ceil(n_r / f_r)")
+        try:
+            import math
+            stats = self.sm.get_stats()
+            table_stats = stats[TABLE_NAME]
+
+            if table_stats.f_r > 0:
+                calculated_br = math.ceil(table_stats.n_r / table_stats.f_r)
+                # Note: actual b_r mungkin berbeda karena cara data di-pack ke blocks
+                self.assert_true(
+                    table_stats.b_r <= calculated_br + 1,
+                    f"b_r ({table_stats.b_r}) harus mendekati ceil(n_r/f_r) ({calculated_br})"
+                )
+                print(f"    Info: ceil({table_stats.n_r}/{table_stats.f_r}) = {calculated_br}, actual b_r = {table_stats.b_r}")
+        except Exception as e:
+            self.assert_true(False, f"Verifikasi rumus gagal: {e}")
+
+        # Test 8: Multiple tables stats
+        print("\n[8] Test statistik multiple tables")
+        try:
+            # Buat tabel kedua untuk test
+            if "stats_test_2" not in self.sm.tables:
+                self.sm.create_table("stats_test_2", [
+                    ColumnDefinition("id", "INTEGER"),
+                    ColumnDefinition("value", "VARCHAR", size=20)
+                ])
+                self.sm.insert_rows("stats_test_2", [
+                    {"id": 1, "value": "test1"},
+                    {"id": 2, "value": "test2"}
+                ])
+
+            stats = self.sm.get_stats()
+            self.assert_true(len(stats) >= 2, f"Harus ada >= 2 tabel di stats, got {len(stats)}")
+            print(f"    Info: {len(stats)} tabel ditemukan: {list(stats.keys())}")
+
+            # Verifikasi tabel kedua juga punya stats yang benar
+            if "stats_test_2" in stats:
+                self.assert_equal(stats["stats_test_2"].n_r, 2, "stats_test_2 harus punya n_r = 2")
+        except Exception as e:
+            self.assert_true(False, f"Test multiple tables stats gagal: {e}")
+
+        # Test 9: Large dataset dengan multiple blocks
+        print("\n[9] Test dengan dataset besar (1000 rows, multiple blocks)")
+        try:
+            import random
+
+            LARGE_TABLE = "large_stats_test"
+            if LARGE_TABLE not in self.sm.tables:
+                self.sm.create_table(LARGE_TABLE, [
+                    ColumnDefinition("id", "INTEGER", is_primary_key=True),
+                    ColumnDefinition("name", "VARCHAR", size=100),
+                    ColumnDefinition("email", "VARCHAR", size=100),
+                    ColumnDefinition("age", "INTEGER"),
+                    ColumnDefinition("salary", "FLOAT"),
+                    ColumnDefinition("department", "VARCHAR", size=30),
+                    ColumnDefinition("is_active", "INTEGER")
+                ])
+
+            # Generate 1000 rows dengan data yang bervariasi
+            departments = ["Engineering", "Sales", "Marketing", "HR", "Finance", "Operations", "IT", "Legal"]
+            large_data = []
+            for i in range(1000):
+                large_data.append({
+                    "id": i + 1,
+                    "name": f"Employee_{i+1:04d}",
+                    "email": f"employee{i+1}@company.com",
+                    "age": 22 + (i % 43),  # age 22-64 (43 distinct)
+                    "salary": 30000.0 + (i % 100) * 1000,  # 100 distinct salaries
+                    "department": departments[i % len(departments)],  # 8 distinct
+                    "is_active": i % 2  # 2 distinct (0 or 1)
+                })
+
+            self.sm.insert_rows(LARGE_TABLE, large_data)
+
+            stats = self.sm.get_stats()
+            large_stats = stats[LARGE_TABLE]
+
+            # Test n_r
+            self.assert_equal(large_stats.n_r, 1000, "n_r harus 1000")
+
+            # Test b_r (harus > 1 untuk 1000 rows)
+            self.assert_true(large_stats.b_r >= 1, f"b_r harus >= 1, got {large_stats.b_r}")
+            print(f"    Info: n_r = {large_stats.n_r}, b_r = {large_stats.b_r} blok")
+
+            # Test l_r dan f_r
+            self.assert_true(large_stats.l_r > 0, f"l_r harus > 0, got {large_stats.l_r}")
+            self.assert_true(large_stats.f_r >= 1, f"f_r harus >= 1, got {large_stats.f_r}")
+            print(f"    Info: l_r = {large_stats.l_r} bytes, f_r = {large_stats.f_r} tuples/block")
+
+            # Test V(A,r) untuk berbagai kolom
+            self.assert_equal(large_stats.V_a_r.get("id", 0), 1000, "V(id,r) harus 1000 (semua unik)")
+            self.assert_equal(large_stats.V_a_r.get("department", 0), 8, "V(department,r) harus 8")
+            self.assert_equal(large_stats.V_a_r.get("is_active", 0), 2, "V(is_active,r) harus 2")
+            self.assert_equal(large_stats.V_a_r.get("age", 0), 43, "V(age,r) harus 43")
+            self.assert_equal(large_stats.V_a_r.get("salary", 0), 100, "V(salary,r) harus 100")
+
+            print(f"    Info: V(id)={large_stats.V_a_r.get('id')}, V(dept)={large_stats.V_a_r.get('department')}, V(age)={large_stats.V_a_r.get('age')}, V(salary)={large_stats.V_a_r.get('salary')}")
+
+            # Verifikasi rumus b_r untuk large dataset
+            import math
+            if large_stats.f_r > 0:
+                calculated_br = math.ceil(large_stats.n_r / large_stats.f_r)
+                print(f"    Info: ceil({large_stats.n_r}/{large_stats.f_r}) = {calculated_br}, actual b_r = {large_stats.b_r}")
+
+        except Exception as e:
+            self.assert_true(False, f"Test large dataset gagal: {e}")
+
+
+    # ========== Test: drop_table ==========
+
+    def test_drop_table(self):
+        """Test drop_table functionality."""
+        self.print_header("DROP TABLE")
+
+        # Setup: Create table untuk testing drop
+        TABLE_NAME = "temp_table"
+
+        if TABLE_NAME not in self.sm.tables:
+            self.sm.create_table(TABLE_NAME, ["col1", "col2", "col3"])
+
+        # Test 1: Drop table berhasil
+        print("\n[1] Drop existing table 'temp_table'")
+        try:
+            self.sm.drop_table(TABLE_NAME)
+            self.assert_true(TABLE_NAME not in self.sm.tables, "Table 'temp_table' should be dropped")
+        except Exception as e:
+            self.assert_true(False, f"Drop table should succeed: {e}")
+
+        # Test 2: Drop table gagal karena tabel tidak ada
+        print("\n[2] Drop non-existing table should fail")
+        try:
+            self.sm.drop_table("non_existing_table")
+            self.assert_true(False, "Should raise ValueError for non-existing table")
+        except ValueError:
+            self.assert_true(True, "Should raise ValueError for non-existing table")
+
+        # Test 3: Drop table gagal karena ada referensi di tabel lain 
+        fk_id_pegawai = ForeignKey("id_pegawai", "employee", "id")
+        if "employee_phone_number" not in self.sm.tables:
+            self.sm.create_table("employee_phone_number", [
+                ColumnDefinition("id_pegawai", "INTEGER", is_primary_key=True),
+                ColumnDefinition("phone_number", "VARCHAR", size=15)
+            ], ["id_pegawai"], [fk_id_pegawai])
+
+        print("\n[3] Drop table referenced by another table should fail")
+        try:
+            self.sm.drop_table("employee")
+            self.assert_true(False, "Should raise ValueError for table with references")
+        except ValueError:
+            self.assert_true(True, "Should raise ValueError for table with references")
+
 
     # ========== Test Runner ==========
 
@@ -428,6 +678,7 @@ class TestStorageManager:
         self.test_delete_block()
         self.test_set_index()
         self.test_get_stats()
+        self.test_drop_table()
 
         self.teardown()
         self.print_summary()
