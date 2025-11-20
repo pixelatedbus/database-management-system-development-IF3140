@@ -120,15 +120,15 @@ Dokumen ini berisi rencana untuk merombak parser query optimizer agar memiliki s
 <select_list>    ::= '*'
                    | <select_item> (',' <select_item>)*
 
-<select_item>    ::= <value_expr> [<alias>]
-
-<alias>          ::= ['AS'] <identifier>
+<select_item>    ::= <value_expr>
 
 # FROM Clause
 <table_expr>     ::= <table_ref>
                    | <table_expr> <join_clause>
 
 <table_ref>      ::= <identifier> [<alias>]
+
+<alias>          ::= ['AS'] <identifier>
 
 <join_clause>    ::= [<join_type>] 'JOIN' <table_ref> [<join_condition>]
 
