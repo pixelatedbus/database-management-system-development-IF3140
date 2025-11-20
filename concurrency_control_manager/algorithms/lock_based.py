@@ -8,7 +8,7 @@ from .base import ConcurrencyAlgorithm
 from ..transaction import Transaction
 from ..row import Row
 from ..enums import ActionType, LockType, TransactionStatus
-from ..response import Response
+from ..response import Response, AlgorithmResponse
 
 
 class LockEntry:
@@ -91,7 +91,7 @@ class LockManager:
             new_lock_entry.granted = False
             new_lock_entry.wait_start = datetime.now()
             lock_list.append(new_lock_entry)
-            self.wait_for_graph.setdefault(transaction_id, set()).update(conflicting_transactions)
+            # self.wait_for_graph.setdefault(transaction_id, set()).update(conflicting_transactions)
             return False
         else:
             new_lock_entry.granted = True
@@ -227,7 +227,7 @@ class LockManager:
             granted_locks = [lock for lock in lock_list if lock.granted]
             waiting_locks = [lock for lock in lock_list if not lock.granted]
 
-            if not waiting_locks or not not granted_locks:
+            if not waiting_locks or not granted_locks:
                 continue
 
             for wait_lock in waiting_locks:
@@ -304,7 +304,7 @@ class LockBasedAlgorithm(ConcurrencyAlgorithm):
         )
         
         if lock_granted:
-            return Response(
+            return AlgorithmResponse(
                 allowed=True, 
                 message=f"Lock {required_lock_type.name} for obj {obj_id} granted."
             )
@@ -314,17 +314,17 @@ class LockBasedAlgorithm(ConcurrencyAlgorithm):
                 
                 if victim_id == trans_id:
                     self.abort_transaction(t) 
-                    return Response(
+                    return AlgorithmResponse(
                         allowed=False, 
                         message=f"Transaction {trans_id} aborted due to deadlock."
                     )
                 else:
-                    return Response(
+                    return AlgorithmResponse(
                         allowed=False, 
                         message=f"Transaction {trans_id} must wait (deadlock detected, victim is {victim_id})."
                     )
             else:
-                return Response(
+                return AlgorithmResponse(
                     allowed=False, 
                     message=f"Transaction {trans_id} must wait for lock on {obj_id}."
                 )
