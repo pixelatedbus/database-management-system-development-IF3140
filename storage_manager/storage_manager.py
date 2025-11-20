@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import struct
 from typing import Any, Dict, List, Optional, Union, Tuple
-from hash_index import HashIndex
+from .hash_index import HashIndex
 
 from .models import (
     Condition,
@@ -50,6 +50,7 @@ class StorageManager:
             os.makedirs(self.data_dir)
 
         self._load_table_schemas()
+        self._load_indexes()
         print(f"storage manager diinisialisasi di: {os.path.abspath(self.data_dir)}")
 
     # ========== ngatur file ==========
@@ -60,10 +61,39 @@ class StorageManager:
         if os.path.exists(metadata_file):
             try:
                 self.tables = self._read_binary_metadata(metadata_file)
-                print(f"✓ loaded {len(self.tables)} tabel dari metadata")
+                print(f"loaded {len(self.tables)} tabel dari metadata")
             except Exception as e:
-                print(f"⚠ error loading metadata: {e}")
+                print(f"error loading metadata: {e}")
                 self.tables = {}
+
+    def _load_indexes(self) -> None:
+        # load semua index yang ada dari disk
+        if not os.path.exists(self.data_dir):
+            return
+
+        # scan semua file index di data_dir
+        index_files = [f for f in os.listdir(self.data_dir) if f.startswith("__index__") and f.endswith(".idx")]
+
+        for index_file in index_files:
+            try:
+                # parse filename: __index__table_column.idx
+                name_part = index_file[9:-4]  # remove "__index__" and ".idx"
+                parts = name_part.split("_", 1)  # split jadi table dan column
+                if len(parts) == 2:
+                    table, column = parts
+
+                    # load index
+                    index = HashIndex(table, column)
+                    index_path = os.path.join(self.data_dir, index_file)
+                    index.load(index_path)
+
+                    # simpan ke memory
+                    self.indexes[(table, column)] = index
+            except Exception as e:
+                print(f"error loading index {index_file}: {e}")
+
+        if self.indexes:
+            print(f"loaded {len(self.indexes)} index dari disk")
 
     def _save_table_schemas(self) -> None:
         # simpen schema semua tabel ke metadata file
@@ -71,7 +101,7 @@ class StorageManager:
         try:
             self._write_binary_metadata(metadata_file, self.tables)
         except Exception as e:
-            print(f"⚠ error saving metadata: {e}")
+            print(f"error saving metadata: {e}")
 
     def _get_metadata_file_path(self) -> str:
         # dapetin path file metadata
@@ -472,16 +502,25 @@ class StorageManager:
 
         # cek file exists
         if not os.path.exists(table_file):
-            print(f"⚠ file tabel '{table_name}' tidak ditemukan")
+            print(f"file tabel '{table_name}' tidak ditemukan")
             return []
 
-        # stream data dari binary file
-        try:
-            def row_filter(row):
-                return self._row_matches_all_conditions(row, data_retrieval.conditions)
+        # cek apakah bisa pake hash index buat optimasi
+        usable_index = self._find_usable_index(table_name, data_retrieval.conditions)
 
-            filtered_rows = list(read_binary_table_streaming(table_file, filter_fn=row_filter))
-            print(f"✓ found {len(filtered_rows)} matching rows dari tabel '{table_name}' (streamed)")
+        try:
+            if usable_index:
+                # pake index buat optimasi
+                index, condition = usable_index
+                filtered_rows = self._read_with_index(table_file, index, condition, data_retrieval.conditions)
+                print(f"found {len(filtered_rows)} matching rows dari tabel '{table_name}' (index scan)")
+            else:
+                # fallback ke full table scan
+                def row_filter(row):
+                    return self._row_matches_all_conditions(row, data_retrieval.conditions)
+
+                filtered_rows = list(read_binary_table_streaming(table_file, filter_fn=row_filter))
+                print(f"found {len(filtered_rows)} matching rows dari tabel '{table_name}' (full scan)")
         except Exception as e:
             raise ValueError(f"error membaca binary file '{table_name}.dat': {e}")
 
@@ -490,6 +529,50 @@ class StorageManager:
             return [project_columns(row, data_retrieval.column) for row in filtered_rows]
         else:
             return filtered_rows
+
+    def _find_usable_index(self, table: str, conditions: List[Condition]) -> Optional[Tuple[Any, Condition]]:
+        # cari index yang bisa dipake buat optimasi query
+        # hash index cuma bisa dipake buat equality condition (operation = '=')
+        for condition in conditions:
+            if condition.operation == '=':
+                index_key = (table, condition.column)
+                if index_key in self.indexes:
+                    return (self.indexes[index_key], condition)
+        return None
+
+    def _read_with_index(
+        self,
+        table_file: str,
+        index: Any,
+        indexed_condition: Condition,
+        all_conditions: List[Condition]
+    ) -> List[Dict[str, Any]]:
+        # baca data pake hash index
+        # 1. pake index buat dapetin record_ids yang match
+        # 2. load cuma rows yang match
+        # 3. apply kondisi lain yang ga di-index
+
+        # cari record_ids dari index
+        search_key = str(indexed_condition.operand) if indexed_condition.operand is not None else "NULL"
+        record_ids = index.search(search_key)
+
+        if not record_ids:
+            return []
+
+        # convert ke set buat fast lookup
+        target_record_ids = set(record_ids)
+
+        # load rows yang match dari disk
+        matching_rows = []
+        record_id = 0
+        for row in read_binary_table_streaming(table_file):
+            if record_id in target_record_ids:
+                # apply kondisi lain yang ga di-index
+                if self._row_matches_all_conditions(row, all_conditions):
+                    matching_rows.append(row)
+            record_id += 1
+
+        return matching_rows
 
     def _row_matches_all_conditions(self, row: Dict[str, Any], conditions: List[Condition]) -> bool:
         # cek apakah row memenuhi semua kondisi (and logic)
@@ -595,7 +678,7 @@ class StorageManager:
                 else:
                     append_block_to_table(table_file, rows_to_insert, schema_names, self.block_size)
 
-                print(f"✓ BATCH inserted {len(rows_to_insert)} rows ke tabel '{table_name}' (efficient!)")
+                print(f"BATCH inserted {len(rows_to_insert)} rows ke tabel '{table_name}' (efficient!)")
                 return len(rows_to_insert)
 
             else:
@@ -703,19 +786,28 @@ class StorageManager:
         return deleted_count
 
     def set_index(self, table: str, column: str, index_type: str) -> None:
+        # bikin index buat kolom tertentu di tabel
+        # bisa hash (equality) atau btree (range)
         if table not in self.tables:
             raise ValueError(f"Tabel '{table}' tidak ditemukan")
-        
+
         if column not in [c["name"] for c in self.tables[table]["columns"]]:
             raise ValueError(f"Kolom '{column}' tidak ditemukan di tabel '{table}'")
-        
+
         if index_type not in ["btree", "hash"]:
             raise ValueError(f"Type {index_type} tidak ada")
-        
+
         if index_type == "btree":
-            raise NotImplemented("B+ Tree Index belum di implementasi")
+            raise NotImplementedError("b+ tree index belum di implementasi")
         elif index_type == "hash":
-            index = HashIndex()
+            # bikin hash index baru
+            index = HashIndex(table, column)
+
+            # coba load index yang udah ada (kalo udah pernah dibuat sebelumnya)
+            index_file = self._get_index_file_path(table, column)
+            index.load(index_file)
+
+            # scan semua rows dan populate index
             table_file = self._get_table_file_path(table)
             if os.path.exists(table_file):
                 record_id = 0
@@ -726,10 +818,31 @@ class StorageManager:
                         index.insert(key_str, record_id)
                     record_id += 1
 
-                print(f"Index dibuat dengan {record_id} entries")
-            else:
-                print("Tabel Kosong")
+                print(f"index dibuat dengan {record_id} entries")
 
+                # save index ke disk buat persistence
+                index.save(index_file)
+            else:
+                print("tabel kosong, index tidak dibuat")
+
+            # simpan index ke memory buat dipake nanti
+            self.indexes[(table, column)] = index
+
+    def _get_index_file_path(self, table: str, column: str) -> str:
+        # dapetin path file index
+        return os.path.join(self.data_dir, f"__index__{table}_{column}.idx")
+
+    def has_index(self, table: str, column: str) -> bool:
+        # cek apakah kolom di tabel punya index
+        return (table, column) in self.indexes
+
+    def get_indexes(self, table: Optional[str] = None) -> List[Tuple[str, str]]:
+        # dapetin list semua index yang ada
+        # kalo table di-specify, cuma return index buat tabel itu
+        if table:
+            return [(t, c) for t, c in self.indexes.keys() if t == table]
+        else:
+            return list(self.indexes.keys())
 
     def get_stats(self) -> Dict[str, Statistic]:
         # ambil statistik buat semua tabel
@@ -812,7 +925,7 @@ class StorageManager:
                 )
 
             except Exception as e:
-                print(f"⚠ error calculating stats for '{table_name}': {e}")
+                print(f"error calculating stats for '{table_name}': {e}")
                 stats[table_name] = Statistic(
                     n_r=0,
                     b_r=0,
