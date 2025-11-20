@@ -29,7 +29,7 @@ class log:
         return(
             f"transaction_id:{self.transaction_id}, "
             f"action:{self.action}, "
-            f"timestamp:{self.timestamp.strftime("%Y-%m-%d_%H-%M-%S")}, "
+            f"timestamp:{self.timestamp.strftime('%Y-%m-%d_%H-%M-%S')}, "
             f"old_data:{self.old_data}, "
             f"new_data:{self.new_data}, "
             f"table_name:{self.table_name}, "
@@ -39,7 +39,7 @@ class log:
         data = {
             "transaction_id":self.transaction_id,
             "action":self.action,
-            "timestamp":str(self.timestamp.strftime("%Y-%m-%d_%H-%M-%S")),
+            "timestamp":str(self.timestamp.strftime('%Y-%m-%d_%H-%M-%S')),
             "old_data":self.old_data,
             "new_data":self.new_data,
             "table_name":self.table_name
