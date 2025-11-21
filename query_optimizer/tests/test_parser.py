@@ -36,8 +36,9 @@ class TestSelect(unittest.TestCase):
         tree = Parser(Tokenizer(sql)).parse()
         sort = tree.childs[-1]
         self.assertEqual(sort.type, "SORT")
-        order_item = sort.childs[0]
-        self.assertEqual(order_item.val, "DESC")
+        self.assertEqual(sort.val, "DESC")
+        order_expr = sort.childs[0]
+        self.assertEqual(order_expr.type, "COLUMN_REF")
         filt = sort.childs[1]
         self.assertEqual(filt.type, "FILTER")
         self.assertEqual(filt.val, "")
@@ -194,9 +195,9 @@ class TestPDFExamples(unittest.TestCase):
         self.assertEqual(limit.val, "10")
         sort = limit.childs[0]
         self.assertEqual(sort.type, "SORT")
-        order_item = sort.childs[0]
-        self.assertEqual(order_item.type, "ORDER_ITEM")
-        self.assertEqual(order_item.val, "ASC")
+        self.assertEqual(sort.val, "ASC")
+        order_expr = sort.childs[0]
+        self.assertEqual(order_expr.type, "COLUMN_REF")
         filt = sort.childs[1]
         self.assertEqual(filt.type, "FILTER")
         join = filt.childs[0]
