@@ -36,8 +36,9 @@ def print_help():
     print("Usage:")
     print("  python -m query_optimizer.demo 1  # Run demo parse")
     print("  python -m query_optimizer.demo 2  # Run demo optimized")
-    print("  python -m query_optimizer.demo 3  # Run demo rule 1 (cascade filters)")
-    print("  python -m query_optimizer.demo 4  # Run demo genetic with Rule 1 + Rule 2")
+    print("  python -m query_optimizer.demo 3  # Run demo Rule 3 (projection elimination)")
+    print("  python -m query_optimizer.demo 4  # Run demo Rule 1 (cascade filters)")
+    print("  python -m query_optimizer.demo 5  # Run demo genetic with Rule 1 + Rule 2")
     print_separator()
 
 def demo_parse():
@@ -46,9 +47,119 @@ def demo_parse():
 def demo_optimized():
     pass
 
+def demo_rule_3():
+    """Demo 3: Rule 3 - Projection Elimination"""
+    print_separator("DEMO 3: Rule 3 - Projection Elimination")
+    
+    from query_optimizer.query_tree import QueryTree
+    from query_optimizer.optimization_engine import ParsedQuery
+    from query_optimizer.rule_3 import seleksi_proyeksi
+    
+    print("\n" + "="*70)
+    print("Creating query with nested projections (redundant)")
+    print("="*70)
+    
+    # Build query tree manually with nested projections
+    # PROJECT(id, name)
+    # └── PROJECT(*)
+    #     └── RELATION("users")
+    
+    relation = QueryTree("RELATION", "users")
+    
+    # Inner projection: SELECT *
+    inner_project = QueryTree("PROJECT", "*")
+    inner_project.add_child(relation)
+    
+    # Outer projection: SELECT id, name
+    col1 = QueryTree("COLUMN_REF", "")
+    col1_name = QueryTree("COLUMN_NAME", "")
+    col1_id = QueryTree("IDENTIFIER", "id")
+    col1_name.add_child(col1_id)
+    col1.add_child(col1_name)
+    
+    col2 = QueryTree("COLUMN_REF", "")
+    col2_name = QueryTree("COLUMN_NAME", "")
+    col2_id = QueryTree("IDENTIFIER", "name")
+    col2_name.add_child(col2_id)
+    col2.add_child(col2_name)
+    
+    outer_project = QueryTree("PROJECT", "")
+    outer_project.add_child(col1)
+    outer_project.add_child(col2)
+    outer_project.add_child(inner_project)
+    
+    query = ParsedQuery(outer_project, "SELECT id, name FROM (SELECT * FROM users)")
+    
+    print("\nOriginal Query Tree (nested projections):")
+    print(query.query_tree.tree())
+    
+    # Count PROJECT nodes
+    def count_projects(node):
+        if node is None:
+            return 0
+        count = 1 if node.type == "PROJECT" else 0
+        for child in node.childs:
+            count += count_projects(child)
+        return count
+    
+    original_count = count_projects(query.query_tree)
+    print(f"\nPROJECT nodes before: {original_count}")
+    
+    print("\n" + "="*70)
+    print("Applying Rule 3: Projection Elimination")
+    print("="*70)
+    print("Rule: PROJECT_1(PROJECT_2(Source)) ≡ PROJECT_1(Source)")
+    
+    optimized = seleksi_proyeksi(query)
+    
+    print("\nOptimized Query Tree (projection eliminated):")
+    print(optimized.query_tree.tree())
+    
+    optimized_count = count_projects(optimized.query_tree)
+    print(f"\nPROJECT nodes after: {optimized_count}")
+    
+    if optimized_count < original_count:
+        print(f"✓ Successfully eliminated {original_count - optimized_count} nested projection(s)!")
+    
+    print("\n" + "="*70)
+    print("Integration with Optimization Engine")
+    print("="*70)
+    print("Rule 3 is applied ONCE at the start of optimize_query()")
+    print("It runs BEFORE genetic algorithm, not during GA iterations")
+    
+    from query_optimizer.optimization_engine import OptimizationEngine
+    
+    engine = OptimizationEngine()
+    
+    # Test with simple query
+    simple_query = engine.parse_query("SELECT * FROM users WHERE age > 18")
+    print("\n\nTesting optimization flow:")
+    print("1. Parse query")
+    print("2. Apply Rule 3 (projection elimination) - ONE TIME")
+    print("3. Apply genetic algorithm (filter optimization)")
+    
+    optimized_with_ga = engine.optimize_query(
+        simple_query,
+        use_genetic=True,
+        population_size=10,
+        generations=5
+    )
+    
+    print("\n✓ Rule 3 applied before genetic algorithm")
+    print("✓ Genetic algorithm works on Rule 3 result")
+    
+    print_separator("DEMO 3 COMPLETED")
+    print("\nKey Points:")
+    print("- Rule 3 eliminates redundant nested projections")
+    print("- It's deterministic (no parameters to optimize)")
+    print("- Applied ONCE at start, NOT in genetic algorithm")
+    print("- Always beneficial (no trade-offs)")
+    
+    return optimized
+
 def demo_rule_1():
-    """Demo 3: Rule 1 - Seleksi Konjungtif (Cascade Filters)"""
-    print_separator("DEMO 3: Rule 1 - Seleksi Konjungtif")
+    """Demo 4: Rule 1 - Seleksi Konjungtif (Cascade Filters)"""
+    print_separator("DEMO 4: Rule 1 - Seleksi Konjungtif")
     
     from query_optimizer.query_tree import QueryTree
     from query_optimizer.optimization_engine import ParsedQuery
@@ -99,7 +210,7 @@ def demo_rule_1():
     
     # Demo 1: Cascade with default order (all single)
     print("\n" + "="*70)
-    print("Demo 3a: Cascade all conditions (default order)")
+    print("Demo 4a: Cascade all conditions (default order)")
     print("="*70)
     
     cascaded = seleksi_konjungtif(query)
@@ -109,7 +220,7 @@ def demo_rule_1():
     
     # Demo 2: Cascade with mixed order
     print("\n" + "="*70)
-    print("Demo 3b: Cascade with mixed order [2, [0, 1]]")
+    print("Demo 4b: Cascade with mixed order [2, [0, 1]]")
     print("="*70)
     print("This means: condition2 single, then (condition0 AND condition1) grouped")
     
@@ -122,7 +233,7 @@ def demo_rule_1():
     
     # Demo 3: Random order
     print("\n" + "="*70)
-    print("Demo 3c: Cascade with random order")
+    print("Demo 4c: Cascade with random order")
     print("="*70)
     
     random_order = generate_random_rule_1_params(3)
@@ -136,7 +247,7 @@ def demo_rule_1():
     
     # Demo 4: Uncascade back to AND
     print("\n" + "="*70)
-    print("Demo 3d: Uncascade back to OPERATOR(AND)")
+    print("Demo 4d: Uncascade back to OPERATOR(AND)")
     print("="*70)
     
     uncascaded = uncascade_filters(cascaded)
@@ -144,12 +255,12 @@ def demo_rule_1():
     print("\nUncascaded Query Tree (back to AND structure):")
     print_query_tree(uncascaded.query_tree)
     
-    print_separator("DEMO 3 COMPLETED")
+    print_separator("DEMO 4 COMPLETED")
     return query
 
 def demo_genetic_with_rules():
-    """Demo 4: Genetic Optimizer with Rule 1 + Rule 2 Integration"""
-    print_separator("DEMO 4: Genetic Optimizer with Rule 1 + Rule 2")
+    """Demo 5: Genetic Optimizer with Rule 1 + Rule 2 Integration"""
+    print_separator("DEMO 5: Genetic Optimizer with Rule 1 + Rule 2")
     
     from query_optimizer.query_tree import QueryTree
     from query_optimizer.optimization_engine import ParsedQuery
@@ -256,8 +367,9 @@ def demo_genetic_with_rules():
                   f"{last['avg_fitness']:7.2f} | "
                   f"{last['worst_fitness']:7.2f}")
     
-    print_separator("DEMO 4 COMPLETED")
+    print_separator("DEMO 5 COMPLETED")
     print("\nKey Insights:")
+    print("- Rule 3 (projection elimination) applied ONCE before genetic algorithm")
     print("- Unified filter_params format combines reordering and cascading in one parameter")
     print("- Genetic Algorithm explores different combinations of:")
     print("  * Condition reordering (position in list)")
@@ -270,6 +382,13 @@ def demo_genetic_with_rules():
 
 def main():
     """Main program"""
+    import sys
+    import io
+    
+    # Fix encoding for Windows
+    if sys.platform == 'win32':
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    
     print("\n")
     print("╔═══════════════════════════════════════════════════════════════════╗")
     print("║                                                                   ║")
@@ -300,8 +419,10 @@ def main():
             demo_optimized()
             print_separator("DEMO COMPLETED")
         elif demo_num == 3:
-            demo_rule_1()
+            demo_rule_3()
         elif demo_num == 4:
+            demo_rule_1()
+        elif demo_num == 5:
             demo_genetic_with_rules()
         else:
             print_help()

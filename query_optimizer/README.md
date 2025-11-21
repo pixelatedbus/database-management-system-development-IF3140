@@ -55,28 +55,44 @@ cd database-management-system-development-IF3140
 
 Demo program menyediakan 2 mode:
 
-**Demo 1: Basic Parsing**
+**Demo 1-2: Basic Operations**
 
 ```bash
-python -m query_optimizer.demo 1
+python -m query_optimizer.demo 1  # Basic parsing
+python -m query_optimizer.demo 2  # Basic optimization
+```
+
+**Demo 3: Rule 3 - Projection Elimination**
+
+```bash
+python -m query_optimizer.demo 3
 ```
 
 Output:
+- Demonstrates nested projection elimination
+- Shows before/after tree structure
+- Explains Rule 3 is applied ONCE before GA
+- PROJECT count reduction
 
-- Menampilkan SQL query original
-- Query Tree structure
-- Estimated cost
-
-**Demo 2-4: Genetic Algorithm Optimization**
+**Demo 4: Rule 1 - Filter Cascading**
 
 ```bash
-python -m query_optimizer.demo 2  # Rule 1 only
-python -m query_optimizer.demo 3  # Basic GA
-python -m query_optimizer.demo 4  # GA with unified filter params
+python -m query_optimizer.demo 4
 ```
 
 Output:
+- Filter cascading transformation
+- Mixed cascade orders (unified format)
+- Uncascade back to AND structure
 
+**Demo 5: Genetic Algorithm with Unified Params**
+
+```bash
+python -m query_optimizer.demo 5
+```
+
+Output:
+- Full genetic optimization (Rule 3 → GA)
 - Original query tree & cost
 - Optimized query tree & cost
 - Improvement statistics
@@ -105,6 +121,27 @@ cost = engine.get_cost(query)
 print(f"Cost: {cost}")
 ```
 
+#### Optimization with Genetic Algorithm
+
+```python
+from query_optimizer.optimization_engine import OptimizationEngine
+
+engine = OptimizationEngine()
+query = engine.parse_query("SELECT * FROM users WHERE age > 25 AND status = 'active'")
+
+# Optimize dengan GA
+# Note: Rule 3 (projection elimination) otomatis dijalankan SEBELUM GA
+optimized = engine.optimize_query(
+    query,
+    use_genetic=True,
+    population_size=50,
+    generations=100
+)
+
+print("Original cost:", engine.get_cost(query))
+print("Optimized cost:", engine.get_cost(optimized))
+```
+
 #### Custom Fitness Function
 
 ```python
@@ -124,6 +161,7 @@ engine = OptimizationEngine()
 query = engine.parse_query("SELECT * FROM users WHERE age > 25 AND status = 'active'")
 
 # Use custom fitness function
+# Rule 3 tetap dijalankan di awal, kemudian GA dengan custom fitness
 optimized = engine.optimize_query(
     query,
     population_size=30,
@@ -467,7 +505,33 @@ Population (size=50):
 
 Optimization rules mengimplementasikan equivalency rules untuk query transformation.
 
-#### Unified Filter Params (Reordering + Cascading)
+#### Rule 3: Projection Elimination (Applied ONCE at Start)
+
+**Equivalency:**  
+`PROJECT_1(PROJECT_2(Source))` ≡ `PROJECT_1(Source)`
+
+**Timing:** Rule 3 dijalankan **SEKALI di awal** proses optimasi (sebelum genetic algorithm), tidak diikutkan dalam iterasi GA.
+
+**Purpose:** Mengeliminasi nested projection yang redundant. Outer projection mengambil alih inner projection.
+
+**Transformation:**
+```
+Before:
+PROJECT(name, age)
+└── PROJECT(*)
+    └── RELATION(users)
+
+After:
+PROJECT(name, age)
+└── RELATION(users)
+```
+
+**Implementation:**
+- Dieksekusi di `optimize_query()` sebelum genetic algorithm
+- Tidak termasuk dalam parameter space GA
+- Bersifat deterministik (tidak ada variasi)
+
+#### Unified Filter Params (Reordering + Cascading - IN Genetic Algorithm)
 
 **Equivalency:**  
 `σ(c1 ∧ c2 ∧ ... ∧ cn)(R)` ≡ `σ(cπ(1))(σ(cπ(2))(...(σ(cπ(n))(R))...))`
