@@ -36,10 +36,24 @@ class StorageManager:
     # tugasnya: simpan data ke binary file, baca/tulis/hapus blok, kelola index, kasih statistik
     # tiap tabel disimpan di file terpisah (data/nama_tabel.dat) dalam format binary
 
+    _instance: Optional['StorageManager'] = None
+    _initialized: bool = False
+
+    def __new__(cls, data_dir: str = "data", block_size: int = 4096):
+        # singleton pattern: cuma bikin instance sekali
+        if cls._instance is None:
+            cls._instance = super(StorageManager, cls).__new__(cls)
+        return cls._instance
+
     def __init__(self, data_dir: str = "data", block_size: int = 4096):
-        # inisialisasi storage manager
+        # inisialisasi storage manager (cuma jalan sekali karena singleton)
         # data_dir: folder tempat nyimpen file tabel
         # block_size: ukuran blok dalam bytes
+
+        # skip inisialisasi kalo udah pernah di-init
+        if StorageManager._initialized:
+            return
+
         self.data_dir = data_dir
         self.block_size = block_size
 
@@ -54,6 +68,9 @@ class StorageManager:
         self._load_table_schemas()
         self._load_indexes()
         print(f"storage manager diinisialisasi di: {os.path.abspath(self.data_dir)}")
+
+        # mark sebagai sudah di-init
+        StorageManager._initialized = True
 
     # ========== ngatur file ==========
 
