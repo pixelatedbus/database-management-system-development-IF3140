@@ -4,17 +4,11 @@ import datetime
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from misc import *
-from query_optimizer import *
+from storage_manager import Rows
 from .adapter_ccm import AdapterCCM, AlgorithmType
 from .adapter_storage import AdapterStorage
 from .adapter_optimizer import AdapterOptimizer
 from .query_execution import QueryExecution
-
-class Rows:
-    def __init__(self, data: list, rows_count: int = 0):
-        self.data: list = data
-        self.rows_count: int = rows_count or len(data)
 
 class ExecutionResult:
     def __init__(self, message: str, success: bool = True, data: Rows = Rows([]), transaction_id: int = -1, query: str = ""):
@@ -92,9 +86,15 @@ class QueryProcessor:
                 
                 # TODO: Logging ke FRM harus dilakukan di sini setelah berhasil (sebelum COMMIT)
                 
+                # Wrap result in Rows if it's a list
+                if isinstance(result_rows, list):
+                    result_data = Rows(result_rows)
+                else:
+                    result_data = result_rows or Rows([])
+                
                 return ExecutionResult(
                     message="Query executed successfully.", 
-                    data=result_rows or Rows([]), 
+                    data=result_data, 
                     transaction_id=t_id,
                     query=query
                 )
