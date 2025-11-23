@@ -223,67 +223,42 @@ class TestRuleParamsManagerIntegration(unittest.TestCase):
         self.query = ParsedQuery(filter_node, "test")
     
     def test_manager_has_both_rules(self):
-        """Test that manager has both Rule 1 and Rule 2"""
-        rules = self.manager.get_registered_rules()
-        self.assertIn('rule_1', rules)
-        self.assertIn('rule_2', rules)
+        """Test that manager has filter_params operation"""
+        ops = self.manager.get_registered_operations()
+        self.assertIn('filter_params', ops)
     
     def test_analyze_both_rules(self):
-        """Test analyzing query with both rules"""
-        # Analyze with Rule 1
-        ops1 = self.manager.analyze_query(self.query, 'rule_1')
-        self.assertGreater(len(ops1), 0)
-        
-        # Analyze with Rule 2
-        ops2 = self.manager.analyze_query(self.query, 'rule_2')
-        self.assertGreater(len(ops2), 0)
-        
-        # Should find same operators
-        self.assertEqual(len(ops1), len(ops2))
+        """Test analyzing query with filter_params"""
+        # Analyze with filter_params
+        ops = self.manager.analyze_query(self.query, 'filter_params')
+        self.assertGreater(len(ops), 0)
+        # Should find one AND operator with 3 conditions
+        op_ids = list(ops.keys())
+        self.assertEqual(len(op_ids), 1)
+        self.assertEqual(ops[op_ids[0]], 3)
     
     def test_generate_params_both_rules(self):
-        """Test generating params for both rules"""
-        # Rule 1 params
-        params1 = self.manager.generate_random_params('rule_1', 3)
-        self.assertIsNotNone(params1)
-        # Rule 1 returns mixed order (can have lists)
-        self.assertIsInstance(params1, list)
-        
-        # Rule 2 params
-        params2 = self.manager.generate_random_params('rule_2', 3)
-        self.assertIsNotNone(params2)
-        # Rule 2 returns simple permutation
-        self.assertEqual(len(params2), 3)
-        self.assertEqual(set(params2), {0, 1, 2})
+        """Test generating params for filter_params"""
+        # filter_params returns unified format (mixed list of int | list[int])
+        params = self.manager.generate_random_params('filter_params', 3)
+        self.assertIsNotNone(params)
+        self.assertIsInstance(params, list)
     
     def test_mutate_params_both_rules(self):
-        """Test mutating params for both rules"""
-        # Rule 1
-        params1 = [2, [0, 1]]
-        mutated1 = self.manager.mutate_params('rule_1', params1)
-        self.assertIsNotNone(mutated1)
-        self.assertIsInstance(mutated1, list)
-        
-        # Rule 2
-        params2 = [0, 1, 2]
-        mutated2 = self.manager.mutate_params('rule_2', params2)
-        self.assertIsNotNone(mutated2)
-        self.assertEqual(len(mutated2), 3)
-        self.assertEqual(set(mutated2), {0, 1, 2})
+        """Test mutating params for filter_params"""
+        # Unified format
+        params = [2, [0, 1]]
+        mutated = self.manager.mutate_params('filter_params', params)
+        self.assertIsNotNone(mutated)
+        self.assertIsInstance(mutated, list)
     
     def test_copy_params_both_rules(self):
-        """Test copying params for both rules"""
-        # Rule 1
-        params1 = [2, [0, 1]]
-        copied1 = self.manager.copy_params('rule_1', params1)
-        self.assertEqual(params1, copied1)
-        self.assertIsNot(params1, copied1)
-        
-        # Rule 2
-        params2 = [0, 1, 2]
-        copied2 = self.manager.copy_params('rule_2', params2)
-        self.assertEqual(params2, copied2)
-        self.assertIsNot(params2, copied2)
+        """Test copying params for filter_params"""
+        # Unified format
+        params = [2, [0, 1]]
+        copied = self.manager.copy_params('filter_params', params)
+        self.assertEqual(params, copied)
+        self.assertIsNot(params, copied)
 
 
 class TestEdgeCases(unittest.TestCase):

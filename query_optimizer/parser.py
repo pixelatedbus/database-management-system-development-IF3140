@@ -185,11 +185,8 @@ class Parser:
             direction = self.current_token.value.upper()
             self.advance()
 
-        order_item = QueryTree("ORDER_ITEM", direction)
-        order_item.add_child(order_expr)
-
-        sort_node = QueryTree("SORT", "")
-        sort_node.add_child(order_item)
+        sort_node = QueryTree("SORT", direction)
+        sort_node.add_child(order_expr)
         sort_node.add_child(source)
         return sort_node
 
@@ -515,7 +512,7 @@ class Parser:
         left_expr = self.parse_value_expr()
 
         # NOT IN
-        if self.match(TokenType.KEYWORD_NOT) and self.peek_token and self.peek_token.value.upper() == "IN":
+        if self.match(TokenType.KEYWORD_NOT) and self.peek_token and self.peek_token.type == TokenType.KEYWORD_IN:
             self.advance()
             self.advance()
             list_node = self.parse_in_list_or_subquery()
@@ -525,7 +522,7 @@ class Parser:
             return in_node
 
         # IN
-        if self.match(TokenType.IDENTIFIER) and self.match_value("IN"):
+        if self.match(TokenType.KEYWORD_IN):
             self.advance()
             list_node = self.parse_in_list_or_subquery()
             in_node = QueryTree("IN_EXPR", "")

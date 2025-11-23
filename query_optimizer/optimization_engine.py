@@ -105,6 +105,10 @@ class OptimizationEngine:
             else:
                 query_tree = ParsedQuery(self.query_tree, self.original_sql)
         
+        # Apply Rule 3 (projection elimination) ONCE before genetic algorithm
+        from .rule_3 import seleksi_proyeksi
+        query_tree = seleksi_proyeksi(query_tree)
+        
         if use_genetic:
             # Lazy import to avoid circular dependency
             from .genetic_optimizer import GeneticOptimizer
