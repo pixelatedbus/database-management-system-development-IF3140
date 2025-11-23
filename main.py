@@ -6,8 +6,7 @@ import time
 
 # sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from misc import *
-from query_optimizer import * 
+from storage_manager import Rows, Condition
 from query_processor.query_processor import QueryProcessor
 
 class ClientThread(threading.Thread):

@@ -1,9 +1,63 @@
-"""Model dataclass untuk Storage Manager."""
 from __future__ import annotations
-
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+class Rows:
+    def __init__(self, rows: list[dict]):
+        self.rows = rows
+
+class ConditionNode(ABC):
+    @abstractmethod
+    def evaluate(self, row: dict) -> bool:
+        pass
+
+
+class ComparisonNode(ConditionNode):
+    def __init__(self, column: str, operator: str, operand: str):
+        self.column = column
+        self.operator = operator
+        self.operand = operand
+    
+    def evaluate(self, row: dict) -> bool:
+        if self.operator == "=":
+            return row.get(self.column) == self.operand
+        elif self.operator == "<>":
+            return row.get(self.column) != self.operand
+        elif self.operator == "<":
+            return row.get(self.column) < self.operand
+        elif self.operator == "<=":
+            return row.get(self.column) <= self.operand
+        elif self.operator == ">":
+            return row.get(self.column) > self.operand
+        elif self.operator == ">=":
+            return row.get(self.column) >= self.operand
+        else:
+            raise ValueError(f"Unknown operator: {self.operator}")
+
+
+class ANDNode(ConditionNode):
+    def __init__(self, children: list[ConditionNode]):
+        self.children = children
+    
+    def evaluate(self, row: dict) -> bool:
+        return all(child.evaluate(row) for child in self.children)
+
+
+class ORNode(ConditionNode):
+    def __init__(self, children: list[ConditionNode]):
+        self.children = children
+    
+    def evaluate(self, row: dict) -> bool:
+        return any(child.evaluate(row) for child in self.children)
+
+
+class NOTNode(ConditionNode):
+    def __init__(self, child: ConditionNode):
+        self.child = child
+    
+    def evaluate(self, row: dict) -> bool:
+        return not self.child.evaluate(row)
 
 @dataclass
 class ColumnDefinition:
@@ -85,6 +139,32 @@ class Condition:
     column: str
     operation: str  # '=', '<>', '<', '<=', '>', '>='
     operand: Any  # int | str
+    
+    # Alias for backward compatibility
+    @property
+    def operator(self) -> str:
+        """Alias for operation (legacy compatibility)."""
+        return self.operation
+    
+    def evaluate(self, row: dict) -> bool:
+        """Evaluate condition against a row (legacy compatibility)."""
+        if self.operation == "=":
+            return row.get(self.column) == self.operand
+        elif self.operation == "<>":
+            return row.get(self.column) != self.operand
+        elif self.operation == "<":
+            return row.get(self.column) < self.operand
+        elif self.operation == "<=":
+            return row.get(self.column) <= self.operand
+        elif self.operation == ">":
+            return row.get(self.column) > self.operand
+        elif self.operation == ">=":
+            return row.get(self.column) >= self.operand
+        else:
+            raise ValueError(f"Unknown operator: {self.operation}")
+    
+    def __repr__(self):
+        return f"Condition({self.column} {self.operation} {self.operand})"
 
 
 @dataclass
