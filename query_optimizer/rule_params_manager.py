@@ -15,8 +15,9 @@ Struktur params menggunakan format:
                                    # [1, 0, 2]  = semua single (reorder tanpa cascade)
     },
     'join_params': {
-        filter_node_id: bool  # MERGE DECISION: True = merge FILTER into JOIN
-                              # False = keep FILTER separate
+        join_node_id: [10, 15]  # CONDITION SELECTION: kondisi mana yang masuk ke JOIN
+                                # [10, 15] = merge conditions dengan ID 10 dan 15 ke JOIN
+                                # [] = tidak ada kondisi yang di-merge (keep FILTER separate)
     }
 }
 
@@ -30,13 +31,20 @@ Contoh filter_params:
 - [2, [0, 1]]   → cond2 single cascade, cond0&1 tetap grouped
 - [[0, 1, 2]]   → Semua dalam satu AND (reorder dulu, tapi no cascade)
 
-Format join_params mengontrol FILTER-JOIN merge:
-- True: Merge FILTER condition into JOIN (push selection into join)
-- False: Keep FILTER separate from JOIN
+Format join_params mengontrol WHICH conditions masuk ke JOIN:
+- [10, 15]: Merge conditions dengan ID 10 dan 15 dari FILTER ke JOIN
+- []: Tidak merge kondisi apapun (keep FILTER separate)
+- [10, 15, 20]: Merge 3 conditions ke JOIN
+
+Note: Rule 4 HANYA mengatur WHICH conditions masuk ke JOIN.
+TIDAK mengatur:
+- Urutan conditions (order) - semua conditions di JOIN digabung dengan AND tanpa ordering
+- Cascade - semua conditions di JOIN digabung dalam satu OPERATOR(AND)
 
 Contoh join_params:
-- {42: True}  → Merge FILTER node 42 into its child JOIN
-- {57: False} → Keep FILTER node 57 separate
+- {42: [10, 15]}  → Merge conditions 10 dan 15 ke JOIN dengan ID 42
+- {57: []}        → Keep FILTER separate untuk JOIN dengan ID 57
+- {88: [5, 8, 12]} → Merge conditions 5, 8, dan 12 ke JOIN dengan ID 88
 """
 
 from typing import Any, Literal
@@ -244,31 +252,37 @@ class RuleParamsManager:
             """Analyze FILTER-JOIN patterns for rule 4.
             
             Returns:
-                Dict[filter_node_id, metadata]
-                metadata = {'join_id': int, 'has_condition': bool}
+                Dict[join_id, metadata]
+                metadata = {
+                    'filter_conditions': [condition_ids],
+                    'existing_conditions': [condition_ids]
+                }
             """
             return rule_4.find_patterns(query)
         
-        def generate_join_params(metadata: dict) -> bool:
-            """Generate decision whether to merge FILTER into JOIN.
+        def generate_join_params(metadata: dict) -> list[int]:
+            """Generate selection of conditions to merge into JOIN.
             
             Args:
-                metadata: {'join_id': int, 'has_condition': bool}
+                metadata: {
+                    'filter_conditions': [condition_ids],
+                    'existing_conditions': [condition_ids]
+                }
             
             Returns:
-                bool: True = merge FILTER into JOIN, False = keep separate
+                list[int]: List of condition IDs to merge into JOIN
             """
             return rule_4.generate_params(metadata)
         
-        def copy_join_params(params: bool) -> bool:
-            """Copy join params (simple bool)."""
+        def copy_join_params(params: list[int]) -> list[int]:
+            """Deep copy join params."""
             return rule_4.copy_params(params)
         
-        def mutate_join_params(params: bool) -> bool:
-            """Mutate join params by flipping the decision."""
+        def mutate_join_params(params: list[int]) -> list[int]:
+            """Mutate join params by adding/removing conditions."""
             return rule_4.mutate_params(params)
         
-        def validate_join_params(params: bool) -> bool:
+        def validate_join_params(params: list[int]) -> bool:
             """Validate join params structure."""
             return rule_4.validate_params(params)
         

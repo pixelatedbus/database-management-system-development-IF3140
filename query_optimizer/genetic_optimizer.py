@@ -78,12 +78,12 @@ class Individual:
         if 'join_params' in self.operation_params and self.operation_params['join_params']:
             from query_optimizer import rule_4
             
-            # join_params format: Dict[filter_node_id, bool]
-            # True = merge FILTER into JOIN, False = keep separate
-            decisions = self.operation_params['join_params']
+            # join_params format: Dict[join_id, list[condition_ids]]
+            # Example: {42: [10, 15]} = merge conditions 10 and 15 into JOIN 42
+            join_params = self.operation_params['join_params']
             
-            if decisions:
-                current_query = rule_4.apply_merge(current_query, decisions)
+            if join_params:
+                current_query = rule_4.apply_merge(current_query, join_params)
         
         # Step 2: Apply filter operations dengan unified order format
         if 'filter_params' in self.operation_params and self.operation_params['filter_params']:
@@ -371,10 +371,12 @@ class GeneticOptimizer:
                                 explanations.append(f"{item} single")
                         if explanations:
                             print(f"      → Order: {' -> '.join(explanations)}")
-                    # Special formatting for join_params (merge decision)
-                    elif operation_name == 'join_params' and isinstance(order, bool):
-                        action = "Merge FILTER into JOIN" if order else "Keep FILTER separate"
-                        print(f"      → Action: {action}")
+                    # Special formatting for join_params (condition selection)
+                    elif operation_name == 'join_params' and isinstance(order, list):
+                        if order:
+                            print(f"      → Merge conditions: {order}")
+                        else:
+                            print(f"      → Keep separate (no merge)")
         
         print("\nProgress:")
         print("Gen | Best    | Average | Worst")

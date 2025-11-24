@@ -38,46 +38,53 @@ class TestRule4Integration(unittest.TestCase):
         # Harus ada minimal 1 pattern
         self.assertGreater(len(patterns), 0)
         
-        # Setiap pattern harus punya join_id dan has_condition
-        for filter_id, metadata in patterns.items():
-            self.assertIn('join_id', metadata)
-            self.assertIn('has_condition', metadata)
-            self.assertIsInstance(metadata['join_id'], int)
-            self.assertIsInstance(metadata['has_condition'], bool)
+        # Setiap pattern harus punya filter_conditions dan existing_conditions
+        for join_id, metadata in patterns.items():
+            self.assertIn('filter_conditions', metadata)
+            self.assertIn('existing_conditions', metadata)
+            self.assertIsInstance(metadata['filter_conditions'], list)
+            self.assertIsInstance(metadata['existing_conditions'], list)
     
     def test_rule_4_params_generation(self):
         """Test generation random params untuk rule 4."""
-        metadata = {'join_id': 42, 'has_condition': False}
+        metadata = {
+            'filter_conditions': [10, 15, 20],
+            'existing_conditions': []
+        }
         
         # Generate multiple times untuk test randomness
-        results = [rule_4.generate_params(metadata) for _ in range(100)]
+        results = [rule_4.generate_params(metadata) for _ in range(20)]
         
-        # Harus ada mix True dan False (karena probabilistic)
-        self.assertIn(True, results)
-        self.assertIn(False, results)
+        # Semua hasil harus list of int
+        self.assertTrue(all(isinstance(r, list) for r in results))
+        self.assertTrue(all(all(isinstance(x, int) for x in r) for r in results))
         
-        # Semua hasil harus boolean
-        self.assertTrue(all(isinstance(r, bool) for r in results))
+        # Should have variation in results (different selections)
+        unique_results = [tuple(sorted(r)) for r in results]
+        self.assertGreater(len(set(unique_results)), 1, "Should have variation in selections")
     
     def test_rule_4_params_mutation(self):
-        """Test mutation flip boolean decision."""
-        original = True
+        """Test mutation untuk list of condition IDs."""
+        original = [10, 15, 20]
         mutated = rule_4.mutate_params(original)
         
-        # Mutation harus flip
-        self.assertEqual(mutated, False)
+        # Mutation should return list
+        self.assertIsInstance(mutated, list)
+        self.assertTrue(all(isinstance(x, int) for x in mutated))
         
-        # Flip back
-        mutated_back = rule_4.mutate_params(mutated)
-        self.assertEqual(mutated_back, True)
+        # Mutation should potentially change the list (add/remove items)
+        # Note: Mutation might be the same by chance, so we test structure only
+        self.assertIsInstance(mutated, list)
     
     def test_rule_4_params_copy(self):
         """Test copy params."""
-        original = True
+        original = [10, 15, 20]
         copied = rule_4.copy_params(original)
         
         self.assertEqual(original, copied)
-        self.assertIsInstance(copied, bool)
+        self.assertIsInstance(copied, list)
+        # Ensure it's a copy, not same reference
+        self.assertIsNot(original, copied)
     
     def test_rule_4_registration_in_manager(self):
         """Test apakah rule 4 sudah ter-register di manager."""
@@ -97,29 +104,35 @@ class TestRule4Integration(unittest.TestCase):
         
         # Harus return dict dengan structure yang benar
         self.assertIsInstance(analysis, dict)
-        for filter_id, metadata in analysis.items():
-            self.assertIn('join_id', metadata)
-            self.assertIn('has_condition', metadata)
+        for join_id, metadata in analysis.items():
+            self.assertIn('filter_conditions', metadata)
+            self.assertIn('existing_conditions', metadata)
+            self.assertIsInstance(metadata['filter_conditions'], list)
+            self.assertIsInstance(metadata['existing_conditions'], list)
     
     def test_rule_4_param_generation_via_manager(self):
         """Test param generation via manager."""
         manager = get_rule_params_manager()
-        metadata = {'join_id': 42, 'has_condition': False}
+        metadata = {
+            'filter_conditions': [10, 15, 20],
+            'existing_conditions': []
+        }
         
         # Generate via manager
         params = manager.generate_random_params('join_params', metadata)
         
-        self.assertIsInstance(params, bool)
+        self.assertIsInstance(params, list)
+        self.assertTrue(all(isinstance(x, int) for x in params))
     
     def test_individual_applies_join_transformations(self):
         """Test apakah Individual class apply rule 4 transformations."""
         parsed = self.engine.parse_query(self.query_str_1)
         
         # Create operation params dengan join_params
-        # Asumsi node 1 adalah FILTER yang bisa di-merge
+        # Note: join_params now maps join_id -> [condition_ids]
         operation_params = {
             'filter_params': {},
-            'join_params': {1: True}  # Merge filter node 1
+            'join_params': {1: [10, 15]}  # Merge conditions 10 and 15 into JOIN 1
         }
         
         # Create individual
@@ -153,6 +166,9 @@ class TestRule4Integration(unittest.TestCase):
             # Check apakah population punya join_params
             for individual in population:
                 self.assertIn('join_params', individual.operation_params)
+                # join_params values should be list[int]
+                for params in individual.operation_params['join_params'].values():
+                    self.assertIsInstance(params, list)
     
     def test_ga_optimization_with_rule_4(self):
         """Test full GA optimization dengan rule 4."""
@@ -180,9 +196,10 @@ class TestRule4Integration(unittest.TestCase):
             join_params = stats['best_params']['join_params']
             self.assertIsInstance(join_params, dict)
             
-            # All params harus boolean
-            for node_id, decision in join_params.items():
-                self.assertIsInstance(decision, bool)
+            # All params harus list[int]
+            for join_id, condition_ids in join_params.items():
+                self.assertIsInstance(condition_ids, list)
+                self.assertTrue(all(isinstance(x, int) for x in condition_ids))
     
     def test_rule_4_transformation_order(self):
         """Test apakah rule 4 di-apply sebelum filter operations."""
@@ -194,7 +211,7 @@ class TestRule4Integration(unittest.TestCase):
                 # Some filter params (empty untuk simplicity)
             },
             'join_params': {
-                1: True  # Merge some filter
+                1: [10, 15]  # Merge conditions 10 and 15 into JOIN 1
             }
         }
         
@@ -212,13 +229,14 @@ class TestRule4Integration(unittest.TestCase):
         """Test undo merge functionality dari rule 4."""
         parsed = self.engine.parse_query(self.query_str_1)
         
-        # Apply merge
-        decisions = {}
+        # Apply merge - merge all conditions
         patterns = rule_4.find_patterns(parsed)
-        for filter_id in patterns.keys():
-            decisions[filter_id] = True
+        join_params = {}
+        for join_id, metadata in patterns.items():
+            # Merge all filter conditions
+            join_params[join_id] = metadata['filter_conditions']
         
-        merged = rule_4.apply_merge(parsed, decisions)
+        merged = rule_4.apply_merge(parsed, join_params)
         
         # Undo merge
         unmerged = rule_4.undo_merge(merged)
@@ -272,9 +290,11 @@ class TestRule4EdgeCases(unittest.TestCase):
         patterns = rule_4.find_patterns(parsed)
         
         if patterns:
-            # Apply merge untuk semua patterns
-            decisions = {fid: True for fid in patterns.keys()}
-            merged = rule_4.apply_merge(parsed, decisions)
+            # Apply merge untuk semua patterns - merge all conditions
+            join_params = {}
+            for join_id, metadata in patterns.items():
+                join_params[join_id] = metadata['filter_conditions']  # Merge all
+            merged = rule_4.apply_merge(parsed, join_params)
             
             self.assertIsNotNone(merged)
 
@@ -316,9 +336,11 @@ class TestRule4Scenarios(unittest.TestCase):
         patterns = rule_4.find_patterns(parsed)
         self.assertGreater(len(patterns), 0, "Should find FILTER-JOIN pattern")
         
-        # Test merge (decision = True)
-        decisions_merge = {fid: True for fid in patterns.keys()}
-        merged = rule_4.apply_merge(parsed, decisions_merge)
+        # Test merge - merge all conditions
+        join_params = {}
+        for join_id, metadata in patterns.items():
+            join_params[join_id] = metadata['filter_conditions']  # Merge all
+        merged = rule_4.apply_merge(parsed, join_params)
         
         # Find JOIN node in merged tree
         def find_join_type(node):
@@ -335,9 +357,11 @@ class TestRule4Scenarios(unittest.TestCase):
         join_type = find_join_type(merged.query_tree)
         self.assertEqual(join_type, "INNER", "JOIN should be converted to INNER")
         
-        # Test keep separate (decision = False)
-        decisions_separate = {fid: False for fid in patterns.keys()}
-        separate = rule_4.apply_merge(parsed, decisions_separate)
+        # Test keep separate - merge no conditions
+        join_params_separate = {}
+        for join_id, metadata in patterns.items():
+            join_params_separate[join_id] = []  # Merge nothing (keep separate)
+        separate = rule_4.apply_merge(parsed, join_params_separate)
         
         join_type_separate = find_join_type(separate.query_tree)
         self.assertEqual(join_type_separate, "CROSS", "JOIN should remain CROSS")
@@ -378,9 +402,11 @@ class TestRule4Scenarios(unittest.TestCase):
         patterns = rule_4.find_patterns(parsed)
         self.assertGreater(len(patterns), 0, "Should find FILTER over INNER JOIN pattern")
         
-        # Merge filter into JOIN
-        decisions = {fid: True for fid in patterns.keys()}
-        merged = rule_4.apply_merge(parsed, decisions)
+        # Merge filter into JOIN - merge all conditions
+        join_params = {}
+        for join_id, metadata in patterns.items():
+            join_params[join_id] = metadata['filter_conditions']  # Merge all
+        merged = rule_4.apply_merge(parsed, join_params)
         
         # Check that JOIN has AND operator with both conditions
         def find_and_in_join(node):
@@ -475,10 +501,12 @@ class TestRule4Scenarios(unittest.TestCase):
         
         original = ParsedQuery(project, "SELECT * FROM employees, payroll WHERE ...")
         
-        # Step 1: Merge (CROSS -> INNER)
+        # Step 1: Merge (CROSS -> INNER) - merge all conditions
         patterns = rule_4.find_patterns(original)
-        decisions = {fid: True for fid in patterns.keys()}
-        merged = rule_4.apply_merge(original, decisions)
+        join_params = {}
+        for join_id, metadata in patterns.items():
+            join_params[join_id] = metadata['filter_conditions']  # Merge all
+        merged = rule_4.apply_merge(original, join_params)
         
         # Step 2: Undo merge (INNER -> CROSS)
         restored = rule_4.undo_merge(merged)
@@ -536,14 +564,18 @@ class TestRule4Scenarios(unittest.TestCase):
         patterns = rule_4.find_patterns(parsed)
         
         if patterns:
-            # Keep separate
-            decisions_sep = {fid: False for fid in patterns.keys()}
-            separate = rule_4.apply_merge(parsed, decisions_sep)
+            # Keep separate - merge no conditions
+            join_params_sep = {}
+            for join_id, metadata in patterns.items():
+                join_params_sep[join_id] = []  # Don't merge
+            separate = rule_4.apply_merge(parsed, join_params_sep)
             cost_separate = self.engine.get_cost(separate)
             
-            # Merge
-            decisions_merge = {fid: True for fid in patterns.keys()}
-            merged = rule_4.apply_merge(parsed, decisions_merge)
+            # Merge all conditions
+            join_params_merge = {}
+            for join_id, metadata in patterns.items():
+                join_params_merge[join_id] = metadata['filter_conditions']  # Merge all
+            merged = rule_4.apply_merge(parsed, join_params_merge)
             cost_merge = self.engine.get_cost(merged)
             
             # Merging should typically be better (lower cost)
@@ -622,9 +654,11 @@ class TestRule4WithCommaSeparatedTables(unittest.TestCase):
         patterns = rule_4.find_patterns(parsed)
         self.assertGreater(len(patterns), 0)
         
-        # Merge (decision = True)
-        decisions_merge = {fid: True for fid in patterns.keys()}
-        merged = rule_4.apply_merge(parsed, decisions_merge)
+        # Merge all conditions
+        join_params = {}
+        for join_id, metadata in patterns.items():
+            join_params[join_id] = metadata['filter_conditions']  # Merge all
+        merged = rule_4.apply_merge(parsed, join_params)
         
         # Find JOIN type in merged tree
         def find_join_type(node):
@@ -706,8 +740,10 @@ class TestRule4WithCommaSeparatedTables(unittest.TestCase):
         
         # If patterns found, test merge
         if patterns:
-            decisions = {fid: True for fid in patterns.keys()}
-            merged = rule_4.apply_merge(parsed, decisions)
+            join_params = {}
+            for join_id, metadata in patterns.items():
+                join_params[join_id] = metadata['filter_conditions']  # Merge all
+            merged = rule_4.apply_merge(parsed, join_params)
             self.assertIsNotNone(merged)
     
     def test_mixed_comma_and_explicit_join(self):
@@ -749,14 +785,18 @@ class TestRule4WithCommaSeparatedTables(unittest.TestCase):
         patterns = rule_4.find_patterns(parsed)
         
         if patterns:
-            # Keep as CROSS JOIN
-            decisions_separate = {fid: False for fid in patterns.keys()}
-            separate = rule_4.apply_merge(parsed, decisions_separate)
+            # Keep as CROSS JOIN - merge no conditions
+            join_params_separate = {}
+            for join_id, metadata in patterns.items():
+                join_params_separate[join_id] = []  # Don't merge
+            separate = rule_4.apply_merge(parsed, join_params_separate)
             cost_separate = self.engine.get_cost(separate)
             
-            # Merge to INNER JOIN
-            decisions_merge = {fid: True for fid in patterns.keys()}
-            merged = rule_4.apply_merge(parsed, decisions_merge)
+            # Merge to INNER JOIN - merge all conditions
+            join_params_merge = {}
+            for join_id, metadata in patterns.items():
+                join_params_merge[join_id] = metadata['filter_conditions']  # Merge all
+            merged = rule_4.apply_merge(parsed, join_params_merge)
             cost_merge = self.engine.get_cost(merged)
             
             # INNER JOIN should typically be more efficient than CROSS + FILTER
@@ -836,8 +876,9 @@ class TestRule4WithRule1And2(unittest.TestCase):
             
             if 'join_params' in params:
                 self.assertIsInstance(params['join_params'], dict)
-                for decision in params['join_params'].values():
-                    self.assertIsInstance(decision, bool)
+                for condition_ids in params['join_params'].values():
+                    self.assertIsInstance(condition_ids, list)
+                    self.assertTrue(all(isinstance(x, int) for x in condition_ids))
 
 
 def run_tests():
