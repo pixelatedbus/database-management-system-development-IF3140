@@ -34,10 +34,12 @@ def print_help():
     print("  python -m query_optimizer.demo 1  # Run demo parse")
     print("  python -m query_optimizer.demo 2  # Run demo optimized (compare with/without GA)")
     print("  python -m query_optimizer.demo 3  # Run demo Rule 3 (projection elimination)")
-    print("  python -m query_optimizer.demo 4  # Run demo Rule 1 (cascade filters)")
-    print("  python -m query_optimizer.demo 5  # Run demo genetic with Rule 1 + Rule 2")
-    print("  python -m query_optimizer.demo 6  # Run demo Rule 2 (reorder AND conditions)")
-    print("  python -m query_optimizer.demo 7  # Run all demos sequentially")
+    print("  python -m query_optimizer.demo 4  # Run demo Rule 7 (filter pushdown)")
+    print("  python -m query_optimizer.demo 5  # Run demo Rule 8 (projection over join)")
+    print("  python -m query_optimizer.demo 6  # Run demo Rule 1 (cascade filters)")
+    print("  python -m query_optimizer.demo 7  # Run demo genetic with Rule 1 + Rule 2")
+    print("  python -m query_optimizer.demo 8  # Run demo Rule 2 (reorder AND conditions)")
+    print("  python -m query_optimizer.demo 9  # Run all demos sequentially")
     print_separator()
 
 def demo_parse():
@@ -162,6 +164,246 @@ def demo_rule_3():
         print(f"Successfully eliminated {original_count - optimized_count} nested projection(s)!")
     
     print_separator("DEMO 3 COMPLETED")
+    
+    return optimized
+
+def demo_rule_7():
+    """Demo 3.5: Rule 7 - Filter Pushdown over Join"""
+    print_separator("DEMO 3.5: Rule 7 - Filter Pushdown over Join")
+    
+    from query_optimizer.query_tree import QueryTree
+    from query_optimizer.optimization_engine import ParsedQuery
+    from query_optimizer.rule_7 import apply_pushdown, find_patterns, is_pushable
+    
+    print_separator("Creating FILTER -> JOIN pattern")
+    
+    # Build query: SELECT * FROM users JOIN profiles WHERE users.age > 18 AND profiles.verified = 'true'
+    # FILTER
+    # └── JOIN
+    #     ├── RELATION("users")
+    #     ├── RELATION("profiles")
+    #     └── COMPARISON("=") [users.id = profiles.user_id]
+    # └── OPERATOR("AND")
+    #     ├── COMPARISON(">") [users.age > 18]
+    #     └── COMPARISON("=") [profiles.verified = 'true']
+    
+    # Helper to create COLUMN_REF
+    def make_column_ref(col_name, table_name=None):
+        col_ref = QueryTree("COLUMN_REF", "")
+        col_name_node = QueryTree("COLUMN_NAME", "")
+        identifier = QueryTree("IDENTIFIER", col_name)
+        col_name_node.add_child(identifier)
+        col_ref.add_child(col_name_node)
+        
+        if table_name:
+            table_node = QueryTree("TABLE_NAME", "")
+            table_id = QueryTree("IDENTIFIER", table_name)
+            table_node.add_child(table_id)
+            col_ref.add_child(table_node)
+        
+        return col_ref
+    
+    # Build JOIN
+    rel1 = QueryTree("RELATION", "users")
+    rel2 = QueryTree("RELATION", "profiles")
+    
+    # Join condition: users.id = profiles.user_id
+    join_left = make_column_ref("id", "users")
+    join_right = make_column_ref("user_id", "profiles")
+    
+    join_cond = QueryTree("COMPARISON", "=")
+    join_cond.add_child(join_left)
+    join_cond.add_child(join_right)
+    
+    join = QueryTree("JOIN", "INNER")
+    join.add_child(rel1)
+    join.add_child(rel2)
+    join.add_child(join_cond)
+    
+    # Filter conditions
+    # users.age > 18
+    age_col = make_column_ref("age", "users")
+    age_val = QueryTree("LITERAL_NUMBER", "18")
+    age_comp = QueryTree("COMPARISON", ">")
+    age_comp.add_child(age_col)
+    age_comp.add_child(age_val)
+    
+    # profiles.verified = 'true'
+    verified_col = make_column_ref("verified", "profiles")
+    verified_val = QueryTree("LITERAL_STRING", "true")
+    verified_comp = QueryTree("COMPARISON", "=")
+    verified_comp.add_child(verified_col)
+    verified_comp.add_child(verified_val)
+    
+    # AND operator
+    and_op = QueryTree("OPERATOR", "AND")
+    and_op.add_child(age_comp)
+    and_op.add_child(verified_comp)
+    
+    # FILTER node
+    filter_node = QueryTree("FILTER", "")
+    filter_node.add_child(join)
+    filter_node.add_child(and_op)
+    
+    query = ParsedQuery(filter_node, "SELECT * FROM users JOIN profiles ON users.id = profiles.user_id WHERE users.age > 18 AND profiles.verified = 'true'")
+    
+    print("\nOriginal Query Tree (FILTER -> JOIN):")
+    print(query.query_tree.tree())
+    
+    # Find patterns
+    print_separator("Finding FILTER -> JOIN patterns")
+    patterns = find_patterns(query)
+    print(f"\nFound {len(patterns)} pattern(s):")
+    for filter_id, pattern_info in patterns.items():
+        print(f"\nPattern for FILTER node ID {filter_id}:")
+        print(f"  - JOIN node ID: {pattern_info['join_id']}")
+        print(f"  - Number of conditions: {pattern_info['num_conditions']}")
+        print(f"  - Has AND operator: {pattern_info['has_and']}")
+        print(f"\n  All conditions in this pattern are eligible for pushdown optimization")
+    
+    print_separator("Applying Rule 7: Filter Pushdown")
+    print("Rule: FILTER(JOIN(R, S), cond) -> JOIN(FILTER(R, cond_R), FILTER(S, cond_S))")
+    print("Strategy: Push filters closer to data source to reduce join size")
+    
+    optimized = apply_pushdown(query)
+    
+    print("\nOptimized Query Tree (filters pushed down):")
+    print(optimized.query_tree.tree())
+    
+    # Count FILTER nodes
+    def count_filters(node):
+        if node is None:
+            return 0
+        count = 1 if node.type == "FILTER" else 0
+        for child in node.childs:
+            count += count_filters(child)
+        return count
+    
+    original_filters = count_filters(query.query_tree)
+    optimized_filters = count_filters(optimized.query_tree)
+    
+    print(f"\nFILTER nodes before: {original_filters}")
+    print(f"FILTER nodes after: {optimized_filters}")
+    
+    if optimized_filters > original_filters:
+        print(f"Successfully pushed down filters! (+{optimized_filters - original_filters} FILTER nodes closer to source)")
+    
+    print("\nBenefit: Reduced data volume before join operation, improving query performance")
+    
+    print_separator("DEMO 3.5 COMPLETED")
+    
+    return optimized
+
+def demo_rule_8():
+    """Demo 3.7: Rule 8 - Projection over Join"""
+    print_separator("DEMO 3.7: Rule 8 - Projection over Join")
+    
+    from query_optimizer.query_tree import QueryTree
+    from query_optimizer.optimization_engine import ParsedQuery
+    from query_optimizer.rule_8 import push_projection_over_joins, analyze_projection_over_join
+    
+    print_separator("Creating PROJECT -> JOIN pattern")
+    
+    # Build query: SELECT users.name, profiles.bio FROM users JOIN profiles ON users.id = profiles.user_id
+    # PROJECT
+    # └── JOIN
+    #     ├── RELATION("users")
+    #     ├── RELATION("profiles")
+    #     └── COMPARISON("=") [users.id = profiles.user_id]
+    
+    # Helper to create COLUMN_REF
+    def make_column_ref(col_name, table_name=None):
+        col_ref = QueryTree("COLUMN_REF", "")
+        col_name_node = QueryTree("COLUMN_NAME", "")
+        identifier = QueryTree("IDENTIFIER", col_name)
+        col_name_node.add_child(identifier)
+        col_ref.add_child(col_name_node)
+        
+        if table_name:
+            table_node = QueryTree("TABLE_NAME", "")
+            table_id = QueryTree("IDENTIFIER", table_name)
+            table_node.add_child(table_id)
+            col_ref.add_child(table_node)
+        
+        return col_ref
+    
+    # Build JOIN
+    rel1 = QueryTree("RELATION", "users")
+    rel2 = QueryTree("RELATION", "profiles")
+    
+    # Join condition: users.id = profiles.user_id
+    join_left = make_column_ref("id", "users")
+    join_right = make_column_ref("user_id", "profiles")
+    
+    join_cond = QueryTree("COMPARISON", "=")
+    join_cond.add_child(join_left)
+    join_cond.add_child(join_right)
+    
+    join = QueryTree("JOIN", "INNER")
+    join.add_child(rel1)
+    join.add_child(rel2)
+    join.add_child(join_cond)
+    
+    # Projected columns: users.name, profiles.bio
+    col1 = make_column_ref("name", "users")
+    col2 = make_column_ref("bio", "profiles")
+    
+    # PROJECT node
+    project = QueryTree("PROJECT", "")
+    project.add_child(col1)
+    project.add_child(col2)
+    project.add_child(join)
+    
+    query = ParsedQuery(project, "SELECT users.name, profiles.bio FROM users JOIN profiles ON users.id = profiles.user_id")
+    
+    print("\nOriginal Query Tree (PROJECT -> JOIN):")
+    print(query.query_tree.tree())
+    
+    # Analyze patterns
+    print_separator("Analyzing PROJECT -> JOIN pattern")
+    opportunities = analyze_projection_over_join(query)
+    print(f"\nFound {len(opportunities)} optimization opportunity(ies)")
+    
+    if opportunities:
+        for i, (join_id, opp) in enumerate(opportunities.items(), 1):
+            print(f"\nOpportunity {i}:")
+            print(f"  - PROJECT node ID: {opp['project_node'].id}")
+            print(f"  - JOIN node ID: {join_id}")
+            print(f"  - Can optimize: {opp['can_optimize']}")
+            if 'projected_cols' in opp:
+                print(f"  - Projected columns: {', '.join(sorted(opp['projected_cols']))}")
+    
+    print_separator("Applying Rule 8: Projection Pushdown")
+    print("Rule: PROJECT(cols, JOIN(R, S)) -> PROJECT(cols, JOIN(PROJECT(R_cols), PROJECT(S_cols)))")
+    print("Strategy: Push projections to join children to reduce tuple width")
+    
+    optimized = push_projection_over_joins(query)
+    
+    print("\nOptimized Query Tree (projections pushed to join children):")
+    print(optimized.query_tree.tree())
+    
+    # Count PROJECT nodes
+    def count_projects(node):
+        if node is None:
+            return 0
+        count = 1 if node.type == "PROJECT" else 0
+        for child in node.childs:
+            count += count_projects(child)
+        return count
+    
+    original_projects = count_projects(query.query_tree)
+    optimized_projects = count_projects(optimized.query_tree)
+    
+    print(f"\nPROJECT nodes before: {original_projects}")
+    print(f"PROJECT nodes after: {optimized_projects}")
+    
+    if optimized_projects > original_projects:
+        print(f"Successfully pushed projections! (+{optimized_projects - original_projects} PROJECT nodes)")
+    
+    print("\nBenefit: Reduced tuple width before join, less data to transfer and compare")
+    print("Each relation only projects columns needed for output and join condition")
+    
+    print_separator("DEMO 3.7 COMPLETED")
     
     return optimized
 
@@ -320,12 +562,16 @@ def demo_all():
     print_separator("DEMO: RUNNING ALL SAMPLES")
     # Parse
     demo_parse()
-    # Rule 1
-    demo_rule_1()
-    # Rule 2
-    demo_rule2()
-    # Rule 3
+    # Rule 3 (deterministic)
     demo_rule_3()
+    # Rule 7 (deterministic)
+    demo_rule_7()
+    # Rule 8 (deterministic)
+    demo_rule_8()
+    # Rule 1 (non-deterministic)
+    demo_rule_1()
+    # Rule 2 (non-deterministic)
+    demo_rule2()
     # Genetic / Rule integration
     demo_genetic_with_rules()
     # Optimizer comparison
@@ -474,10 +720,12 @@ def main():
             print("  python -m query_optimizer.demo 1  # Run demo parse")
             print("  python -m query_optimizer.demo 2  # Run demo optimized")
             print("  python -m query_optimizer.demo 3  # Run demo Rule 3 (projection elimination)")
-            print("  python -m query_optimizer.demo 4  # Run demo Rule 1 (cascade filters)")
-            print("  python -m query_optimizer.demo 5  # Run demo genetic with Rule 1 + Rule 2")
-            print("  python -m query_optimizer.demo 6  # Run demo Rule 2 (reorder AND conditions)")
-            print("  python -m query_optimizer.demo 7  # Run all demos sequentially")
+            print("  python -m query_optimizer.demo 4  # Run demo Rule 7 (filter pushdown)")
+            print("  python -m query_optimizer.demo 5  # Run demo Rule 8 (projection over join)")
+            print("  python -m query_optimizer.demo 6  # Run demo Rule 1 (cascade filters)")
+            print("  python -m query_optimizer.demo 7  # Run demo genetic with Rule 1 + Rule 2")
+            print("  python -m query_optimizer.demo 8  # Run demo Rule 2 (reorder AND conditions)")
+            print("  python -m query_optimizer.demo 9  # Run all demos sequentially")
             return
     else:
         demo_num = 0
@@ -492,12 +740,16 @@ def main():
         elif demo_num == 3:
             demo_rule_3()
         elif demo_num == 4:
-            demo_rule_1()
+            demo_rule_7()
         elif demo_num == 5:
-            demo_genetic_with_rules()
+            demo_rule_8()
         elif demo_num == 6:
-            demo_rule2()
+            demo_rule_1()
         elif demo_num == 7:
+            demo_genetic_with_rules()
+        elif demo_num == 8:
+            demo_rule2()
+        elif demo_num == 9:
             demo_all()
         else:
             print_help()

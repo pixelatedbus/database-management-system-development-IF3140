@@ -106,6 +106,10 @@ class OptimizationEngine:
         from .rule_3 import seleksi_proyeksi
         query_tree = seleksi_proyeksi(query_tree)
         
+        # Rule 7: Filter pushdown over joins
+        from .rule_7 import apply_pushdown
+        query_tree = apply_pushdown(query_tree)
+        
         # Rule 8: Projection push-down over joins
         from .rule_8 import push_projection_over_joins
         query_tree = push_projection_over_joins(query_tree)

@@ -1,11 +1,12 @@
 """
-Tests untuk Rule Deterministik (Rule 3 dan Rule 8)
+Tests untuk Rule Deterministik (Rule 3, Rule 7, dan Rule 8)
 
 Rule deterministik adalah rule yang dijalankan SEKALI di awal proses optimasi,
 sebelum genetic algorithm. Rule ini bersifat always beneficial dan tidak memerlukan
 parameter space exploration.
 
 - Rule 3: Projection Elimination (menghilangkan nested projection)
+- Rule 7: Filter Pushdown over Join (push filter ke join children)
 - Rule 8: Projection over Join (push projection ke join children)
 """
 
@@ -14,6 +15,7 @@ from query_optimizer.query_tree import QueryTree
 from query_optimizer.optimization_engine import ParsedQuery
 from query_optimizer.query_check import check_query
 from query_optimizer.rule_3 import seleksi_proyeksi
+from query_optimizer.rule_7 import apply_pushdown
 from query_optimizer.rule_8 import push_projection_over_joins
 
 
@@ -243,6 +245,183 @@ class TestRule8ProjectionOverJoin(unittest.TestCase):
         self.assertFalse(has_join)
 
 
+class TestRule7FilterPushdown(unittest.TestCase):
+    """Test Rule 7: Filter Pushdown over Join"""
+    
+    def make_column_ref(self, col_name: str, table_name: str = None):
+        """Helper to create COLUMN_REF node"""
+        col_ref = QueryTree("COLUMN_REF", "")
+        col_name_node = QueryTree("COLUMN_NAME", "")
+        identifier = QueryTree("IDENTIFIER", col_name)
+        col_name_node.add_child(identifier)
+        col_ref.add_child(col_name_node)
+        
+        if table_name:
+            table_node = QueryTree("TABLE_NAME", "")
+            table_id = QueryTree("IDENTIFIER", table_name)
+            table_node.add_child(table_id)
+            col_ref.add_child(table_node)
+        
+        return col_ref
+    
+    def make_comparison(self, operator: str, left_col: str, right_val: str, left_table: str = None):
+        """Helper to create COMPARISON node"""
+        comp = QueryTree("COMPARISON", operator)
+        left = self.make_column_ref(left_col, left_table)
+        right = QueryTree("LITERAL_NUMBER", right_val) if right_val.isdigit() else QueryTree("LITERAL_STRING", right_val)
+        comp.add_child(left)
+        comp.add_child(right)
+        return comp
+    
+    def make_join_condition(self, left_col: str, right_col: str, left_table: str, right_table: str):
+        """Helper to create join condition"""
+        comp = QueryTree("COMPARISON", "=")
+        left = self.make_column_ref(left_col, left_table)
+        right = self.make_column_ref(right_col, right_table)
+        comp.add_child(left)
+        comp.add_child(right)
+        return comp
+    
+    def test_push_filter_to_left(self):
+        """Test push filter ke left side of join"""
+        # Build: FILTER → JOIN where filter only references left table
+        rel1 = QueryTree("RELATION", "users")
+        rel2 = QueryTree("RELATION", "profiles")
+        
+        join_cond = self.make_join_condition("id", "user_id", "users", "profiles")
+        
+        join = QueryTree("JOIN", "INNER")
+        join.add_child(rel1)
+        join.add_child(rel2)
+        join.add_child(join_cond)
+        
+        # Filter: users.age > 18
+        filter_cond = self.make_comparison(">", "age", "18", "users")
+        
+        filter_node = QueryTree("FILTER", "")
+        filter_node.add_child(join)
+        filter_node.add_child(filter_cond)
+        
+        query = ParsedQuery(filter_node, "SELECT * FROM users JOIN profiles WHERE users.age > 18")
+        
+        # Apply Rule 7
+        result = apply_pushdown(query)
+        
+        # Validate result
+        check_query(result.query_tree)
+        
+        # Should have pushed filter down
+        # Result should be JOIN with FILTER on left child
+        self.assertEqual(result.query_tree.type, "JOIN")
+        
+        # Check left child is FILTER
+        left_child = result.query_tree.childs[0]
+        self.assertEqual(left_child.type, "FILTER", "Left child should be FILTER after pushdown")
+        
+        # Check right child remains RELATION
+        right_child = result.query_tree.childs[1]
+        self.assertEqual(right_child.type, "RELATION", "Right child should remain RELATION")
+    
+    def test_push_filter_to_right(self):
+        """Test push filter ke right side of join"""
+        rel1 = QueryTree("RELATION", "users")
+        rel2 = QueryTree("RELATION", "profiles")
+        
+        join_cond = self.make_join_condition("id", "user_id", "users", "profiles")
+        
+        join = QueryTree("JOIN", "INNER")
+        join.add_child(rel1)
+        join.add_child(rel2)
+        join.add_child(join_cond)
+        
+        # Filter: profiles.verified = true
+        filter_cond = self.make_comparison("=", "verified", "true", "profiles")
+        
+        filter_node = QueryTree("FILTER", "")
+        filter_node.add_child(join)
+        filter_node.add_child(filter_cond)
+        
+        query = ParsedQuery(filter_node, "SELECT * FROM users JOIN profiles WHERE profiles.verified = 'true'")
+        
+        # Apply Rule 7
+        result = apply_pushdown(query)
+        
+        # Validate result
+        check_query(result.query_tree)
+        
+        # Should have pushed filter down to right
+        self.assertEqual(result.query_tree.type, "JOIN")
+        
+        # Check right child is FILTER
+        right_child = result.query_tree.childs[1]
+        self.assertEqual(right_child.type, "FILTER", "Right child should be FILTER after pushdown")
+    
+    def test_push_filter_to_both_sides(self):
+        """Test push filters ke both sides of join"""
+        rel1 = QueryTree("RELATION", "users")
+        rel2 = QueryTree("RELATION", "orders")
+        
+        join_cond = self.make_join_condition("id", "user_id", "users", "orders")
+        
+        join = QueryTree("JOIN", "INNER")
+        join.add_child(rel1)
+        join.add_child(rel2)
+        join.add_child(join_cond)
+        
+        # Multiple conditions: users.age > 18 AND orders.amount > 1000
+        cond1 = self.make_comparison(">", "age", "18", "users")
+        cond2 = self.make_comparison(">", "amount", "1000", "orders")
+        
+        and_op = QueryTree("OPERATOR", "AND")
+        and_op.add_child(cond1)
+        and_op.add_child(cond2)
+        
+        filter_node = QueryTree("FILTER", "")
+        filter_node.add_child(join)
+        filter_node.add_child(and_op)
+        
+        query = ParsedQuery(filter_node, "SELECT * FROM users JOIN orders WHERE users.age > 18 AND orders.amount > 1000")
+        
+        # Apply Rule 7
+        result = apply_pushdown(query)
+        
+        # Validate result
+        check_query(result.query_tree)
+        
+        # Should have pushed filters to both sides
+        self.assertEqual(result.query_tree.type, "JOIN")
+        
+        # Both children should be FILTER
+        left_child = result.query_tree.childs[0]
+        right_child = result.query_tree.childs[1]
+        
+        self.assertEqual(left_child.type, "FILTER", "Left child should be FILTER")
+        self.assertEqual(right_child.type, "FILTER", "Right child should be FILTER")
+    
+    def test_no_filter_no_change(self):
+        """Test query tanpa FILTER → JOIN (tidak ada perubahan)"""
+        rel1 = QueryTree("RELATION", "users")
+        rel2 = QueryTree("RELATION", "profiles")
+        
+        join_cond = self.make_join_condition("id", "user_id", "users", "profiles")
+        
+        join = QueryTree("JOIN", "INNER")
+        join.add_child(rel1)
+        join.add_child(rel2)
+        join.add_child(join_cond)
+        
+        query = ParsedQuery(join, "SELECT * FROM users JOIN profiles")
+        
+        # Apply Rule 7
+        result = apply_pushdown(query)
+        
+        # Validate result
+        check_query(result.query_tree)
+        
+        # Should remain unchanged (no FILTER to push)
+        self.assertEqual(result.query_tree.type, "JOIN")
+
+
 class TestDeterministicRulesInteraction(unittest.TestCase):
     """Test interaksi antara Rule 3 dan Rule 8"""
     
@@ -400,6 +579,97 @@ class TestDeterministicRulesInteraction(unittest.TestCase):
             
             self.assertTrue(left_is_project or right_is_project,
                           "At least one JOIN child should be PROJECT after Rule 8")
+    
+    def test_rule3_then_rule7_then_rule8(self):
+        """Test sequence Rule 3 -> Rule 7 -> Rule 8"""
+        # Build: PROJECT -> PROJECT -> FILTER -> JOIN
+        # Should eliminate inner PROJECT, push filter, then push projection
+        
+        # Build JOIN
+        rel_e = QueryTree("RELATION", "users")
+        rel_d = QueryTree("RELATION", "profiles")
+        
+        join_left = QueryTree("COLUMN_REF", "")
+        join_left_name = QueryTree("COLUMN_NAME", "")
+        join_left_id = QueryTree("IDENTIFIER", "id")
+        join_left_name.add_child(join_left_id)
+        join_left.add_child(join_left_name)
+        
+        join_right = QueryTree("COLUMN_REF", "")
+        join_right_name = QueryTree("COLUMN_NAME", "")
+        join_right_id = QueryTree("IDENTIFIER", "user_id")
+        join_right_name.add_child(join_right_id)
+        join_right.add_child(join_right_name)
+        
+        comparison = QueryTree("COMPARISON", "=")
+        comparison.add_child(join_left)
+        comparison.add_child(join_right)
+        
+        join = QueryTree("JOIN", "INNER")
+        join.add_child(rel_e)
+        join.add_child(rel_d)
+        join.add_child(comparison)
+        
+        # FILTER (references left table)
+        filter_col = QueryTree("COLUMN_REF", "")
+        filter_col_name = QueryTree("COLUMN_NAME", "")
+        filter_col_id = QueryTree("IDENTIFIER", "age")
+        filter_col_name.add_child(filter_col_id)
+        filter_col.add_child(filter_col_name)
+        
+        filter_table = QueryTree("TABLE_NAME", "")
+        filter_table_id = QueryTree("IDENTIFIER", "users")
+        filter_table.add_child(filter_table_id)
+        filter_col.add_child(filter_table)
+        
+        filter_val = QueryTree("LITERAL_NUMBER", "18")
+        
+        filter_cond = QueryTree("COMPARISON", ">")
+        filter_cond.add_child(filter_col)
+        filter_cond.add_child(filter_val)
+        
+        filter_node = QueryTree("FILTER", "")
+        filter_node.add_child(join)
+        filter_node.add_child(filter_cond)
+        
+        # Inner PROJECT
+        inner_col = QueryTree("COLUMN_REF", "")
+        inner_col_name = QueryTree("COLUMN_NAME", "")
+        inner_col_id = QueryTree("IDENTIFIER", "name")
+        inner_col_name.add_child(inner_col_id)
+        inner_col.add_child(inner_col_name)
+        
+        inner_project = QueryTree("PROJECT", "")
+        inner_project.add_child(inner_col)
+        inner_project.add_child(filter_node)
+        
+        # Outer PROJECT
+        outer_col = QueryTree("COLUMN_REF", "")
+        outer_col_name = QueryTree("COLUMN_NAME", "")
+        outer_col_id = QueryTree("IDENTIFIER", "name")
+        outer_col_name.add_child(outer_col_id)
+        outer_col.add_child(outer_col_name)
+        
+        outer_project = QueryTree("PROJECT", "")
+        outer_project.add_child(outer_col)
+        outer_project.add_child(inner_project)
+        
+        query = ParsedQuery(outer_project, "test")
+        
+        # Apply Rule 3
+        after_rule3 = seleksi_proyeksi(query)
+        check_query(after_rule3.query_tree)
+        
+        # Apply Rule 7
+        after_rule7 = apply_pushdown(after_rule3)
+        check_query(after_rule7.query_tree)
+        
+        # Apply Rule 8
+        after_rule8 = push_projection_over_joins(after_rule7)
+        check_query(after_rule8.query_tree)
+        
+        # Result should be valid
+        self.assertIsNotNone(after_rule8.query_tree)
     
     def test_order_independence(self):
         """Test bahwa urutan Rule 3 dan Rule 8 tidak mempengaruhi hasil akhir"""
