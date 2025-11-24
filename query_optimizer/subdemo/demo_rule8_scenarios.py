@@ -46,37 +46,11 @@ def scenario_1_basic_pushdown():
     print("\n")
     print_separator("SCENARIO 8.1: Basic Projection Pushdown")
     
-    print("Concept: PROJECT(cols, JOIN(R, S)) → PROJECT(cols, JOIN(PROJECT(R_cols), PROJECT(S_cols)))")
-    print("Query: SELECT users.name, profiles.bio FROM users JOIN profiles")
-    
-    # Build JOIN
-    rel1 = QueryTree("RELATION", "users")
-    rel2 = QueryTree("RELATION", "profiles")
-    
-    join_left = make_column_ref("id", "users")
-    join_right = make_column_ref("user_id", "profiles")
-    
-    join_cond = QueryTree("COMPARISON", "=")
-    join_cond.add_child(join_left)
-    join_cond.add_child(join_right)
-    
-    join = QueryTree("JOIN", "INNER")
-    join.add_child(rel1)
-    join.add_child(rel2)
-    join.add_child(join_cond)
-    
-    # Projected columns: users.name, profiles.bio
-    col1 = make_column_ref("name", "users")
-    col2 = make_column_ref("bio", "profiles")
-    
-    project = QueryTree("PROJECT", "")
-    project.add_child(col1)
-    project.add_child(col2)
-    project.add_child(join)
-    
-    query = ParsedQuery(project, "SELECT users.name, profiles.bio FROM users JOIN profiles ON users.id = profiles.user_id")
+    sql = "SELECT users.name, profiles.bio FROM users JOIN profiles ON users.id = profiles.user_id"
+    print(f"Query: {sql}")
     
     engine = OptimizationEngine()
+    query = engine.parse_query(sql)
     
     print("\nOriginal Query Tree:")
     print(query.query_tree.tree())
@@ -86,21 +60,16 @@ def scenario_1_basic_pushdown():
     print(f"Cost: {cost_original:.2f}")
     
     print("\n" + "-"*70)
-    print("Applying Rule 8: Push projections to join children")
+    print("Applying Rule 8")
     
     optimized = push_projection_over_joins(query)
     
     print("\nOptimized Query Tree:")
     print(optimized.query_tree.tree())
     optimized_projects = count_projects(optimized.query_tree)
-    print(f"\nPROJECT nodes: {optimized_projects}")
+    print(f"\nPROJECT nodes: {optimized_projects} (+{optimized_projects - original_projects})")
     cost_optimized = engine.get_cost(optimized)
-    print(f"Cost: {cost_optimized:.2f}")
-    
-    print(f"\n✓ Projections pushed down! (+{optimized_projects - original_projects} PROJECT nodes)")
-    
-    print("\nKey Point: Each relation projects only needed columns + join keys")
-    print("Benefit: Reduced tuple width before join")
+    print(f"Cost: {cost_optimized:.2f} (improvement: {cost_original - cost_optimized:.2f})")
 
 
 def scenario_2_selective_projection():
@@ -108,57 +77,23 @@ def scenario_2_selective_projection():
     print("\n")
     print_separator("SCENARIO 8.2: Selective Projection")
     
-    print("Concept: Project only 2 columns from tables with many columns")
-    print("Significant reduction in data volume")
-    
-    # Build JOIN (same as scenario 1)
-    rel1 = QueryTree("RELATION", "users")
-    rel2 = QueryTree("RELATION", "profiles")
-    
-    join_left = make_column_ref("id", "users")
-    join_right = make_column_ref("user_id", "profiles")
-    
-    join_cond = QueryTree("COMPARISON", "=")
-    join_cond.add_child(join_left)
-    join_cond.add_child(join_right)
-    
-    join = QueryTree("JOIN", "INNER")
-    join.add_child(rel1)
-    join.add_child(rel2)
-    join.add_child(join_cond)
-    
-    # Project only email from users
-    col1 = make_column_ref("email", "users")
-    
-    project = QueryTree("PROJECT", "")
-    project.add_child(col1)
-    project.add_child(join)
-    
-    query = ParsedQuery(project, "SELECT users.email FROM users JOIN profiles ON users.id = profiles.user_id")
+    sql = "SELECT users.email FROM users JOIN profiles ON users.id = profiles.user_id"
+    print(f"Query: {sql}")
     
     engine = OptimizationEngine()
+    query = engine.parse_query(sql)
     
     print("\nOriginal Query Tree:")
     print(query.query_tree.tree())
-    print("\nWithout pushdown: JOIN processes ALL columns from both tables")
     cost_original = engine.get_cost(query)
     print(f"Cost: {cost_original:.2f}")
     
     print("\n" + "-"*70)
-    print("Applying Rule 8: Push projection down")
+    print("Applying Rule 8")
     
     optimized = push_projection_over_joins(query)
     
     print("\nOptimized Query Tree:")
     print(optimized.query_tree.tree())
-    print("\nWith pushdown: Each table projects only needed columns")
-    print("  - users: id (join key) + email (output)")
-    print("  - profiles: user_id (join key) only")
     cost_optimized = engine.get_cost(optimized)
-    print(f"Cost: {cost_optimized:.2f}")
-    
-    if cost_optimized < cost_original:
-        print(f"\n✓ Significant improvement: {cost_original - cost_optimized:.2f}")
-    
-    print("\nKey Point: More selective projection = bigger benefit")
-    print("Especially important for wide tables with many columns")
+    print(f"Cost: {cost_optimized:.2f} (improvement: {cost_original - cost_optimized:.2f})")

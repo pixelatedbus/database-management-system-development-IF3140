@@ -3,7 +3,7 @@ Demo scenarios for Rule 3 - Projection Elimination
 """
 
 from query_optimizer.query_tree import QueryTree
-from query_optimizer.optimization_engine import ParsedQuery
+from query_optimizer.optimization_engine import ParsedQuery, OptimizationEngine
 from query_optimizer.rule_3 import seleksi_proyeksi
 
 
@@ -29,16 +29,13 @@ def scenario_1_nested_projections():
     print("\n")
     print_separator("SCENARIO 3.1: Nested Projection Elimination")
     
-    print("Concept: PROJECT(cols1, PROJECT(cols2, Source)) → PROJECT(cols1, Source)")
     print("Query: SELECT id, name FROM (SELECT * FROM users)")
     
     relation = QueryTree("RELATION", "users")
     
-    # Inner projection: SELECT *
     inner_project = QueryTree("PROJECT", "*")
     inner_project.add_child(relation)
     
-    # Outer projection: SELECT id, name
     col1 = QueryTree("COLUMN_REF", "")
     col1_name = QueryTree("COLUMN_NAME", "")
     col1_id = QueryTree("IDENTIFIER", "id")
@@ -64,19 +61,14 @@ def scenario_1_nested_projections():
     print(f"\nPROJECT nodes: {original_count}")
     
     print("\n" + "-"*70)
-    print("Applying Rule 3: Projection Elimination")
+    print("Applying Rule 3")
     
     optimized = seleksi_proyeksi(query)
     
     print("\nOptimized Query Tree:")
     print(optimized.query_tree.tree())
     optimized_count = count_projects(optimized.query_tree)
-    print(f"\nPROJECT nodes: {optimized_count}")
-    
-    print(f"\n✓ Eliminated {original_count - optimized_count} nested projection(s)!")
-    
-    print("\nKey Point: Inner projection is redundant when outer projection")
-    print("specifies exactly what columns are needed")
+    print(f"\nPROJECT nodes: {optimized_count} (eliminated {original_count - optimized_count})")
 
 
 def scenario_2_triple_nested():
@@ -84,16 +76,13 @@ def scenario_2_triple_nested():
     print("\n")
     print_separator("SCENARIO 3.2: Triple Nested Projections")
     
-    print("Concept: Multiple nested projections all eliminated")
     print("Query: SELECT id FROM (SELECT id, name FROM (SELECT * FROM users))")
     
     relation = QueryTree("RELATION", "users")
     
-    # Innermost: SELECT *
     inner1 = QueryTree("PROJECT", "*")
     inner1.add_child(relation)
     
-    # Middle: SELECT id, name
     col_id1 = QueryTree("COLUMN_REF", "")
     col_name1 = QueryTree("COLUMN_NAME", "")
     id1 = QueryTree("IDENTIFIER", "id")
@@ -111,7 +100,6 @@ def scenario_2_triple_nested():
     inner2.add_child(col_name_node)
     inner2.add_child(inner1)
     
-    # Outermost: SELECT id
     col_id2 = QueryTree("COLUMN_REF", "")
     col_name3 = QueryTree("COLUMN_NAME", "")
     id2 = QueryTree("IDENTIFIER", "id")
@@ -137,9 +125,5 @@ def scenario_2_triple_nested():
     print("\nOptimized Query Tree:")
     print(optimized.query_tree.tree())
     optimized_count = count_projects(optimized.query_tree)
-    print(f"\nPROJECT nodes: {optimized_count}")
-    
-    print(f"\n✓ Eliminated {original_count - optimized_count} nested projection(s)!")
-    
-    print("\nKey Point: Rule 3 applies recursively to eliminate all")
-    print("unnecessary nested projections, keeping only the outermost")
+    print(f"\nPROJECT nodes: {optimized_count} (eliminated {original_count - optimized_count})")
+

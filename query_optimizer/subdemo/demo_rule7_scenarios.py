@@ -46,39 +46,11 @@ def scenario_1_single_condition():
     print("\n")
     print_separator("SCENARIO 7.1: Single Condition Pushdown")
     
-    print("Concept: FILTER(JOIN(R, S), cond_R) → JOIN(FILTER(R, cond_R), S)")
-    print("Query: SELECT * FROM users JOIN profiles WHERE users.age > 18")
-    
-    # Build JOIN
-    rel1 = QueryTree("RELATION", "users")
-    rel2 = QueryTree("RELATION", "profiles")
-    
-    join_left = make_column_ref("id", "users")
-    join_right = make_column_ref("user_id", "profiles")
-    
-    join_cond = QueryTree("COMPARISON", "=")
-    join_cond.add_child(join_left)
-    join_cond.add_child(join_right)
-    
-    join = QueryTree("JOIN", "INNER")
-    join.add_child(rel1)
-    join.add_child(rel2)
-    join.add_child(join_cond)
-    
-    # Filter: users.age > 18
-    age_col = make_column_ref("age", "users")
-    age_val = QueryTree("LITERAL_NUMBER", "18")
-    age_comp = QueryTree("COMPARISON", ">")
-    age_comp.add_child(age_col)
-    age_comp.add_child(age_val)
-    
-    filter_node = QueryTree("FILTER", "")
-    filter_node.add_child(join)
-    filter_node.add_child(age_comp)
-    
-    query = ParsedQuery(filter_node, "SELECT * FROM users JOIN profiles ON users.id = profiles.user_id WHERE users.age > 18")
+    sql = "SELECT * FROM users JOIN profiles ON users.id = profiles.user_id WHERE users.age > 18"
+    print(f"Query: {sql}")
     
     engine = OptimizationEngine()
+    query = engine.parse_query(sql)
     
     print("\nOriginal Query Tree:")
     print(query.query_tree.tree())
@@ -88,7 +60,7 @@ def scenario_1_single_condition():
     print(f"Cost: {cost_original:.2f}")
     
     print("\n" + "-"*70)
-    print("Applying Rule 7: Push filter down to users relation")
+    print("Applying Rule 7")
     
     optimized = apply_pushdown(query)
     
@@ -97,11 +69,7 @@ def scenario_1_single_condition():
     optimized_filters = count_filters(optimized.query_tree)
     print(f"\nFILTER nodes: {optimized_filters}")
     cost_optimized = engine.get_cost(optimized)
-    print(f"Cost: {cost_optimized:.2f}")
-    
-    print(f"\n✓ Filter pushed down! Reduces rows before join")
-    
-    print("\nKey Point: Filter applied earlier reduces intermediate result size")
+    print(f"Cost: {cost_optimized:.2f} (improvement: {cost_original - cost_optimized:.2f})")
 
 
 def scenario_2_multiple_conditions():
@@ -109,51 +77,11 @@ def scenario_2_multiple_conditions():
     print("\n")
     print_separator("SCENARIO 7.2: Multiple Conditions Pushdown")
     
-    print("Concept: FILTER(JOIN, cond_R AND cond_S) → JOIN(FILTER(R, cond_R), FILTER(S, cond_S))")
-    print("Query: SELECT * FROM users JOIN profiles WHERE users.age > 18 AND profiles.verified = 'true'")
-    
-    # Build JOIN
-    rel1 = QueryTree("RELATION", "users")
-    rel2 = QueryTree("RELATION", "profiles")
-    
-    join_left = make_column_ref("id", "users")
-    join_right = make_column_ref("user_id", "profiles")
-    
-    join_cond = QueryTree("COMPARISON", "=")
-    join_cond.add_child(join_left)
-    join_cond.add_child(join_right)
-    
-    join = QueryTree("JOIN", "INNER")
-    join.add_child(rel1)
-    join.add_child(rel2)
-    join.add_child(join_cond)
-    
-    # Filter: users.age > 18
-    age_col = make_column_ref("age", "users")
-    age_val = QueryTree("LITERAL_NUMBER", "18")
-    age_comp = QueryTree("COMPARISON", ">")
-    age_comp.add_child(age_col)
-    age_comp.add_child(age_val)
-    
-    # Filter: profiles.verified = 'true'
-    verified_col = make_column_ref("verified", "profiles")
-    verified_val = QueryTree("LITERAL_STRING", "true")
-    verified_comp = QueryTree("COMPARISON", "=")
-    verified_comp.add_child(verified_col)
-    verified_comp.add_child(verified_val)
-    
-    # AND operator
-    and_op = QueryTree("OPERATOR", "AND")
-    and_op.add_child(age_comp)
-    and_op.add_child(verified_comp)
-    
-    filter_node = QueryTree("FILTER", "")
-    filter_node.add_child(join)
-    filter_node.add_child(and_op)
-    
-    query = ParsedQuery(filter_node, "SELECT * FROM users JOIN profiles ON users.id = profiles.user_id WHERE users.age > 18 AND profiles.verified = 'true'")
+    sql = "SELECT * FROM users JOIN profiles ON users.id = profiles.user_id WHERE users.age > 18 AND profiles.verified = 'true'"
+    print(f"Query: {sql}")
     
     engine = OptimizationEngine()
+    query = engine.parse_query(sql)
     
     print("\nOriginal Query Tree:")
     print(query.query_tree.tree())
@@ -163,7 +91,7 @@ def scenario_2_multiple_conditions():
     print(f"Cost: {cost_original:.2f}")
     
     print("\n" + "-"*70)
-    print("Applying Rule 7: Split and push both filters down")
+    print("Applying Rule 7")
     
     optimized = apply_pushdown(query)
     
@@ -172,9 +100,5 @@ def scenario_2_multiple_conditions():
     optimized_filters = count_filters(optimized.query_tree)
     print(f"\nFILTER nodes: {optimized_filters}")
     cost_optimized = engine.get_cost(optimized)
-    print(f"Cost: {cost_optimized:.2f}")
-    
-    print(f"\n✓ Both filters pushed down to respective relations!")
-    
-    print("\nKey Point: Each filter pushed to its relevant relation")
-    print("Result: Both sides of join have fewer rows")
+    print(f"Cost: {cost_optimized:.2f} (improvement: {cost_original - cost_optimized:.2f})")
+
