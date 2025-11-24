@@ -73,7 +73,19 @@ class Individual:
         cloned_tree = clone_tree(base_query.query_tree)
         current_query = ParsedQuery(cloned_tree, base_query.query)
         
-        # Apply filter operations dengan unified order format
+        # Step 1: Apply join operations (Rule 4: Push selection into joins)
+        # Harus dilakukan SEBELUM filter operations karena mengubah struktur FILTER-JOIN
+        if 'join_params' in self.operation_params and self.operation_params['join_params']:
+            from query_optimizer import rule_4
+            
+            # join_params format: Dict[filter_node_id, bool]
+            # True = merge FILTER into JOIN, False = keep separate
+            decisions = self.operation_params['join_params']
+            
+            if decisions:
+                current_query = rule_4.apply_merge(current_query, decisions)
+        
+        # Step 2: Apply filter operations dengan unified order format
         if 'filter_params' in self.operation_params and self.operation_params['filter_params']:
             # Uncascade existing filters first
             query_and = uncascade_filters(current_query)
@@ -81,7 +93,7 @@ class Individual:
             # Extract unified orders
             unified_orders = self.operation_params['filter_params']
             
-            # Step 1: Apply reordering (flatten order untuk reorder_and_conditions)
+            # Step 2a: Apply reordering (flatten order untuk reorder_and_conditions)
             reorder_orders = {}
             for node_id, order in unified_orders.items():
                 # Flatten to get pure permutation
@@ -96,13 +108,11 @@ class Individual:
             if reorder_orders:
                 query_and = reorder_and_conditions(query_and, operator_orders=reorder_orders)
             
-            # Step 2: Apply cascading dengan grouping structure
+            # Step 2b: Apply cascading dengan grouping structure
             if unified_orders:
                 current_query = cascade_filters(query_and, operator_orders=unified_orders)
             else:
                 current_query = query_and
-        
-        # TODO: Apply join operations when implemented
         
         return current_query
     
@@ -361,6 +371,10 @@ class GeneticOptimizer:
                                 explanations.append(f"{item} single")
                         if explanations:
                             print(f"      → Order: {' -> '.join(explanations)}")
+                    # Special formatting for join_params (merge decision)
+                    elif operation_name == 'join_params' and isinstance(order, bool):
+                        action = "Merge FILTER into JOIN" if order else "Keep FILTER separate"
+                        print(f"      → Action: {action}")
         
         print("\nProgress:")
         print("Gen | Best    | Average | Worst")

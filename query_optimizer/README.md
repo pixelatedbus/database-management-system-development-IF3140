@@ -10,10 +10,12 @@ Query Optimizer adalah modul yang bertanggung jawab untuk mengoptimalkan query S
 
 - **SQL Parser**: Mengubah SQL string menjadi Query Tree representation
 - **Deterministic Rules**: Rule 3 (projection elimination), Rule 7 (filter pushdown), Rule 8 (projection over joins)
-- **Genetic Algorithm Optimizer**: Optimasi query menggunakan unified filter params
+- **Non-Deterministic Rules**: Rule 1 (filter cascading), Rule 2 (filter reordering), Rule 4 (push selection into joins)
+- **Genetic Algorithm Optimizer**: Optimasi query menggunakan unified filter params dan join params
 - **Query Tree Manipulation**: Transformasi dan manipulasi struktur query tree
 - **Cost Estimation**: Estimasi cost eksekusi query
 - **Unified Filter Params**: Format `list[int | list[int]]` menggabungkan reordering dan cascading
+- **Join Params**: Format `bool` untuk merge decision (FILTER ke JOIN)
 
 ### Komponen Utama
 
@@ -29,6 +31,7 @@ query_optimizer/
 ├── rule_1.py                 # Filter cascading (non-deterministic)
 ├── rule_2.py                 # Filter reordering (non-deterministic)
 ├── rule_3.py                 # Projection elimination (deterministic)
+├── rule_4.py                 # Push selection into joins (non-deterministic)
 ├── rule_7.py                 # Filter pushdown over join (deterministic)
 ├── rule_8.py                 # Projection over join (deterministic)
 ├── demo.py                   # Demo program
@@ -38,6 +41,7 @@ query_optimizer/
     ├── test_check.py
     ├── test_rule_1.py
     ├── test_rule_2.py
+    ├── test_rule_4.py
     ├── test_rule_7.py
     ├── test_rule_8.py
     ├── test_rule_deterministik.py
@@ -134,24 +138,38 @@ Output:
 - Uncascade back to AND structure
 - Random order generation
 
-**Demo 7: Genetic Algorithm with Unified Params**
+**Demo 7: Rule 4 - Push Selection into Joins (Non-deterministic)**
 
 ```bash
 python -m query_optimizer.demo 7
 ```
 
 Output:
-- Full genetic optimization (Rule 3 → Rule 7 → Rule 8 → GA)
-- Original query tree & cost
-- Optimized query tree & cost
-- Improvement statistics
-- Best solution (unified filter_params: reorder + cascade)
-- Evolution progress per generation
+- FILTER-JOIN pattern detection
+- Compare merge vs separate decisions
+- Cost comparison for both options
+- GA finds optimal decision automatically
+- Shows interaction with Rule 1+2 optimization
 
-**Demo 8: Rule 2 - Filter Reordering (Non-deterministic)**
+**Demo 8: Genetic Algorithm with All Rules (1, 2, 4)**
 
 ```bash
 python -m query_optimizer.demo 8
+```
+
+Output:
+- Full genetic optimization (Rule 3 → Rule 7 → Rule 8 → GA)
+- Includes join_params (Rule 4) and filter_params (Rule 1+2)
+- Original query tree & cost
+- Optimized query tree & cost
+- Improvement statistics
+- Best solution showing all parameter types
+- Evolution progress per generation
+
+**Demo 9: Rule 2 - Filter Reordering (Non-deterministic)**
+
+```bash
+python -m query_optimizer.demo 9
 ```
 
 Output:
@@ -159,10 +177,10 @@ Output:
 - Multiple reorder strategies
 - Preserves tree structure
 
-**Demo 9: Run All Demos**
+**Demo 10: Run All Demos**
 
 ```bash
-python -m query_optimizer.demo 9
+python -m query_optimizer.demo 10
 ```
 
 Output:
@@ -485,7 +503,8 @@ Phase 2: Genetic Algorithm
 Rules dengan parameter space yang dioptimasi oleh GA:
 
 - **Rule 1: Filter Cascading** - Order dan grouping dari filter conditions
-- **Rule 2: Filter Reordering** - Permutasi AND conditions
+- **Rule 2: Filter Reordering** - Permutasi AND conditions  
+- **Rule 4: Push Selection into Joins** - Merge decision untuk FILTER-JOIN patterns
 
 ### 3.4 Genetic Algorithm Implementation
 
@@ -775,6 +794,61 @@ params = [[2, 1, 0]]  # All stay in AND (just reordered)
 ```
 
 Result: `FILTER(AND(c2, c1, c0)) → RELATION`
+
+#### Rule 4: Push Selection into Joins (Non-deterministic, Optimized by GA)
+
+**Equivalency:**  
+`FILTER(JOIN(R, S), cond)` → `JOIN(R, S, cond)` (when beneficial)
+
+**Format:** `dict[int, bool]`
+- Key: FILTER node ID
+- Value: True = merge FILTER into JOIN, False = keep separate
+
+**Purpose:** Mengubah FILTER di atas JOIN menjadi JOIN dengan condition (INNER JOIN)
+
+**Transformation:**
+```
+Before (decision = False):
+FILTER
+├── JOIN (NATURAL)
+│   ├── RELATION(employees)
+│   └── RELATION(payroll)
+└── COMPARISON(=) [e.id = p.employee_id]
+
+After (decision = True):
+JOIN (INNER)
+├── RELATION(employees)
+├── RELATION(payroll)
+└── COMPARISON(=) [e.id = p.employee_id]
+```
+
+**Benefits:**
+- Converts NATURAL JOIN → INNER JOIN with explicit condition
+- Reduces intermediate result size
+- Better query plan with condition pushed to join
+- GA explores both merge and separate configurations
+
+**Parameter Examples:**
+```python
+# Example 1: Merge FILTER into JOIN
+join_params = {42: True}  # FILTER node 42 merged
+
+# Example 2: Keep FILTER separate
+join_params = {42: False}  # FILTER node 42 kept separate
+
+# Example 3: Multiple patterns
+join_params = {
+    42: True,   # Merge filter 42
+    57: False,  # Keep filter 57 separate
+}
+```
+
+**Implementation:**
+- Pattern detection: finds FILTER → JOIN structures
+- Decision parameter: boolean (True/False)
+- Merge: creates INNER JOIN with condition
+- Separate: keeps FILTER above JOIN
+- Optimized by GA: explores both options for best cost
 
 ### 3.6 Query Validation
 

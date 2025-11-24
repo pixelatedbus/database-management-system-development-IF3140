@@ -3,28 +3,40 @@ Rule Parameters Manager
 
 Centralized management untuk semua operation parameters dalam Genetic Algorithm.
 Menggunakan parameter umum berdasarkan tipe operasi:
-- filter_params: Parameter untuk filter operations (AND operators)
-- join_params: Parameter untuk join operations (kosong untuk saat ini)
+- filter_params: Parameter untuk filter operations (Rule 1 + 2 - AND operators)
+- join_params: Parameter untuk join operations (Rule 4 - Push selection into joins)
 
-Struktur params menggunakan format UNIFIED ORDER:
+Struktur params menggunakan format:
 {
     'filter_params': {
-        node_id: [2, [0, 1]]  # Mixed order: int (single) | list (grouped dalam AND)
-                              # [2, [0,1]] = cond2 single, lalu (cond0 AND cond1) grouped
-                              # [1, 0, 2]  = semua single (reorder tanpa cascade)
+        operator_id: [2, [0, 1]]  # UNIFIED ORDER: mixed single/grouped conditions
+                                   # int (single) | list[int] (grouped dalam AND)
+                                   # [2, [0,1]] = cond2 single, lalu (cond0 AND cond1) grouped
+                                   # [1, 0, 2]  = semua single (reorder tanpa cascade)
     },
-    'join_params': {}  # Untuk future implementation
+    'join_params': {
+        filter_node_id: bool  # MERGE DECISION: True = merge FILTER into JOIN
+                              # False = keep FILTER separate
+    }
 }
 
-Format order ini menggabungkan:
+Format filter_params menggabungkan:
 - Seleksi Komutatif (reordering): mengatur urutan kondisi
 - Seleksi Konjunktif (cascading): menentukan grouping dalam AND
 
-Contoh:
+Contoh filter_params:
 - [0, 1, 2]     → Semua single, order original (no reorder, full cascade)
 - [2, 1, 0]     → Semua single, reversed (reorder, full cascade)
 - [2, [0, 1]]   → cond2 single cascade, cond0&1 tetap grouped
 - [[0, 1, 2]]   → Semua dalam satu AND (reorder dulu, tapi no cascade)
+
+Format join_params mengontrol FILTER-JOIN merge:
+- True: Merge FILTER condition into JOIN (push selection into join)
+- False: Keep FILTER separate from JOIN
+
+Contoh join_params:
+- {42: True}  → Merge FILTER node 42 into its child JOIN
+- {57: False} → Keep FILTER node 57 separate
 """
 
 from typing import Any, Literal
@@ -225,31 +237,48 @@ class RuleParamsManager:
             validate_func=validate_filter_params
         )
         
-        # Join operations (placeholder for future)
+        # Join operations (Rule 4: Push selection into joins)
+        from query_optimizer import rule_4
+        
         def analyze_joins(query: ParsedQuery) -> dict[int, Any]:
-            """Placeholder: Analyze join operations."""
-            # TODO: Implement when join optimization rules are added
-            return {}
+            """Analyze FILTER-JOIN patterns for rule 4.
+            
+            Returns:
+                Dict[filter_node_id, metadata]
+                metadata = {'join_id': int, 'has_condition': bool}
+            """
+            return rule_4.find_patterns(query)
         
-        def generate_join_params(metadata: Any) -> dict:
-            """Placeholder: Generate join params."""
-            return {}
+        def generate_join_params(metadata: dict) -> bool:
+            """Generate decision whether to merge FILTER into JOIN.
+            
+            Args:
+                metadata: {'join_id': int, 'has_condition': bool}
+            
+            Returns:
+                bool: True = merge FILTER into JOIN, False = keep separate
+            """
+            return rule_4.generate_params(metadata)
         
-        def copy_join_params(params: dict) -> dict:
-            """Placeholder: Copy join params."""
-            import copy
-            return copy.deepcopy(params)
+        def copy_join_params(params: bool) -> bool:
+            """Copy join params (simple bool)."""
+            return rule_4.copy_params(params)
         
-        def mutate_join_params(params: dict) -> dict:
-            """Placeholder: Mutate join params."""
-            return params
+        def mutate_join_params(params: bool) -> bool:
+            """Mutate join params by flipping the decision."""
+            return rule_4.mutate_params(params)
+        
+        def validate_join_params(params: bool) -> bool:
+            """Validate join params structure."""
+            return rule_4.validate_params(params)
         
         self.register_operation(
             operation_name='join_params',
             analyze_func=analyze_joins,
             generate_func=generate_join_params,
             copy_func=copy_join_params,
-            mutate_func=mutate_join_params
+            mutate_func=mutate_join_params,
+            validate_func=validate_join_params
         )
 
 
