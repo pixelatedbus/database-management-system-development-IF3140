@@ -553,6 +553,217 @@ class TestRule4Scenarios(unittest.TestCase):
                                "Merge should have equal or lower cost than separate")
 
 
+class TestRule4WithCommaSeparatedTables(unittest.TestCase):
+    """Test Rule 4 dengan comma-separated tables (implicit CROSS JOIN)."""
+    
+    def setUp(self):
+        self.engine = OptimizationEngine()
+    
+    def test_comma_separated_tables_creates_cross_join(self):
+        """Test bahwa FROM table1, table2 menciptakan CROSS JOIN."""
+        query_str = "SELECT * FROM employees, payroll"
+        parsed = self.engine.parse_query(query_str)
+        
+        # Find JOIN node in tree
+        def find_join_type(node):
+            if node is None:
+                return None
+            if node.type == "JOIN":
+                return node.val
+            for child in node.childs:
+                result = find_join_type(child)
+                if result:
+                    return result
+            return None
+        
+        join_type = find_join_type(parsed.query_tree)
+        self.assertEqual(join_type, "CROSS", "Comma-separated tables should create CROSS JOIN")
+    
+    def test_comma_separated_with_where_filter(self):
+        """Test comma-separated tables dengan WHERE clause (FILTER over CROSS JOIN)."""
+        query_str = """
+        SELECT * FROM employees e, payroll p
+        WHERE e.id = p.employee_id
+        """
+        parsed = self.engine.parse_query(query_str)
+        
+        # Should have FILTER over CROSS JOIN
+        patterns = rule_4.find_patterns(parsed)
+        self.assertGreater(len(patterns), 0, "Should detect FILTER-CROSS JOIN pattern")
+        
+        # Verify structure: FILTER -> JOIN(CROSS)
+        def verify_filter_cross_structure(node):
+            if node is None:
+                return False
+            
+            if node.type == "FILTER" and len(node.childs) >= 1:
+                join_child = node.childs[0]
+                if join_child.type == "JOIN" and join_child.val == "CROSS":
+                    return True
+            
+            for child in node.childs:
+                if verify_filter_cross_structure(child):
+                    return True
+            
+            return False
+        
+        has_pattern = verify_filter_cross_structure(parsed.query_tree)
+        self.assertTrue(has_pattern, "Should have FILTER -> CROSS JOIN structure")
+    
+    def test_merge_comma_separated_tables(self):
+        """Test merging FILTER over comma-separated tables (CROSS -> INNER)."""
+        query_str = """
+        SELECT * FROM employees e, payroll p
+        WHERE e.id = p.employee_id
+        """
+        parsed = self.engine.parse_query(query_str)
+        
+        # Find patterns and apply merge
+        patterns = rule_4.find_patterns(parsed)
+        self.assertGreater(len(patterns), 0)
+        
+        # Merge (decision = True)
+        decisions_merge = {fid: True for fid in patterns.keys()}
+        merged = rule_4.apply_merge(parsed, decisions_merge)
+        
+        # Find JOIN type in merged tree
+        def find_join_type(node):
+            if node is None:
+                return None
+            if node.type == "JOIN":
+                return node.val
+            for child in node.childs:
+                result = find_join_type(child)
+                if result:
+                    return result
+            return None
+        
+        join_type = find_join_type(merged.query_tree)
+        self.assertEqual(join_type, "INNER", "Merged CROSS JOIN should become INNER JOIN")
+    
+    def test_comma_separated_three_tables(self):
+        """Test comma-separated dengan 3 tables (nested CROSS JOIN)."""
+        query_str = """
+        SELECT * FROM employees e, payroll p, accounts a
+        WHERE e.id = p.employee_id AND p.id = a.payroll_id
+        """
+        parsed = self.engine.parse_query(query_str)
+        
+        # Should have multiple CROSS JOINs (nested)
+        def count_joins(node):
+            if node is None:
+                return 0
+            count = 1 if node.type == "JOIN" else 0
+            for child in node.childs:
+                count += count_joins(child)
+            return count
+        
+        join_count = count_joins(parsed.query_tree)
+        self.assertGreaterEqual(join_count, 2, "Three tables should create at least 2 CROSS JOINs")
+        
+        # Should find FILTER-JOIN patterns
+        patterns = rule_4.find_patterns(parsed)
+        self.assertGreater(len(patterns), 0, "Should find patterns in nested CROSS JOINs")
+    
+    def test_ga_optimization_with_comma_separated_tables(self):
+        """Test GA optimization dengan comma-separated tables."""
+        query_str = """
+        SELECT * FROM employees e, payroll p
+        WHERE e.id = p.employee_id AND e.salary > 50000
+        """
+        parsed = self.engine.parse_query(query_str)
+        
+        ga = GeneticOptimizer(
+            population_size=15,
+            generations=3,
+            mutation_rate=0.2
+        )
+        
+        optimized = ga.optimize(parsed)
+        
+        # Should optimize successfully
+        self.assertIsNotNone(optimized)
+        self.assertIsInstance(optimized, ParsedQuery)
+        
+        # Check if join_params were used
+        stats = ga.get_statistics()
+        if 'best_params' in stats and 'join_params' in stats['best_params']:
+            join_params = stats['best_params']['join_params']
+            self.assertIsInstance(join_params, dict)
+    
+    def test_comma_separated_with_aliases(self):
+        """Test comma-separated tables dengan table aliases."""
+        query_str = """
+        SELECT e.name, p.amount 
+        FROM employees e, payroll p
+        WHERE e.id = p.employee_id
+        """
+        parsed = self.engine.parse_query(query_str)
+        
+        # Should parse correctly with aliases
+        patterns = rule_4.find_patterns(parsed)
+        self.assertIsInstance(patterns, dict)
+        
+        # If patterns found, test merge
+        if patterns:
+            decisions = {fid: True for fid in patterns.keys()}
+            merged = rule_4.apply_merge(parsed, decisions)
+            self.assertIsNotNone(merged)
+    
+    def test_mixed_comma_and_explicit_join(self):
+        """Test mixing comma-separated tables dengan explicit JOIN."""
+        query_str = """
+        SELECT * FROM employees e, payroll p
+        INNER JOIN accounts a ON p.id = a.payroll_id
+        WHERE e.id = p.employee_id
+        """
+        parsed = self.engine.parse_query(query_str)
+        
+        # Should have both CROSS and INNER JOINs
+        def find_join_types(node, types=None):
+            if types is None:
+                types = []
+            if node is None:
+                return types
+            
+            if node.type == "JOIN":
+                types.append(node.val)
+            
+            for child in node.childs:
+                find_join_types(child, types)
+            
+            return types
+        
+        join_types = find_join_types(parsed.query_tree)
+        self.assertIn("CROSS", join_types, "Should have CROSS JOIN from comma-separated tables")
+        self.assertIn("INNER", join_types, "Should have explicit INNER JOIN")
+    
+    def test_cost_benefit_of_merging_comma_separated(self):
+        """Test cost comparison untuk merging comma-separated tables."""
+        query_str = """
+        SELECT * FROM employees e, payroll p
+        WHERE e.id = p.employee_id
+        """
+        parsed = self.engine.parse_query(query_str)
+        
+        patterns = rule_4.find_patterns(parsed)
+        
+        if patterns:
+            # Keep as CROSS JOIN
+            decisions_separate = {fid: False for fid in patterns.keys()}
+            separate = rule_4.apply_merge(parsed, decisions_separate)
+            cost_separate = self.engine.get_cost(separate)
+            
+            # Merge to INNER JOIN
+            decisions_merge = {fid: True for fid in patterns.keys()}
+            merged = rule_4.apply_merge(parsed, decisions_merge)
+            cost_merge = self.engine.get_cost(merged)
+            
+            # INNER JOIN should typically be more efficient than CROSS + FILTER
+            self.assertLessEqual(cost_merge, cost_separate,
+                               "Merging to INNER JOIN should have lower or equal cost")
+
+
 class TestRule4WithRule1And2(unittest.TestCase):
     """Test interaction antara Rule 4 dengan Rule 1 & 2."""
     

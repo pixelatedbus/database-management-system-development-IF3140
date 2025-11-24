@@ -268,15 +268,17 @@ def check_value(node: QueryTree) -> None:
     
     if node.type == "JOIN":
         if not node.val:
-            raise QueryValidationError("<JOIN> harus punya join type (INNER/NATURAL)")
-        if node.val not in {"INNER", "NATURAL"}:
-            raise QueryValidationError(f"<JOIN> value harus 'INNER' atau 'NATURAL', dapat '{node.val}'")
+            raise QueryValidationError("<JOIN> harus punya join type (INNER/NATURAL/CROSS)")
+        if node.val not in {"INNER", "NATURAL", "CROSS"}:
+            raise QueryValidationError(f"<JOIN> value harus 'INNER', 'NATURAL', atau 'CROSS', dapat '{node.val}'")
         
         num_children = len(node.childs)
         if node.val == "NATURAL" and num_children != 2:
             raise QueryValidationError(f"NATURAL JOIN harus punya 2 children, dapat {num_children}")
         elif node.val == "INNER" and num_children != 3:
             raise QueryValidationError(f"INNER JOIN harus punya 3 children (2 relations + condition), dapat {num_children}")
+        elif node.val == "CROSS" and num_children != 2:
+            raise QueryValidationError(f"CROSS JOIN harus punya 2 children (2 relations), dapat {num_children}")
     
     if node.type == "COMPARISON":
         if not node.val:
