@@ -122,6 +122,10 @@ class BPlusTreeIndex:
             node = node.children[0]
         return node
 
+    def get_height(self) -> int:
+        """Get tinggi B+ tree."""
+        return self.index.get_height()
+
     def save(self, filepath: str):
         # save index ke binary file pake pickle
         dir_path = os.path.dirname(filepath)
@@ -179,6 +183,24 @@ class BPlusTree:
             node = node.next
             
         return results
+
+    def get_height(self) -> int:
+        """
+        Hitung tinggi B+ tree (jumlah level dari root ke leaf).
+        Tinggi 1 = cuma root (yang juga leaf).
+        """
+        if self.root is None:
+            return 0
+        
+        height = 1
+        node = self.root
+        
+        # traverse dari root ke leaf untuk hitung tinggi
+        while not node.leaf:
+            height += 1
+            node = node.children[0]  # ambil leftmost child
+        
+        return height
 
     def insert(self, key: str, value: int):
         """
