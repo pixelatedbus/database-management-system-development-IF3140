@@ -115,11 +115,25 @@ class Parser:
 
     def parse_from(self) -> QueryTree:
         left = self.parse_table_ref()
+        
+        # Handle comma-separated tables (implicit CROSS JOIN)
+        while self.match(TokenType.DELIMITER_COMMA):
+            self.advance()
+            right = self.parse_table_ref()
+            
+            # Create CROSS JOIN
+            cross_join = QueryTree("JOIN", "CROSS")
+            cross_join.add_child(left)
+            cross_join.add_child(right)
+            left = cross_join
+        
+        # Handle explicit JOIN keywords
         while self.match(TokenType.KEYWORD_JOIN, TokenType.KEYWORD_INNER) or (
             self.match(TokenType.KEYWORD_NATURAL) and
             self.peek_token and self.peek_token.type == TokenType.KEYWORD_JOIN
         ):
             left = self.parse_join(left)
+        
         return left
 
     def parse_table_ref(self) -> QueryTree:
