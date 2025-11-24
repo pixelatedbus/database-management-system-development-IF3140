@@ -16,6 +16,14 @@ class QueryTree:
         self.childs: list[QueryTree] = []
         self.parent: QueryTree | None = parent
         self.id: int = node_id if node_id is not None else _get_next_id()
+        
+        # Set method based on node type
+        if type == "select":
+            self.method: str = "sequential_search"
+        elif type == "join":
+            self.method: str = "nested_loop"
+        else:
+            self.method: str = ""
     def add_child(self, child_node: QueryTree):
         child_node.parent = self
         self.childs.append(child_node)
@@ -61,6 +69,7 @@ class QueryTree:
         """
         node_id = self.id if preserve_id else None
         cloned_node = QueryTree(self.type, self.val, node_id=node_id)
+        cloned_node.method = self.method  # Copy method attribute
         for child in self.childs:
             cloned_child = child.clone(deep, preserve_id) if deep else child
             cloned_node.add_child(cloned_child)
@@ -141,14 +150,6 @@ class QueryTree:
         """
         return self.childs.copy()
     
-    def get_child(self, index: int) -> QueryTree | None:
-        """
-        Mengembalikan child pada index tertentu
-        """
-        if 0 <= index < len(self.childs):
-            return self.childs[index]
-        return None
-    
     def insert_between_child(self, child: QueryTree, new_node: QueryTree) -> bool:
         """
         Insert new_node antara parent dan child
@@ -184,17 +185,6 @@ class QueryTree:
         return True
     
     ### Node checking ###
-    def is_node_type(self, type: str) -> bool:
-        """
-        Cek apakah tipe node adalah type
-        """
-        return self.type == type
-
-    def is_node_value(self, value: str) -> bool:
-        """
-        Cek apakah node memiliki value tertentu
-        """
-        return self.val == value
     
     def find_node_by_id(self, node_id: int) -> QueryTree | None:
         """
