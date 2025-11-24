@@ -99,7 +99,7 @@ TIDAK dimasukkan dalam parameter space GA.
 
 from query_optimizer.optimization_engine import ParsedQuery
 from query_optimizer.query_tree import QueryTree
-from typing import Set, Dict, List, Tuple
+from typing import Set, Dict, Tuple
 
 
 def push_projection_over_joins(query: ParsedQuery) -> ParsedQuery:

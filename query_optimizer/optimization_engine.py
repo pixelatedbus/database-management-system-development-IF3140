@@ -3,14 +3,11 @@ Main class for query optimization
 """
 
 from __future__ import annotations
-from typing import Optional, Callable, TYPE_CHECKING
+from typing import Optional, Callable
 from .tokenizer import Tokenizer
 from .parser import Parser
 from .query_tree import QueryTree
 from .query_check import check_query
-
-if TYPE_CHECKING:
-    from .genetic_optimizer import GeneticOptimizer
 
 class OptimizationError(Exception):
     """Exception raised for errors in the optimization process."""
@@ -114,7 +111,7 @@ class OptimizationEngine:
         query_tree = push_projection_over_joins(query_tree)
         
         if use_genetic:
-            # Lazy import to avoid circular dependency
+            # Lazy import
             from .genetic_optimizer import GeneticOptimizer
             
             # Use Genetic Algorithm for optimization
@@ -144,8 +141,6 @@ class OptimizationEngine:
         """
         Only simulation until proper implementation.
         """
-        import random
-        
         # Dummy implementation with random cost
         # Base cost on tree structure
         node_count = 0
