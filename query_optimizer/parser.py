@@ -506,7 +506,7 @@ class Parser:
             exists_node.add_child(subquery)
             return exists_node
 
-        # Standard comparison
+        # Standard comparison / IN / NOT IN
         left_expr = self.parse_value_expr()
 
         # NOT IN
@@ -599,6 +599,7 @@ class Parser:
             comp_node.add_child(right_expr)
             return comp_node
 
+        # Fallback: lone expression considered comparison truthy
         return left_expr
 
     def parse_in_array(self) -> QueryTree:
@@ -748,4 +749,3 @@ class Parser:
         for child in children:
             node.add_child(child)
         return node
-    
