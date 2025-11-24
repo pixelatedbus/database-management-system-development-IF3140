@@ -151,11 +151,13 @@ def check_query(node: QueryTree) -> None:
                 raise QueryValidationError(f"<JOIN> harus punya 2-3 children, dapat {num_children}")
         
         elif node.type == "SORT":
-            # SORT has 2 children (order_item, source)
+            # SORT has 2 children (order_expr, source)
+            # order_expr bisa berupa COLUMN_REF atau expression lain
             if num_children != 2:
-                raise QueryValidationError(f"<SORT> harus punya 2 children (order_item + source), dapat {num_children}")
-            if node.childs[0].type != "ORDER_ITEM":
-                raise QueryValidationError(f"<SORT> child 0 harus ORDER_ITEM, dapat {node.childs[0].type}")
+                raise QueryValidationError(f"<SORT> harus punya 2 children (order_expr + source), dapat {num_children}")
+            # Child 0 harus expression (COLUMN_REF, ARITH_EXPR, dll)
+            if node.childs[0].type not in {"COLUMN_REF", "ARITH_EXPR", "FUNCTION_CALL", "LITERAL_NUMBER", "LITERAL_STRING"}:
+                raise QueryValidationError(f"<SORT> child 0 harus expression yang valid, dapat {node.childs[0].type}")
         
         elif node.type == "LIMIT":
             # LIMIT has 1 child (source)
