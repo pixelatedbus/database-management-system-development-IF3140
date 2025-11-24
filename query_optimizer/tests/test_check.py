@@ -806,11 +806,11 @@ class TestQueryValidator(unittest.TestCase):
             check_query(sort)
     
     def test_invalid_sort_first_child_not_column_ref(self):
-        # First child of SORT must be COLUMN_REF
+        # First child of SORT must be valid expression (not RELATION, etc)
         sort = QueryTree("SORT", "ASC")
-        literal = QueryTree("LITERAL_NUMBER", 1)
+        invalid_child = QueryTree("RELATION", "some_table")  # RELATION is not valid expression for ORDER BY
         relation = QueryTree("RELATION", "users")
-        sort.add_child(literal)
+        sort.add_child(invalid_child)
         sort.add_child(relation)
         
         with self.assertRaises(QueryValidationError):

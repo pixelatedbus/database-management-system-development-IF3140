@@ -8,3 +8,4 @@ venv/
 env/
 ENV/
 query_optimizer/lokal/
+.vscode/

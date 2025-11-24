@@ -4,7 +4,6 @@ from query_optimizer.tokenizer import Tokenizer
 from query_optimizer.query_tree import QueryTree
 from query_optimizer.query_token import Token, TokenType
 
-
 class ParserError(Exception):
     def __init__(self, message: str, token: Optional[Token] = None):
         if token:
@@ -14,7 +13,6 @@ class ParserError(Exception):
             )
         else:
             super().__init__(f"Parser Error: {message}")
-
 
 class Parser:
     def __init__(self, tokenizer: Tokenizer):

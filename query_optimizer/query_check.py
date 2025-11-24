@@ -14,11 +14,16 @@ def get_statistic():
     - columns: dict mapping table_name -> list of column names
     """
     return {
-        "tables": ["users", "profiles", "orders"],
+        "tables": ["users", "profiles", "orders", "products", "employees", "accounts", "logs", "payroll"],
         "columns": {
             "users": ["id", "name", "email"],
             "profiles": ["id", "user_id", "bio"],
-            "orders": ["id", "user_id", "total"]
+            "orders": ["id", "user_id", "total"],
+            "products": ["id", "category", "price", "stock", "description", "discount"],
+            "employees": ["id", "name", "salary", "department", "bonus"],
+            "accounts": ["id", "balance"],
+            "logs": ["id", "message"],
+            "payroll": ["salary"]
         }
     }
 
@@ -146,12 +151,13 @@ def check_query(node: QueryTree) -> None:
                 raise QueryValidationError(f"<JOIN> harus punya 2-3 children, dapat {num_children}")
         
         elif node.type == "SORT":
-            # SORT has 2 children (column_ref to sort by, source)
+            # SORT has 2 children (order_expr, source)
+            # order_expr bisa berupa COLUMN_REF atau expression lain
             if num_children != 2:
-                raise QueryValidationError(f"<SORT> harus punya 2 children (column + source), dapat {num_children}")
-            # Child 0 must be COLUMN_REF
-            if node.childs[0].type != "COLUMN_REF":
-                raise QueryValidationError(f"<SORT> child 0 harus COLUMN_REF, dapat {node.childs[0].type}")
+                raise QueryValidationError(f"<SORT> harus punya 2 children (order_expr + source), dapat {num_children}")
+            # Child 0 harus expression (COLUMN_REF, ARITH_EXPR, dll)
+            if node.childs[0].type not in {"COLUMN_REF", "ARITH_EXPR", "FUNCTION_CALL", "LITERAL_NUMBER", "LITERAL_STRING"}:
+                raise QueryValidationError(f"<SORT> child 0 harus expression yang valid, dapat {node.childs[0].type}")
         
         elif node.type == "LIMIT":
             # LIMIT has 1 child (source)
