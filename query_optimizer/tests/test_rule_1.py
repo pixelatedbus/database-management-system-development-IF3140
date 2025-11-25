@@ -34,7 +34,7 @@ import unittest
 from query_optimizer.query_tree import QueryTree
 from query_optimizer.optimization_engine import ParsedQuery
 from query_optimizer.query_check import check_query
-from query_optimizer.rule_1 import (
+from query_optimizer.rule.rule_1 import (
     analyze_and_operators,
     generate_random_rule_1_params,
     copy_rule_1_params,
@@ -42,10 +42,8 @@ from query_optimizer.rule_1 import (
     mutate_rule_1_params,
     seleksi_konjungtif,
     cascade_filters,
-    cascade_and_mixed,
     uncascade_filters,
     is_conjunctive_filter,
-    can_transform,
     clone_tree
 )
 

@@ -6,7 +6,7 @@ import unittest
 from query_optimizer.genetic_optimizer import GeneticOptimizer, Individual
 from query_optimizer.optimization_engine import OptimizationEngine, ParsedQuery
 from query_optimizer.rule_params_manager import get_rule_params_manager
-from query_optimizer import rule_4
+from query_optimizer.rule import rule_4
 
 
 class TestRule4Integration(unittest.TestCase):
@@ -861,7 +861,7 @@ class TestRule4WithRule1And2(unittest.TestCase):
             mutation_rate=0.15
         )
         
-        optimized = ga.optimize(parsed)
+        _ = ga.optimize(parsed)
         
         # Check both params in best individual
         if ga.best_individual:

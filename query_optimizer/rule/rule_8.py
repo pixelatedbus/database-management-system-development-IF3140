@@ -279,7 +279,7 @@ def push_projection_to_join(
     if not join_opportunities:
         return query
     
-    from query_optimizer.rule_1 import clone_tree
+    from query_optimizer.rule.rule_1 import clone_tree
     cloned_tree = clone_tree(query.query_tree)
     
     # Re-analyze opportunities on cloned tree (IDs will be different after clone)
@@ -459,7 +459,7 @@ def undo_rule8(query: ParsedQuery) -> ParsedQuery:
             ├── E1
             └── E2
     """
-    from query_optimizer.rule_1 import clone_tree
+    from query_optimizer.rule.rule_1 import clone_tree
     cloned_tree = clone_tree(query.query_tree)
     
     def remove_projections(node: QueryTree) -> QueryTree:

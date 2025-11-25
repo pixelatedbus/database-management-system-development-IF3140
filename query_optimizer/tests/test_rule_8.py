@@ -6,7 +6,7 @@ import unittest
 from query_optimizer.query_tree import QueryTree
 from query_optimizer.optimization_engine import ParsedQuery
 from query_optimizer.query_check import check_query
-from query_optimizer.rule_8 import (
+from query_optimizer.rule.rule_8 import (
     analyze_projection_over_join,
     push_projection_to_join,
     can_apply_rule8,
@@ -351,7 +351,7 @@ class TestPushProjectionOverJoins(unittest.TestCase):
     
     def test_push_projection_over_joins_applies_to_all(self):
         """Test that push_projection_over_joins applies to all opportunities"""
-        from query_optimizer.rule_8 import push_projection_over_joins
+        from query_optimizer.rule.rule_8 import push_projection_over_joins
         
         # Build: PROJECT → JOIN
         rel1 = QueryTree("RELATION", "users")
@@ -388,7 +388,7 @@ class TestPushProjectionOverJoins(unittest.TestCase):
     
     def test_push_projection_no_opportunities(self):
         """Test when there are no opportunities"""
-        from query_optimizer.rule_8 import push_projection_over_joins
+        from query_optimizer.rule.rule_8 import push_projection_over_joins
         
         # Just a relation, no PROJECT → JOIN pattern
         rel = QueryTree("RELATION", "users")

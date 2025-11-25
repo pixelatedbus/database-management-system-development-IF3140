@@ -127,13 +127,12 @@ class RuleParamsManager:
     def _register_default_operations(self):
         """Register default operations."""
         # Filter operations (Rule 1 + Rule 2)
-        from query_optimizer.rule_1 import (
+        from query_optimizer.rule.rule_1 import (
             analyze_and_operators,
             copy_rule_1_params,
             mutate_rule_1_params,
         )
-        from query_optimizer.rule_2 import (
-            generate_random_rule_2_params,
+        from query_optimizer.rule.rule_2 import (
             mutate_rule_2_params,
         )
         
@@ -246,7 +245,7 @@ class RuleParamsManager:
         )
         
         # Join operations (Rule 4: Push selection into joins)
-        from query_optimizer import rule_4
+        from query_optimizer.rule import rule_4
         
         def analyze_joins(query: ParsedQuery) -> dict[int, Any]:
             """Analyze FILTER-JOIN patterns for rule 4.

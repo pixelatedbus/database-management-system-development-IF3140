@@ -5,12 +5,13 @@ Genetic Algorithm
 import random
 from typing import Callable, Any
 from query_optimizer.optimization_engine import ParsedQuery, OptimizationEngine
-from query_optimizer.rule_1 import (
+from query_optimizer.rule.rule_1 import (
     cascade_filters,
     uncascade_filters,
     clone_tree
 )
-from query_optimizer.rule_2 import reorder_and_conditions
+from query_optimizer.rule.rule_2 import reorder_and_conditions
+from query_optimizer.rule import rule_4
 from query_optimizer.rule_params_manager import get_rule_params_manager
 
 
@@ -75,9 +76,7 @@ class Individual:
         
         # Step 1: Apply join operations (Rule 4: Push selection into joins)
         # Harus dilakukan SEBELUM filter operations karena mengubah struktur FILTER-JOIN
-        if 'join_params' in self.operation_params and self.operation_params['join_params']:
-            from query_optimizer import rule_4
-            
+        if 'join_params' in self.operation_params and self.operation_params['join_params']:            
             # join_params format: Dict[join_id, list[condition_ids]]
             # Example: {42: [10, 15]} = merge conditions 10 and 15 into JOIN 42
             join_params = self.operation_params['join_params']
@@ -355,7 +354,7 @@ class GeneticOptimizer:
         print(f"Best Fitness: {self.best_fitness:.2f}")
         
         if self.best_individual:
-            print(f"\nBest Operation Parameters:")
+            print("\nBest Operation Parameters:")
             for operation_name, node_params in self.best_individual.operation_params.items():
                 print(f"\n  {operation_name}:")
                 for node_id, order in node_params.items():
@@ -376,7 +375,7 @@ class GeneticOptimizer:
                         if order:
                             print(f"      → Merge conditions: {order}")
                         else:
-                            print(f"      → Keep separate (no merge)")
+                            print("      → Keep separate (no merge)")
         
         print("\nProgress:")
         print("Gen | Best    | Average | Worst")

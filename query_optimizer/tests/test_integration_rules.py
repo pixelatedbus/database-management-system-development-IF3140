@@ -12,12 +12,12 @@ Testing kombinasi dan interaksi antar rules dalam parameter space.
 import unittest
 from query_optimizer.query_tree import QueryTree
 from query_optimizer.optimization_engine import ParsedQuery
-from query_optimizer.rule_1 import (
+from query_optimizer.rule.rule_1 import (
     seleksi_konjungtif,
     cascade_filters,
     analyze_and_operators
 )
-from query_optimizer.rule_2 import (
+from query_optimizer.rule.rule_2 import (
     reorder_and_conditions,
     analyze_and_operators_for_reorder
 )

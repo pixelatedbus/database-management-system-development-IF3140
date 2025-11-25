@@ -14,9 +14,9 @@ import unittest
 from query_optimizer.query_tree import QueryTree
 from query_optimizer.optimization_engine import ParsedQuery
 from query_optimizer.query_check import check_query
-from query_optimizer.rule_3 import seleksi_proyeksi
-from query_optimizer.rule_7 import apply_pushdown
-from query_optimizer.rule_8 import push_projection_over_joins
+from query_optimizer.rule.rule_3 import seleksi_proyeksi
+from query_optimizer.rule.rule_7 import apply_pushdown
+from query_optimizer.rule.rule_8 import push_projection_over_joins
 
 
 class TestRule3ProjectionElimination(unittest.TestCase):
@@ -725,7 +725,7 @@ class TestDeterministicRulesInteraction(unittest.TestCase):
         query = ParsedQuery(outer_project, "test")
         
         # Path 1: Rule 3 -> Rule 8
-        from query_optimizer.rule_1 import clone_tree
+        from query_optimizer.rule.rule_1 import clone_tree
         cloned1 = clone_tree(query.query_tree)
         query1 = ParsedQuery(cloned1, query.query)
         result1 = seleksi_proyeksi(query1)

@@ -21,7 +21,7 @@ import unittest
 from query_optimizer.query_tree import QueryTree
 from query_optimizer.optimization_engine import ParsedQuery
 from query_optimizer.query_check import check_query
-from query_optimizer.rule_2 import (
+from query_optimizer.rule.rule_2 import (
     analyze_and_operators_for_reorder,
     generate_random_rule_2_params,
     copy_rule_2_params,
