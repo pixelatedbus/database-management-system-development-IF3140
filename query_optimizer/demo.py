@@ -64,7 +64,12 @@ def print_help():
     print("  4.4  -   Scenario: Nested filters")
     print("  4.5  -   Scenario: Merge into already-merged JOIN & undo options")
     print("")
-    print("  5    - Rule 5: Cascade Projections (Coming soon)")
+    print("  5    - Rule 5: Join Commutativity")
+    print("  5.1  -   Scenario: Basic JOIN swap")
+    print("  5.2  -   Scenario: Multiple JOINs selective swap")
+    print("  5.3  -   Scenario: NATURAL JOIN commutativity")
+    print("  5.4  -   Scenario: Bidirectional transformation")
+    print("  5.5  -   Scenario: GA exploration of join orders")
     print("")
     print("  6    - Rule 6: Associativity/Commutativity of Joins (Coming soon)")
     print("")
@@ -226,6 +231,47 @@ def demo_rule_4():
     print("- undo_merge() provides reverse transformation (INNER -> CROSS)")
     print("- Transformations are bidirectional and semantics-preserving")
     print("- Genetic Algorithm can find optimal decision (see Demo 11)")
+
+
+# =============================================================================
+# RULE 5: JOIN COMMUTATIVITY
+# =============================================================================
+
+def demo_rule_5():
+    """Demo 5: Rule 5 - Join Commutativity (all scenarios)"""
+    print_separator("DEMO 5: Rule 5 - Join Commutativity")
+    
+    print("\nThis demo has multiple scenarios:")
+    print("  5.1 - Basic JOIN swap (A JOIN B → B JOIN A)")
+    print("  5.2 - Multiple JOINs selective swap")
+    print("  5.3 - NATURAL JOIN commutativity")
+    print("  5.4 - Bidirectional transformation (swap twice)")
+    print("  5.5 - GA exploration of join orders")
+    
+    print("\nRunning all scenarios...")
+    
+    from query_optimizer.subdemo.demo_rule5_scenarios import (
+        scenario_1_basic_swap,
+        scenario_2_multiple_joins,
+        scenario_3_natural_join,
+        scenario_4_bidirectional,
+        scenario_5_ga_exploration
+    )
+    
+    scenario_1_basic_swap()
+    scenario_2_multiple_joins()
+    scenario_3_natural_join()
+    scenario_4_bidirectional()
+    scenario_5_ga_exploration()
+    
+    print_separator("DEMO 5 COMPLETED")
+    print("\nKey Insights:")
+    print("- Rule 5 enables swapping JOIN children: JOIN(A,B) ≡ JOIN(B,A)")
+    print("- Works with all JOIN types: INNER, LEFT, RIGHT, CROSS, NATURAL")
+    print("- join_child_params uses boolean per JOIN (True=swap, False=keep)")
+    print("- Different orders can have different costs")
+    print("- Transformation is bidirectional (swap twice returns original)")
+    print("- Genetic Algorithm can find optimal join order (see Demo 11)")
 
 
 # =============================================================================
@@ -489,6 +535,7 @@ def demo_all():
     demo_rule_2()
     demo_rule_3()
     demo_rule_4()
+    demo_rule_5()
     demo_rule_7()
     demo_rule_8()
     
@@ -642,11 +689,35 @@ def main():
                 
                 print_separator("DEMO COMPLETED")
         
-        # Rule 5: Coming soon
+        # Rule 5: Join Commutativity
         elif demo_num == 5:
-            print_separator("DEMO 5: Rule 5 - Cascade Projections")
-            print("\n⚠ This rule is not yet implemented.")
-            print("Coming soon...")
+            if scenario_num is None:
+                demo_rule_5()
+            else:
+                from query_optimizer.subdemo.demo_rule5_scenarios import (
+                    scenario_1_basic_swap,
+                    scenario_2_multiple_joins,
+                    scenario_3_natural_join,
+                    scenario_4_bidirectional,
+                    scenario_5_ga_exploration
+                )
+                
+                if scenario_num == 1:
+                    scenario_1_basic_swap()
+                elif scenario_num == 2:
+                    scenario_2_multiple_joins()
+                elif scenario_num == 3:
+                    scenario_3_natural_join()
+                elif scenario_num == 4:
+                    scenario_4_bidirectional()
+                elif scenario_num == 5:
+                    scenario_5_ga_exploration()
+                else:
+                    print(f"\n Error: Invalid scenario number {scenario_num}")
+                    print("Valid scenarios: 5.1, 5.2, 5.3, 5.4, 5.5")
+                    return
+                
+                print_separator("DEMO COMPLETED")
         
         # Rule 6: Coming soon
         elif demo_num == 6:

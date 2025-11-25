@@ -52,7 +52,7 @@ from query_optimizer.optimization_engine import ParsedQuery
 import random
 
 
-OperationType = Literal['filter_params', 'join_params']
+OperationType = Literal['filter_params', 'join_params', 'join_child_params']
 
 
 class RuleParamsManager:
@@ -292,6 +292,54 @@ class RuleParamsManager:
             copy_func=copy_join_params,
             mutate_func=mutate_join_params,
             validate_func=validate_join_params
+        )
+        
+        # Join child order operations (Rule 5: Join commutativity)
+        from query_optimizer.rule import rule_5
+        
+        def analyze_join_children(query: ParsedQuery) -> dict[int, Any]:
+            """Find all JOIN nodes untuk rule 5.
+            
+            Returns:
+                Dict[join_id, metadata]
+                metadata = {
+                    'left_child': node,
+                    'right_child': node,
+                    'join_type': str
+                }
+            """
+            return rule_5.find_join_nodes(query)
+        
+        def generate_join_child_order(metadata: dict) -> bool:
+            """Generate random bool: swap children or not.
+            
+            Args:
+                metadata: JOIN node metadata
+            
+            Returns:
+                bool: True = swap, False = keep original
+            """
+            return rule_5.generate_join_child_params(metadata)
+        
+        def copy_join_child_order(params: bool) -> bool:
+            """Copy join child order params."""
+            return rule_5.copy_join_child_params(params)
+        
+        def mutate_join_child_order(params: bool) -> bool:
+            """Mutate join child order by flipping."""
+            return rule_5.mutate_join_child_params(params)
+        
+        def validate_join_child_order(params: bool) -> bool:
+            """Validate join child order params."""
+            return rule_5.validate_join_child_params(params)
+        
+        self.register_operation(
+            operation_name='join_child_params',
+            analyze_func=analyze_join_children,
+            generate_func=generate_join_child_order,
+            copy_func=copy_join_child_order,
+            mutate_func=mutate_join_child_order,
+            validate_func=validate_join_child_order
         )
 
 
