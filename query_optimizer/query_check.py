@@ -1,30 +1,43 @@
 from __future__ import annotations
 from query_optimizer.query_tree import QueryTree
+from storage_manager.storage_manager import StorageManager
 
 class QueryValidationError(Exception):
     """Exception raised when query tree validation fails"""
     pass
 
-# Dummy function
 def get_metadata():
     """
-    Dummy function yang mengembalikan informasi tentang database.
-    Tolong returns dict dengan:
+    Returns dict dengan:
     - tables: list nama tabel yang ada
     - columns: dict mapping table_name -> list of column names
     """
+    sm = StorageManager()
+    metadata = sm.get_metadata()
+    
+    # Dummy tables untuk testing di comment jika sudah test integrasi
+    dummy_tables = {
+        "users": ["id", "name", "email"],
+        "profiles": ["id", "user_id", "bio"],
+        "orders": ["id", "user_id", "total"],
+        "products": ["id", "category", "price", "stock", "description", "discount"],
+        "employees": ["id", "name", "salary", "department", "bonus"],
+        "accounts": ["id", "balance"],
+        "logs": ["id", "message"],
+        "payroll": ["salary"]
+    }
+    
+    all_tables = set(metadata["tables"])
+    all_columns = metadata["columns"].copy()
+    
+    for table, columns in dummy_tables.items():
+        if table not in all_tables:
+            all_tables.add(table)
+            all_columns[table] = columns
+    
     return {
-        "tables": ["users", "profiles", "orders", "products", "employees", "accounts", "logs", "payroll"],
-        "columns": {
-            "users": ["id", "name", "email"],
-            "profiles": ["id", "user_id", "bio"],
-            "orders": ["id", "user_id", "total"],
-            "products": ["id", "category", "price", "stock", "description", "discount"],
-            "employees": ["id", "name", "salary", "department", "bonus"],
-            "accounts": ["id", "balance"],
-            "logs": ["id", "message"],
-            "payroll": ["salary"]
-        }
+        "tables": sorted(list(all_tables)),
+        "columns": all_columns
     }
 
 ATOMIC_NODES = {
