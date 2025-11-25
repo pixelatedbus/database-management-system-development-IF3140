@@ -2,9 +2,8 @@
 Demo scenarios for Rule 2 - Reorder AND Conditions (Seleksi Komutatif)
 """
 
-from query_optimizer.query_tree import QueryTree
-from query_optimizer.optimization_engine import ParsedQuery, OptimizationEngine
-from query_optimizer.rule_2 import analyze_and_operators_for_reorder, reorder_and_conditions
+from query_optimizer.optimization_engine import OptimizationEngine
+from query_optimizer.rule.rule_2 import reorder_and_conditions
 
 
 def print_separator(title):

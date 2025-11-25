@@ -17,8 +17,7 @@ from query_optimizer.rule_params_manager import get_rule_params_manager
 
 class Individual:
     """
-    Kromosom dalam populasi GA yang merepresentasikan satu solusi query.
-    
+    Kromosom
     Attributes:
         operation_params: Dict[operation_type, Dict[node_id, order]]
                          Example: {
@@ -26,20 +25,18 @@ class Individual:
                                  42: [2, [0, 1]],  # Unified order: cond2 single, [0,1] grouped
                                  57: [1, 0]        # All singles
                              },
-                             'join_params': {}
+                             'join_params': {
+                                 33: {
+                                    filtered_conditon: []  # Keep separate (no merge)
+                                    existing_condition: [5, 8]  # conditions merged in JOIN 33
+                                 }
+                                 42: {
+                                    filtered_conditon: [10, 15]  # conditions to merge into JOIN 42
+                                    existing_condition: []  # Keep separate (no merge)
+                                 }
+                             }
                          }
         fitness: Fitness value (lower is better)
-    
-    Unified Order Format:
-        - Type: list[int | list[int]]
-        - int: single condition (akan di-cascade)
-        - list[int]: grouped conditions (tetap dalam AND)
-        
-        Examples:
-        - [0, 1, 2]: All singles, full cascade
-        - [2, 0, 1]: Reordered, all singles
-        - [2, [0, 1]]: cond2 single, [0,1] grouped
-        - [[0, 1, 2]]: All grouped (no cascade)
     """
     
     def __init__(
@@ -66,10 +63,6 @@ class Individual:
     def _apply_transformations(self, base_query: ParsedQuery) -> ParsedQuery:
         """
         Terapkan transformations ke query berdasarkan operation params.
-        
-        Unified order format [2, [0,1]] sudah mengandung:
-        - Reordering (urutan): 2 dulu, lalu 0&1
-        - Cascading (grouping): 2 single, [0,1] grouped
         """
         cloned_tree = clone_tree(base_query.query_tree)
         current_query = ParsedQuery(cloned_tree, base_query.query)
@@ -333,7 +326,7 @@ class GeneticOptimizer:
         # Lazy evaluation
         return Individual(mutated_params, base_query, lazy_eval=True)
     
-    def get_statistics(self) -> dict:
+    def get_ga_statistics(self) -> dict:
         """Dapatkan statistik optimasi."""
         return {
             'best_fitness': self.best_fitness,
@@ -405,7 +398,7 @@ def optimize_query_genetic(
     )
     
     optimized_query = ga.optimize(query)
-    stats = ga.get_statistics()
+    stats = ga.get_ga_statistics()
     
     ga.print_progress()
     

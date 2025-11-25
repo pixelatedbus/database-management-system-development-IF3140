@@ -3,8 +3,8 @@ Demo scenarios for Rule 7 - Filter Pushdown over Join
 """
 
 from query_optimizer.query_tree import QueryTree
-from query_optimizer.optimization_engine import ParsedQuery, OptimizationEngine
-from query_optimizer.rule_7 import apply_pushdown, find_patterns
+from query_optimizer.optimization_engine import OptimizationEngine
+from query_optimizer.rule.rule_7 import apply_pushdown
 
 
 def print_separator(title):

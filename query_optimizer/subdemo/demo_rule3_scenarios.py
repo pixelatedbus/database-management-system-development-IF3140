@@ -3,8 +3,8 @@ Demo scenarios for Rule 3 - Projection Elimination
 """
 
 from query_optimizer.query_tree import QueryTree
-from query_optimizer.optimization_engine import ParsedQuery, OptimizationEngine
-from query_optimizer.rule_3 import seleksi_proyeksi
+from query_optimizer.optimization_engine import ParsedQuery
+from query_optimizer.rule.rule_3 import seleksi_proyeksi
 
 
 def print_separator(title):

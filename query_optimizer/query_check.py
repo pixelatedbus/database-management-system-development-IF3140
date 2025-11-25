@@ -6,7 +6,7 @@ class QueryValidationError(Exception):
     pass
 
 # Dummy function
-def get_statistic():
+def get_metadata():
     """
     Dummy function yang mengembalikan informasi tentang database.
     Tolong returns dict dengan:
@@ -242,7 +242,7 @@ def check_query(node: QueryTree) -> None:
     check_value(node)
 
 def check_value(node: QueryTree) -> None:
-    stats = get_statistic()
+    stats = get_metadata()
     
     if node.type == "IDENTIFIER":
         if not node.val:
@@ -253,7 +253,7 @@ def check_value(node: QueryTree) -> None:
             pass
         else:
             # Literals lain harus punya value
-            if not node.val and node.val != 0 and node.val != False:
+            if not node.val and node.val != 0:
                 raise QueryValidationError(f"<{node.type}> harus punya value")
     
     if node.type == "RELATION":

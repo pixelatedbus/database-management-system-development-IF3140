@@ -188,7 +188,7 @@ class TestRule4Integration(unittest.TestCase):
         self.assertIsInstance(optimized, ParsedQuery)
         
         # Check statistics
-        stats = ga.get_statistics()
+        stats = ga.get_ga_statistics()
         self.assertIn('best_params', stats)
         
         # join_params harus ada
@@ -720,7 +720,7 @@ class TestRule4WithCommaSeparatedTables(unittest.TestCase):
         self.assertIsInstance(optimized, ParsedQuery)
         
         # Check if join_params were used
-        stats = ga.get_statistics()
+        stats = ga.get_ga_statistics()
         if 'best_params' in stats and 'join_params' in stats['best_params']:
             join_params = stats['best_params']['join_params']
             self.assertIsInstance(join_params, dict)

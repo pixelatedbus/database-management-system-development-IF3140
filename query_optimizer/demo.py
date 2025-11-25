@@ -424,7 +424,7 @@ def demo_genetic_with_rules():
     
     print_separator("Statistics")
     
-    stats = ga.get_statistics()
+    stats = ga.get_ga_statistics()
     print(f"\nBest Fitness: {stats['best_fitness']:.2f}")
     print(f"Total Generations: {stats['generations']}")
     

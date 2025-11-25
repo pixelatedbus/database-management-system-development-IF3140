@@ -3,8 +3,8 @@ Demo scenarios for Rule 8 - Projection over Join
 """
 
 from query_optimizer.query_tree import QueryTree
-from query_optimizer.optimization_engine import ParsedQuery, OptimizationEngine
-from query_optimizer.rule_8 import push_projection_over_joins, analyze_projection_over_join
+from query_optimizer.optimization_engine import OptimizationEngine
+from query_optimizer.rule.rule_8 import push_projection_over_joins
 
 
 def print_separator(title):
