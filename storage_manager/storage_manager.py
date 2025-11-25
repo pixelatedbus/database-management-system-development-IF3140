@@ -1126,3 +1126,20 @@ class StorageManager:
 
         self.stats = stats
         return stats
+
+    def get_metadata(self) -> Dict[str, Any]:
+        # ambil metadata database: list tabel dan kolom tiap tabel
+        # format output sama kayak get_statistic() di query_check.py
+        # returns: {"tables": [...], "columns": {table_name: [col1, col2, ...]}}
+
+        tables = list(self.tables.keys())
+        columns = {}
+
+        for table_name in tables:
+            # ambil list nama kolom dari schema tabel
+            columns[table_name] = [col["name"] for col in self.tables[table_name]["columns"]]
+
+        return {
+            "tables": tables,
+            "columns": columns
+        }
