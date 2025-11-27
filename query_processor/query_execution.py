@@ -6,8 +6,14 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from query_optimizer.query_tree import QueryTree
 from storage_manager import Condition, DataRetrieval, DataWrite, DataDeletion, StorageManager
-from adapter_storage import AdapterStorage
-from adapter_optimizer import AdapterOptimizer
+
+# Try relative import first (when used as package), fallback to direct import (when used standalone)
+try:
+    from .adapter_storage import AdapterStorage
+    from .adapter_optimizer import AdapterOptimizer
+except ImportError:
+    from adapter_storage import AdapterStorage
+    from adapter_optimizer import AdapterOptimizer
 
 class QueryExecution:
     def __init__(self, storage_adapter=None, ccm_adapter=None, storage_manager=None):
@@ -1106,6 +1112,11 @@ class QueryExecution:
             if node.childs and node.childs[0].type == "RELATION":
                 return node.childs[0].val
             return node.val
+        elif node.type == "PROJECT":
+            # Parser wraps JOIN operands in PROJECT nodes (projection pushdown)
+            # The source is the last child
+            source = node.childs[-1]
+            return self.extract_table_name(source)
         else:
             raise ValueError(f"Cannot extract table name from node type {node.type}")
 
