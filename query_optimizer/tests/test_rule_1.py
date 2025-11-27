@@ -44,7 +44,6 @@ from query_optimizer.rule.rule_1 import (
     cascade_filters,
     uncascade_filters,
     is_conjunctive_filter,
-    clone_tree
 )
 
 
@@ -620,38 +619,6 @@ class TestUncascadeFilters(unittest.TestCase):
                 break
         
         self.assertTrue(found_and)
-
-
-class TestCloneTree(unittest.TestCase):
-    """Test cases untuk clone_tree"""
-    
-    def test_clone_simple(self):
-        """Test cloning simple tree"""
-        node = QueryTree("RELATION", "users")
-        cloned = clone_tree(node)
-        
-        self.assertIsNot(node, cloned)
-        self.assertEqual(node.type, cloned.type)
-        self.assertEqual(node.val, cloned.val)
-    
-    def test_clone_with_children(self):
-        """Test cloning tree with children"""
-        relation = QueryTree("RELATION", "users")
-        comp = QueryTree("COMPARISON", ">")
-        
-        filter_node = QueryTree("FILTER")
-        filter_node.add_child(relation)
-        filter_node.add_child(comp)
-        
-        cloned = clone_tree(filter_node)
-        
-        self.assertIsNot(filter_node, cloned)
-        self.assertIsNot(filter_node.childs[0], cloned.childs[0])
-        self.assertIsNot(filter_node.childs[1], cloned.childs[1])
-        
-        self.assertEqual(filter_node.type, cloned.type)
-        self.assertEqual(len(filter_node.childs), len(cloned.childs))
-
 
 if __name__ == "__main__":
     unittest.main()

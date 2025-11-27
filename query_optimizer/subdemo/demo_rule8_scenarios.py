@@ -45,7 +45,7 @@ def scenario_1_basic_pushdown():
     query = engine.parse_query(sql)
     
     print("\nOriginal Query Tree:")
-    print(query.query_tree.tree())
+    print(query.query_tree.tree(show_id=True))
     original_projects = count_projects(query.query_tree)
     print(f"\nPROJECT nodes: {original_projects}")
     cost_original = engine.get_cost(query)
@@ -57,7 +57,7 @@ def scenario_1_basic_pushdown():
     optimized = push_projection_over_joins(query)
     
     print("\nOptimized Query Tree:")
-    print(optimized.query_tree.tree())
+    print(optimized.query_tree.tree(show_id=True))
     optimized_projects = count_projects(optimized.query_tree)
     print(f"\nPROJECT nodes: {optimized_projects} (+{optimized_projects - original_projects})")
     cost_optimized = engine.get_cost(optimized)
@@ -75,7 +75,7 @@ def scenario_2_selective_projection():
     query = engine.parse_query(sql)
     
     print("\nOriginal Query Tree:")
-    print(query.query_tree.tree())
+    print(query.query_tree.tree(show_id=True))
     cost_original = engine.get_cost(query)
     print(f"Cost: {cost_original:.2f}")
     
@@ -85,6 +85,6 @@ def scenario_2_selective_projection():
     optimized = push_projection_over_joins(query)
     
     print("\nOptimized Query Tree:")
-    print(optimized.query_tree.tree())
+    print(optimized.query_tree.tree(show_id=True))
     cost_optimized = engine.get_cost(optimized)
     print(f"Cost: {cost_optimized:.2f} (improvement: {cost_original - cost_optimized:.2f})")

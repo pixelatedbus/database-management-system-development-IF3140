@@ -192,14 +192,14 @@ def cascade_and_mixed(filter_node: QueryTree, order: list[int | list[int]] | Non
     if order is None:
         order = list(range(len(conditions)))[::-1]
     
-    current = clone_tree(source)
+    current = source
     
     for item in reversed(order):
         if isinstance(item, list):
             if len(item) == 0:
                 continue
             elif len(item) == 1:
-                condition = clone_tree(conditions[item[0]])
+                condition = conditions[item[0]]
                 new_filter = QueryTree("FILTER")
                 new_filter.add_child(current)
                 new_filter.add_child(condition)
@@ -207,13 +207,13 @@ def cascade_and_mixed(filter_node: QueryTree, order: list[int | list[int]] | Non
             else:
                 and_node = QueryTree("OPERATOR", "AND")
                 for idx in item:
-                    and_node.add_child(clone_tree(conditions[idx]))
+                    and_node.add_child(conditions[idx])
                 new_filter = QueryTree("FILTER")
                 new_filter.add_child(current)
                 new_filter.add_child(and_node)
                 current = new_filter
         else:
-            condition = clone_tree(conditions[item])
+            condition = conditions[item]
             new_filter = QueryTree("FILTER")
             new_filter.add_child(current)
             new_filter.add_child(condition)

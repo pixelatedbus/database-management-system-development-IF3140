@@ -26,8 +26,6 @@ from typing import Set, Dict, Tuple
 
 
 def push_projection_over_joins(query: ParsedQuery) -> ParsedQuery:
-    from query_optimizer.rule.rule_1 import clone_tree
-    cloned_tree = clone_tree(query.query_tree)
     changed = [False]
     
     def transform(node: QueryTree, parent_projections: Set[str] = None) -> QueryTree:
@@ -68,7 +66,7 @@ def push_projection_over_joins(query: ParsedQuery) -> ParsedQuery:
         
         return node
     
-    transformed_tree = transform(cloned_tree)
+    transformed_tree = transform(query.query_tree)
     
     if changed[0]:
         return ParsedQuery(transformed_tree, query.query)
@@ -170,11 +168,6 @@ def push_projection_to_join(
     if not join_opportunities:
         return query
     
-    from query_optimizer.rule.rule_1 import clone_tree
-    cloned_tree = clone_tree(query.query_tree)
-    cloned_query = ParsedQuery(cloned_tree, query.query)
-    cloned_opportunities = analyze_projection_over_join(cloned_query)
-    
     def transform(node: QueryTree) -> QueryTree:
         if node is None:
             return None
@@ -182,12 +175,12 @@ def push_projection_to_join(
         if node.type == "PROJECT":
             join_child = None
             for child in node.childs:
-                if child.type == "JOIN" and child.id in cloned_opportunities:
+                if child.type == "JOIN" and child.id in join_opportunities:
                     join_child = child
                     break
             
             if join_child:
-                opp = cloned_opportunities[join_child.id]
+                opp = join_opportunities[join_child.id]
                 if opp['can_optimize']:
                     return apply_rule8_transformation(node, opp)
         
@@ -198,7 +191,7 @@ def push_projection_to_join(
         
         return node
     
-    transformed_tree = transform(cloned_tree)
+    transformed_tree = transform(query.query_tree)
     return ParsedQuery(transformed_tree, query.query)
 
 def apply_rule8_transformation(
@@ -237,6 +230,7 @@ def apply_rule8_transformation(
     return project_node
 
 def create_project_node(columns: Set[str], source: QueryTree) -> QueryTree:
+    """Create new PROJECT node - ini akan mendapat ID baru otomatis"""
     project = QueryTree("PROJECT", "")
     
     for col_name in sorted(columns):
@@ -316,9 +310,6 @@ def can_apply_rule8(project_node: QueryTree) -> bool:
     return True
 
 def undo_rule8(query: ParsedQuery) -> ParsedQuery:
-    from query_optimizer.rule.rule_1 import clone_tree
-    cloned_tree = clone_tree(query.query_tree)
-    
     def remove_projections(node: QueryTree) -> QueryTree:
         if node is None:
             return None
@@ -344,7 +335,7 @@ def undo_rule8(query: ParsedQuery) -> ParsedQuery:
         
         return node
     
-    transformed_tree = remove_projections(cloned_tree)
+    transformed_tree = remove_projections(query.query_tree)
     return ParsedQuery(transformed_tree, query.query)
 
 def generate_random_rule8_params(num_joins: int) -> Dict[int, bool]:

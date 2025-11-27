@@ -95,21 +95,21 @@ def reorder_and_conditions(
         
         for i in range(len(node.childs)):
             node.childs[i] = reorder_rec(node.childs[i])
-        
+
         if node.is_node_type("OPERATOR") and node.is_node_value("AND"):
             operator_id = node.id
             order = None
-            
+
             if operator_id in operator_orders:
                 order = operator_orders[operator_id]
             elif order_index < len(orders_list):
                 order = orders_list[order_index]
                 order_index += 1
-            
+
             if order and len(order) == len(node.childs):
                 original_childs = node.childs.copy()
-                node.childs = [clone_tree(original_childs[i]) for i in order]
-        
+                node.childs = [original_childs[i] for i in order]
+
         return node
     
     transformed_tree = reorder_rec(query.query_tree)
@@ -121,9 +121,3 @@ def validate_rule_2_params(params: list[int], num_conditions: int) -> bool:
         return False
     
     return set(params) == set(range(num_conditions))
-
-
-def clone_tree(node: QueryTree) -> QueryTree:
-    if node is None:
-        return None
-    return node.clone(deep=True)
