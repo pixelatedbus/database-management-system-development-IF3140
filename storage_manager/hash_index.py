@@ -17,6 +17,15 @@ class HashIndex:
         # key bisa duplikat (multiple records dengan value yang sama)
         self.index[key].append(record_id)
 
+    def delete(self, key: str, record_id: int):
+        # hapus record_id dari key tertentu
+        if key in self.index:
+            if record_id in self.index[key]:
+                self.index[key].remove(record_id)
+                # kalo list kosong, hapus key nya
+                if not self.index[key]:
+                    del self.index[key]
+
     def search(self, key):
         # cari record_ids yang match dengan key
         # return empty list kalo ga ada

@@ -805,8 +805,7 @@ class StorageManager:
 
 
     def delete_block(self, data_deletion: DataDeletion) -> int:
-        # hapus data dari disk
-        # load semua baris, filter yang match kondisi, simpen yang tersisa
+        # hapus data dari disk dan update indexes
         table_name = data_deletion.table
 
         # cek tabel ada ga
@@ -820,27 +819,31 @@ class StorageManager:
             print(f"tidak ada baris ditemukan di tabel '{table_name}'")
             return 0
 
-        # tentuin rows yang di-keep (hapus yang match semua conditions)
+        # tentuin rows yang di-keep dan track yang dihapus buat update index
         conditions = getattr(data_deletion, "conditions", []) or []
         rows_to_keep: List[Dict[str, Any]] = []
-        deleted_count = 0
-
-        for row in all_rows:
+        deleted_rows: List[tuple[int, Dict[str, Any]]] = []  # (record_id, row)
+        
+        for record_id, row in enumerate(all_rows):
             if self._row_matches_all_conditions(row, conditions):
-                deleted_count += 1
+                deleted_rows.append((record_id, row))
             else:
                 rows_to_keep.append(row)
 
-        if deleted_count == 0:
+        if not deleted_rows:
             print(f"tidak ada baris yang cocok untuk dihapus di tabel '{table_name}'")
             return 0
+
+        # update indexes: hapus entries yang didelete
+        self._update_indexes_after_delete(table_name, deleted_rows)
 
         # simpen rows yang tersisa balik ke disk
         self._save_table_rows(table_name, rows_to_keep)
 
-        # rebuild semua index buat tabel ini karena record_id berubah
+        # rebuild semua index buat tabel ini karena record_id berubah setelah compact
         self._rebuild_table_indexes(table_name)
 
+        deleted_count = len(deleted_rows)
         print(f"dihapus {deleted_count} baris dari tabel '{table_name}'")
         return deleted_count
 
@@ -871,6 +874,32 @@ class StorageManager:
                         key_value = str(key) if key is not None else "NULL"
                     record_id = starting_record_id + i
                     index.insert(key_value, record_id)
+
+            # save updated index
+            index_file = self._get_index_file_path(table, column)
+            index.save(index_file)
+
+    def _update_indexes_after_delete(self, table_name: str, deleted_rows: List[tuple[int, Dict[str, Any]]]) -> None:
+        # update index setelah delete rows
+        # hapus entries dari index tanpa rebuild
+        indexes_to_update = [(t, c) for t, c in self.indexes.keys() if t == table_name]
+
+        if not indexes_to_update:
+            return
+
+        for table, column in indexes_to_update:
+            index = self.indexes[(table, column)]
+
+            # hapus entry dari index
+            for record_id, row in deleted_rows:
+                if column in row:
+                    key = row[column]
+                    # preserve key type buat b+ tree, convert to str buat hash
+                    if isinstance(index, BPlusTreeIndex):
+                        key_value = "NULL" if key is None else key
+                    else:
+                        key_value = str(key) if key is not None else "NULL"
+                    index.delete(key_value, record_id)
 
             # save updated index
             index_file = self._get_index_file_path(table, column)
