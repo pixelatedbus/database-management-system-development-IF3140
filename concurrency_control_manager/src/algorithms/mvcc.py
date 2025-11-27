@@ -6,7 +6,7 @@ from ..transaction import Transaction
 from ..row import Row
 from ..action import Action
 from ..log_handler import LogHandler
-from ..response import Response
+from ..response import AlgorithmResponse
 from ..enums import TransactionStatus, ActionType, ActionStatus
 
 class MVCCVariant(Enum):
@@ -19,7 +19,7 @@ class IsolationPolicy(Enum):
 class TransactionType(Enum):
     UPDATE = "UPDATE"
     READ_ONLY = "READ_ONLY"
-class DataVersion:
+class RowVersion:
     def __init__(self, value: Any, version_id: int, read_ts: int, write_ts: int, creator_ts: Optional[int] = None, commit_ts: Optional[int] = None):
         self.value: Any = value                     # Nilai data
         self.version_id: int = version_id           # ID versi data (k dalam Q_k)
@@ -43,11 +43,6 @@ class TransactionInfo:
         self.has_exclusive_lock: bool = False                       # Exclusive lock flag (SI)
         self.buffered_writes: Dict[str, Any] = {}                   # Buffered writes (SI)
         self.rollback_count: int = 0                                # Jumlah rollback
-class MVCCResponse:
-    def __init__(self, allowed: bool, message: str, value: Any = None):
-        self.allowed: bool = allowed
-        self.message: str = message
-        self.value: Any = value
 class MVCCAlgorithm(ConcurrencyAlgorithm):
     def __init__(self, variant: str = "MVTO", isolation_policy: str = "FIRST_COMMITTER_WIN", log_handler: Optional[LogHandler] = None):
         if isinstance(variant, str):
@@ -60,7 +55,7 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
         else:
             self.isolation_policy = isolation_policy
         
-        self.data_versions: Dict[str, List[DataVersion]] = {}       # Data store: menyimpan list versi untuk setiap object_id
+        self.data_versions: Dict[str, List[RowVersion]] = {}       # Data store: menyimpan list versi untuk setiap object_id
         self.transaction_info: Dict[int, TransactionInfo] = {}      # Extended transaction info
         self.log_handler: Optional[LogHandler] = log_handler        # LogHandler untuk logging
         self.ts_counter: int = 0                                    # Global timestamp counter (untuk MV2PL dan SI)
@@ -68,7 +63,7 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
         self.next_action_id: int = 1                                # Action counter untuk generate action_id
         self.lock_queue: Dict[str, List[Tuple[int, str]]] = {}      # Lock queue (untuk MV2PL)
     
-    def begin_transaction(self, transaction: Transaction) -> Response:
+    def begin_transaction(self, transaction: Transaction) -> AlgorithmResponse:
         if self.variant == MVCCVariant.MVTO:
             timestamp = transaction.transaction_id
         else:
@@ -89,12 +84,15 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
                 f"BEGIN (TS={timestamp}, variant={self.variant.value})"
             )
         
-        return MVCCResponse(
+        return AlgorithmResponse(
             allowed=True,
             message=f"Transaction T{transaction.transaction_id} started with TS={timestamp}"
         )
     
-    def validate_read(self, transaction: Transaction, row: Row) -> Response:
+    def validate_read(self, transaction: Transaction, row: Row) -> AlgorithmResponse:
+        if transaction.transaction_id not in self.transaction_info:
+            self.begin_transaction(transaction)
+        
         action = Action(
             action_id=self._generate_action_id(),
             transaction_id=transaction.transaction_id,
@@ -131,9 +129,12 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
                 status
             )
         
-        return MVCCResponse(allowed=success, message=message, value=value)
+        return AlgorithmResponse(allowed=success, message=message, value=value)
     
-    def validate_write(self, transaction: Transaction, row: Row) -> Response:
+    def validate_write(self, transaction: Transaction, row: Row) -> AlgorithmResponse:
+        if transaction.transaction_id not in self.transaction_info:
+            self.begin_transaction(transaction)
+        
         action = Action(
             action_id=self._generate_action_id(),
             transaction_id=transaction.transaction_id,
@@ -173,16 +174,16 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
                 status
             )
         
-        return MVCCResponse(allowed=success, message=message)
+        return AlgorithmResponse(allowed=success, message=message)
     
-    def commit_transaction(self, transaction: Transaction) -> Response:
+    def commit_transaction(self, transaction: Transaction) -> AlgorithmResponse:
         if transaction.transaction_id not in self.transaction_info:
-            return MVCCResponse(False, f"Transaction T{transaction.transaction_id} not found")
+            return AlgorithmResponse(False, f"Transaction T{transaction.transaction_id} not found")
         
         trans_info = self.transaction_info[transaction.transaction_id]
         
         if transaction.status == TransactionStatus.Aborted:
-            return MVCCResponse(False, f"Transaction T{transaction.transaction_id} already aborted")
+            return AlgorithmResponse(False, f"Transaction T{transaction.transaction_id} already aborted")
         
         if self.variant == MVCCVariant.MVTO:
             success, message = self._commit_mvto(transaction, trans_info)
@@ -200,11 +201,11 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
             event = "COMMIT" if success else "ABORT"
             self.log_handler.log_transaction_event(transaction.transaction_id, event)
         
-        return MVCCResponse(allowed=success, message=message)
+        return AlgorithmResponse(allowed=success, message=message)
     
-    def abort_transaction(self, transaction: Transaction) -> Response:
+    def abort_transaction(self, transaction: Transaction) -> AlgorithmResponse:
         if transaction.transaction_id not in self.transaction_info:
-            return MVCCResponse(True, f"Transaction T{transaction.transaction_id} not found")
+            return AlgorithmResponse(True, f"Transaction T{transaction.transaction_id} not found")
         
         trans_info = self.transaction_info[transaction.transaction_id]
         trans_info.rollback_count += 1
@@ -221,18 +222,18 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
                 f"ABORT (rollback #{trans_info.rollback_count})"
             )
         
-        return MVCCResponse(
+        return AlgorithmResponse(
             allowed=True,
             message=f"Transaction T{transaction.transaction_id} aborted"
         )
     
-    def check_permission(self, t: Transaction, obj: Row, action: ActionType) -> Response:
+    def check_permission(self, t: Transaction, obj: Row, action: ActionType) -> AlgorithmResponse:
         if action == ActionType.READ:
             return self.validate_read(t, obj)
         elif action == ActionType.WRITE:
             return self.validate_write(t, obj)
         else:
-            return type('Response', (), {
+            return type('AlgorithmResponse', (), {
                 'allowed': False,
                 'message': f"Unknown action type: {action}"
             })()
@@ -285,7 +286,7 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
             latest_version.read_ts = trans_ts
             message = f"T{transaction.transaction_id} overwrites {object_id}{latest_version.version_id}"
         else:
-            new_version = DataVersion(
+            new_version = RowVersion(
                 value=row.data.get('value', 0),
                 version_id=latest_version.version_id + 1,
                 read_ts=trans_ts,
@@ -331,7 +332,7 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
     def _commit_mvto(self, transaction: Transaction, trans_info: TransactionInfo) -> Tuple[bool, str]:
         return True, f"T{transaction.transaction_id} COMMIT"
     
-    def _read_mv2pl(self, transaction: Transaction, row: Row, action: Action) -> Tuple[bool, Any, str]:
+    def _read_mv2pl(self, transaction: Transaction, row: Row, trans_info: TransactionInfo) -> Tuple[bool, Any, str]:
         object_id = row.object_id
         trans_info = self.transaction_info[transaction.transaction_id]
         
@@ -366,7 +367,7 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
             return False, f"T{transaction.transaction_id} blocked waiting for lock-X({object_id})"
         
         versions = self.data_versions[object_id]
-        new_version = DataVersion(
+        new_version = RowVersion(
             value=row.data.get('value', 0),
             version_id=len(versions),
             read_ts=float('inf'),
@@ -509,7 +510,7 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
         
         for object_id, value in trans_info.buffered_writes.items():
             versions = self.data_versions[object_id]
-            new_version = DataVersion(
+            new_version = RowVersion(
                 value=value,
                 version_id=len(versions),
                 read_ts=self.ts_counter,
@@ -524,7 +525,7 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
     def _initialize_data(self, object_id: str, initial_value: Any) -> None:
         if object_id not in self.data_versions:
             if self.variant == MVCCVariant.SNAPSHOT_ISOLATION:
-                initial_version = DataVersion(
+                initial_version = RowVersion(
                     value=initial_value,
                     version_id=0,
                     read_ts=0,
@@ -533,7 +534,7 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
                     commit_ts=0
                 )
             else:
-                initial_version = DataVersion(
+                initial_version = RowVersion(
                     value=initial_value,
                     version_id=0,
                     read_ts=0,
@@ -553,5 +554,5 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
             else:
                 self.transaction_info[transaction_id].transaction_type = TransactionType.UPDATE
     
-    def get_data_versions(self, object_id: str) -> List[DataVersion]:
+    def get_data_versions(self, object_id: str) -> List[RowVersion]:
         return self.data_versions.get(object_id, [])
