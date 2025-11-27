@@ -805,7 +805,7 @@ class StorageManager:
 
 
     def delete_block(self, data_deletion: DataDeletion) -> int:
-        # hapus data dari disk dan update indexes
+        # hapus data dari disk dan update indexes (efficient - no rebuild!)
         table_name = data_deletion.table
 
         # cek tabel ada ga
@@ -822,29 +822,26 @@ class StorageManager:
         # tentuin rows yang di-keep dan track yang dihapus buat update index
         conditions = getattr(data_deletion, "conditions", []) or []
         rows_to_keep: List[Dict[str, Any]] = []
-        deleted_rows: List[tuple[int, Dict[str, Any]]] = []  # (record_id, row)
-        
+        deleted_record_ids: set[int] = set()  # set of deleted record_ids
+
         for record_id, row in enumerate(all_rows):
             if self._row_matches_all_conditions(row, conditions):
-                deleted_rows.append((record_id, row))
+                deleted_record_ids.add(record_id)
             else:
                 rows_to_keep.append(row)
 
-        if not deleted_rows:
+        if not deleted_record_ids:
             print(f"tidak ada baris yang cocok untuk dihapus di tabel '{table_name}'")
             return 0
 
-        # update indexes: hapus entries yang didelete
-        self._update_indexes_after_delete(table_name, deleted_rows)
+        # efficient index update: delete entries + shift record_ids (no rebuild!)
+        self._update_indexes_after_delete_efficient(table_name, all_rows, deleted_record_ids)
 
         # simpen rows yang tersisa balik ke disk
         self._save_table_rows(table_name, rows_to_keep)
 
-        # rebuild semua index buat tabel ini karena record_id berubah setelah compact
-        self._rebuild_table_indexes(table_name)
-
-        deleted_count = len(deleted_rows)
-        print(f"dihapus {deleted_count} baris dari tabel '{table_name}'")
+        deleted_count = len(deleted_record_ids)
+        print(f"dihapus {deleted_count} baris dari tabel '{table_name}' (efficient - no rebuild!)")
         return deleted_count
 
     def _update_indexes_after_insert(self, table_name: str, new_rows: List[Dict[str, Any]]) -> None:
@@ -879,9 +876,64 @@ class StorageManager:
             index_file = self._get_index_file_path(table, column)
             index.save(index_file)
 
+    def _update_indexes_after_delete_efficient(
+        self,
+        table_name: str,
+        all_rows: List[Dict[str, Any]],
+        deleted_record_ids: set[int]
+    ) -> None:
+        # efficient index update setelah delete - no rebuild!
+        # strategy:
+        # 1. delete entries yang dihapus
+        # 2. update record_ids yang shift karena compact
+        indexes_to_update = [(t, c) for t, c in self.indexes.keys() if t == table_name]
+
+        if not indexes_to_update:
+            return
+
+        # hitung mapping: old_record_id -> new_record_id setelah compact
+        # contoh: delete record_id 2 dari [0,1,2,3,4] -> [0,1,3,4] jadi [0,1,2,3]
+        record_id_mapping: Dict[int, int] = {}
+        new_record_id = 0
+        for old_record_id in range(len(all_rows)):
+            if old_record_id not in deleted_record_ids:
+                record_id_mapping[old_record_id] = new_record_id
+                new_record_id += 1
+
+        for table, column in indexes_to_update:
+            index = self.indexes[(table, column)]
+
+            # proses tiap row: delete atau update record_id
+            for old_record_id, row in enumerate(all_rows):
+                if column not in row:
+                    continue
+
+                key = row[column]
+                # preserve key type buat b+ tree, convert to str buat hash
+                if isinstance(index, BPlusTreeIndex):
+                    key_value = "NULL" if key is None else key
+                else:
+                    key_value = str(key) if key is not None else "NULL"
+
+                if old_record_id in deleted_record_ids:
+                    # row dihapus: delete dari index
+                    index.delete(key_value, old_record_id)
+                else:
+                    # row tetap: update record_id yang shift
+                    new_record_id = record_id_mapping[old_record_id]
+                    if old_record_id != new_record_id:
+                        # record_id berubah: delete old, insert new
+                        index.delete(key_value, old_record_id)
+                        index.insert(key_value, new_record_id)
+
+            # save updated index
+            index_file = self._get_index_file_path(table, column)
+            index.save(index_file)
+            print(f"  efficiently updated index {table}.{column} (no rebuild!)")
+
     def _update_indexes_after_delete(self, table_name: str, deleted_rows: List[tuple[int, Dict[str, Any]]]) -> None:
-        # update index setelah delete rows
-        # hapus entries dari index tanpa rebuild
+        # DEPRECATED: old method - kept for compatibility
+        # gunakan _update_indexes_after_delete_efficient instead
         indexes_to_update = [(t, c) for t, c in self.indexes.keys() if t == table_name]
 
         if not indexes_to_update:
