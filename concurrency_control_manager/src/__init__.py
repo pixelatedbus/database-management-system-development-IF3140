@@ -9,7 +9,6 @@ from .row import Row
 from .action import Action
 from .transaction import Transaction
 from .log_handler import LogHandler, LogEntry
-from .schedule import Schedule, Queue, PriorityQueue, PriorityItem
 from .cc_manager import CCManager
 from .algorithms import (
     ConcurrencyAlgorithm,
@@ -31,7 +30,6 @@ __all__ = [
     'Transaction',
     'LogHandler',
     'LogEntry',
-    'Schedule',
     'Queue',
     'PriorityQueue',
     'PriorityItem',
