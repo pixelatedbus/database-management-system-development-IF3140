@@ -1,5 +1,23 @@
 from storage_manager.storage_manager import StorageManager
-from storage_manager.models import Condition, DataRetrieval, DataWrite, DataDeletion
+from storage_manager.models import (
+    Condition, 
+    DataRetrieval, 
+    DataWrite, 
+    DataDeletion,
+    ColumnDefinition,
+    ForeignKey
+)
+
+# Re-export for query_execution to use
+__all__ = [
+    'AdapterStorage',
+    'Condition',
+    'DataRetrieval', 
+    'DataWrite',
+    'DataDeletion',
+    'ColumnDefinition',
+    'ForeignKey'
+]
 
 class AdapterStorage:
     """

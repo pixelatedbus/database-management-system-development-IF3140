@@ -46,6 +46,7 @@ class Tokenizer:
             (TokenType.KEYWORD_REFERENCES,r'\bREFERENCES\b'),
             (TokenType.KEYWORD_LIMIT,     r'\bLIMIT\b'),
             (TokenType.KEYWORD_COMMIT,    r'\bCOMMIT\b'),
+            (TokenType.KEYWORD_ABORT,     r'\bABORT\b'),
             (TokenType.KEYWORD_AND,       r'\bAND\b'),
             (TokenType.KEYWORD_OR,        r'\bOR\b'),
             (TokenType.KEYWORD_NOT,       r'\bNOT\b'),

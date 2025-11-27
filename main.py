@@ -1,8 +1,13 @@
 import sys
 import os
-import datetime
 import threading
 import time
+import logging
+
+logging.basicConfig(
+    level=logging.CRITICAL, # ubah jadi critical kalo mau ga muncul debug, jadi info kalo mau muncul
+    format="[%(levelname)s] %(message)s"
+)
 
 # sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -19,35 +24,45 @@ class ClientThread(threading.Thread):
     def run(self):
         print(f"\n--- Client {self.client_id} Dimulai ---")
         for query in self.scenario:
+
+            time.sleep(0.5) 
+            
             print(f"[C{self.client_id}] Mengirim: {query}")
             result = self.processor.execute_query(query, self.client_id)
             status = "OK" if result.success else "ERROR"
             print(f"[C{self.client_id}] Status: {status} - {result.message}")
-            if not result.success and "aborted" in result.message:
+            
+            if not result.success and "aborted" in result.message.lower():
+                print(f"[C{self.client_id}] Transaksi Dibatalkan (Rollback) oleh Sistem.")
                 break 
-            time.sleep(0.1)
+                
         print(f"--- Client {self.client_id} Selesai ---")
+
+
 
 def main():
     
     processor = QueryProcessor()
-    
-    scenario_1 = [
-        "BEGIN_TRANSACTION",
-        "SELECT id, name FROM users WHERE name='mifune';",
+
+    scenario_deadlock_1 = [
+        "BEGIN TRANSACTION",
+        "UPDATE test_users SET age = 30 WHERE id = 1", 
+        "UPDATE test_products SET price = 5000 WHERE id = 1",
         "COMMIT"
     ]
     
-    scenario_2 = [
-        "BEGIN_TRANSACTION",
-        "UPDATE users SET name='Zelda' WHERE id=2;",
+    scenario_deadlock_2 = [
+        "BEGIN TRANSACTION",
+        "UPDATE test_products SET price = 9000 WHERE id = 1",
+        "UPDATE test_users SET age = 35 WHERE id = 1",
         "COMMIT"
     ]
     
-    client_a = ClientThread(1, processor, scenario_1)
-    client_b = ClientThread(2, processor, scenario_2)
+    client_a = ClientThread(1, processor, scenario_deadlock_1)
+    client_b = ClientThread(2, processor, scenario_deadlock_2)
 
     client_a.start()
+    time.sleep(0.5)  # biar client_a dapat kunci dulu
     client_b.start()
 
     client_a.join()

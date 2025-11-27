@@ -1,17 +1,47 @@
 import sys
 import os
 import traceback
+import logging
+logger = logging.getLogger(__name__)
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+
+class TransactionAbortedException(Exception):
+    def __init__(self, transaction_id: int, reason: str):
+        self.transaction_id = transaction_id
+        self.reason = reason
+        super().__init__(f"Transaction {transaction_id} aborted: {reason}")
+
 from query_optimizer.query_tree import QueryTree
-from storage_manager import Condition, DataRetrieval, DataWrite, DataDeletion, StorageManager
-from adapter_storage import AdapterStorage
-from adapter_optimizer import AdapterOptimizer
+
+# Try relative import first (when used as package), fallback to direct import (when used standalone)
+try:
+    from .adapter_storage import (
+        AdapterStorage, 
+        Condition, 
+        DataRetrieval, 
+        ColumnDefinition,
+        ForeignKey
+    )
+    from .adapter_optimizer import AdapterOptimizer
+    from .transaction_buffer import TransactionBuffer
+except ImportError:
+    from adapter_storage import (
+        AdapterStorage,
+        Condition,
+        DataRetrieval,
+        ColumnDefinition,
+        ForeignKey
+    )
+    from adapter_optimizer import AdapterOptimizer
+    from transaction_buffer import TransactionBuffer
 
 class QueryExecution:
-    def __init__(self, storage_adapter=None, ccm_adapter=None, storage_manager=None):
+    def __init__(self, storage_adapter=None, ccm_adapter=None, storage_manager=None, frm_adapter=None):
         self.ccm_adapter = ccm_adapter
+        self.frm_adapter = frm_adapter
+        self.transaction_buffer = TransactionBuffer()
         
         # Initialize storage adapter
         if storage_adapter:
@@ -86,9 +116,22 @@ class QueryExecution:
         if source.type == "RELATION":
             table_name = source.val
             
+            # Validate READ access with CCM
+            if self.ccm_adapter and transaction_id:
+                response = self.ccm_adapter.validate_action(transaction_id, table_name, 'read')
+                if not response.allowed:
+                    logger.info(f"[PROJECT] CCM denied READ access: {response.message}")
+                    # Check if transaction was aborted (deadlock)
+                    if "aborted" in response.message.lower():
+                        raise TransactionAbortedException(transaction_id, response.message)
+                    return []
+                # Log the object access
+                self.ccm_adapter.log_object(transaction_id, table_name)
+            
             if query_tree.val == "*":
-                print(f"[PROJECT] SELECT * from '{table_name}' (optimized - direct storage call)")
+                logger.info(f"[PROJECT] SELECT * from '{table_name}' (optimized - direct storage call)")
                 try:
+                    
                     data_retrieval = DataRetrieval(
                         table=table_name,
                         column=[],  # Empty = all columns
@@ -96,16 +139,21 @@ class QueryExecution:
                     )
                     source_data = self.storage_manager.read_block(data_retrieval)
                     
+                    # Apply buffered operations for this transaction
+                    if transaction_id:
+                        source_data = self._apply_buffered_operations(source_data, transaction_id, table_name)
+                        logger.info(f"[PROJECT] After applying buffer: {len(source_data)} rows")
+                    
                     # Apply limit if set for this transaction
                     if transaction_id in self.limit:
                         source_data = source_data[:self.limit[transaction_id]]
                         del self.limit[transaction_id]
                     
-                    print(f"[PROJECT] Retrieved {len(source_data)} rows")
+                    logger.info(f"[PROJECT] Retrieved {len(source_data)} rows")
                     return source_data
                 
                 except Exception as e:
-                    print(f"[PROJECT] Error: {e}")
+                    logger.info(f"[PROJECT] Error: {e}")
                     return []
             
             # SELECT
@@ -115,8 +163,9 @@ class QueryExecution:
                 column_name = self.extract_column_name(col_ref)
                 columns.append(column_name)
             
-            print(f"[PROJECT] SELECT {', '.join(columns)} from '{table_name}' (optimized - projection pushed down)")
+            logger.info(f"[PROJECT] SELECT {', '.join(columns)} from '{table_name}' (optimized - projection pushed down)")
             try:
+                
                 # Use storage adapter with projection pushdown
                 source_data = self.storage_adapter.read_data(
                     table_name=table_name,
@@ -125,15 +174,34 @@ class QueryExecution:
                     transaction_id=transaction_id
                 )
                 
+                # Apply buffered operations for this transaction
+                if transaction_id:
+                    # First get full rows with buffer applied
+                    full_data_retrieval = DataRetrieval(
+                        table=table_name,
+                        column=[],
+                        conditions=[]
+                    )
+                    full_data = self.storage_manager.read_block(full_data_retrieval)
+                    full_data = self._apply_buffered_operations(full_data, transaction_id, table_name)
+                    
+                    # Then project to requested columns
+                    source_data = []
+                    for row in full_data:
+                        projected_row = {col: row.get(col) for col in columns if col in row}
+                        source_data.append(projected_row)
+                    
+                    logger.info(f"[PROJECT] After applying buffer: {len(source_data)} rows")
+                
                 # Apply limit if set for this transaction
                 if transaction_id in self.limit:
                     source_data = source_data[:self.limit[transaction_id]]
                     del self.limit[transaction_id]
                 
-                print(f"[PROJECT] Retrieved {len(source_data)} rows with {len(columns)} columns")
+                logger.info(f"[PROJECT] Retrieved {len(source_data)} rows with {len(columns)} columns")
                 return source_data
             except Exception as e:
-                print(f"[PROJECT] Error: {e}")
+                logger.info(f"[PROJECT] Error: {e}")
                 return []
         
         # Complex source, query processor handles it
@@ -149,7 +217,7 @@ class QueryExecution:
             return []
         
         if query_tree.val == "*":
-            print(f"[PROJECT] SELECT * - returning all columns ({len(source_data)} rows)")
+            logger.info(f"[PROJECT] SELECT * - returning all columns ({len(source_data)} rows)")
             return source_data
         
         columns = []
@@ -158,7 +226,7 @@ class QueryExecution:
             column_name = self.extract_column_name(col_ref)
             columns.append(column_name)
         
-        print(f"[PROJECT] SELECT columns: {columns} (in-memory projection)")
+        logger.info(f"[PROJECT] SELECT columns: {columns} (in-memory projection)")
         
         projected_data = []
         for row in source_data:
@@ -167,10 +235,10 @@ class QueryExecution:
                 if col in row:
                     projected_row[col] = row[col]
                 else:
-                    print(f"[PROJECT] Warning: Column '{col}' not found in row")
+                    logger.info(f"[PROJECT] Warning: Column '{col}' not found in row")
             projected_data.append(projected_row)
         
-        print(f"[PROJECT] Projected {len(projected_data)} rows")
+        logger.info(f"[PROJECT] Projected {len(projected_data)} rows")
         return projected_data
     
     def execute_filter(self, query_tree: QueryTree, transaction_id: int) -> list[dict]:
@@ -192,11 +260,23 @@ class QueryExecution:
             method = self._get_execution_method(source)
             condition_str = self.condition_tree_to_string(condition_tree)
 
+            # Validate READ access with CCM
+            if self.ccm_adapter and transaction_id:
+                response = self.ccm_adapter.validate_action(transaction_id, table_name, 'read')
+                if not response.allowed:
+                    logger.info(f"[FILTER] CCM denied READ access: {response.message}")
+                    # Check if transaction was aborted (deadlock)
+                    if "aborted" in response.message.lower():
+                        raise TransactionAbortedException(transaction_id, response.message)
+                    return []
+                # Log the object access
+                self.ccm_adapter.log_object(transaction_id, table_name)
+
             # Pushdown if possible            
             try:
                 conditions = self.condition_tree_to_conditions(condition_tree)
-                print(f"[FILTER] -> STORAGE MANAGER: Filter on table '{table_name}' with {len(conditions)} conditions using method: {method}")
-                print(f"[FILTER]    Condition: {condition_str}")
+                logger.info(f"[FILTER] -> STORAGE MANAGER: Filter on table '{table_name}' with {len(conditions)} conditions using method: {method}")
+                logger.info(f"[FILTER]    Condition: {condition_str}")
                 
                 # TODO: Use method attribute to leverage indexes when available
                 data_retrieval = DataRetrieval(
@@ -206,13 +286,19 @@ class QueryExecution:
                 )
                 
                 filtered_data = self.storage_manager.read_block(data_retrieval)
-                print(f"[FILTER] Retrieved {len(filtered_data)} rows (filter pushed down via {method})")
+                logger.info(f"[FILTER] Retrieved {len(filtered_data)} rows (filter pushed down via {method})")
+                
+                # Apply buffered operations for this transaction
+                if transaction_id:
+                    filtered_data = self._apply_buffered_operations(filtered_data, transaction_id, table_name)
+                    logger.info(f"[FILTER] After applying buffer: {len(filtered_data)} rows")
+                
                 return filtered_data
                 
             except ValueError as e:
                 # Complex condition (OR/NOT) - fallback to in-memory filtering
-                print(f"[FILTER] Cannot push down condition (complex OR/NOT logic): {e}")
-                print(f"[FILTER] Falling back to in-memory filtering")
+                logger.info(f"[FILTER] Cannot push down condition (complex OR/NOT logic): {e}")
+                logger.info(f"[FILTER] Falling back to in-memory filtering")
         
         # Fallback: Execute source then filter in memory
         source_data = self.execute_node(source, transaction_id)
@@ -226,7 +312,7 @@ class QueryExecution:
             if self.evaluate_condition(condition_tree, row):
                 filtered_data.append(row)
         
-        print(f"[FILTER] Filtered {len(source_data)} -> {len(filtered_data)} rows (in-memory)")
+        logger.info(f"[FILTER] Filtered {len(source_data)} -> {len(filtered_data)} rows (in-memory)")
         return filtered_data
     
     def execute_sort(self, query_tree: QueryTree, transaction_id: int) -> list[dict]:
@@ -252,15 +338,15 @@ class QueryExecution:
             print("[SORT] No data to sort")
             return []
         
-        print(f"[SORT] Sorting by '{column_name}' {direction}")
+        logger.info(f"[SORT] Sorting by '{column_name}' {direction}")
         
         # Sort data
         try:
             sorted_data = sorted(source_data, key=lambda row: row.get(column_name, ""), reverse=reverse)
-            print(f"[SORT] Sorted {len(sorted_data)} rows")
+            logger.info(f"[SORT] Sorted {len(sorted_data)} rows")
             return sorted_data
         except Exception as e:
-            print(f"[SORT] Error sorting: {e}")
+            logger.info(f"[SORT] Error sorting: {e}")
             return source_data
     
     def execute_limit(self, query_tree: QueryTree, transaction_id: int) -> list[dict]:
@@ -272,7 +358,7 @@ class QueryExecution:
         
         limit_value = int(query_tree.val)
         self.limit[transaction_id] = limit_value
-        print(f"[LIMIT] Setting limit to {limit_value} for transaction {transaction_id}")
+        logger.info(f"[LIMIT] Setting limit to {limit_value} for transaction {transaction_id}")
         
         # Execute source
         source = query_tree.childs[0]
@@ -288,7 +374,19 @@ class QueryExecution:
         method = self._get_execution_method(query_tree)
         
         print(f"\n[RELATION] Accessing table '{table_name}' using method: {method}")
-        print(f"[RELATION] -> STORAGE MANAGER: Scan table '{table_name}' with transaction_id={transaction_id}")
+        logger.info(f"[RELATION] -> STORAGE MANAGER: Scan table '{table_name}' with transaction_id={transaction_id}")
+        
+        # Validate READ access with CCM
+        if self.ccm_adapter and transaction_id:
+            response = self.ccm_adapter.validate_action(transaction_id, table_name, 'read')
+            if not response.allowed:
+                logger.info(f"[RELATION] CCM denied READ access: {response.message}")
+                # Check if transaction was aborted (deadlock)
+                if "aborted" in response.message.lower():
+                    raise TransactionAbortedException(transaction_id, response.message)
+                return []
+            # Log the object access
+            self.ccm_adapter.log_object(transaction_id, table_name)
         
         # Call storage manager to read all rows
         # TODO: Implement different access methods (hash_index, btree_index) when available
@@ -300,11 +398,17 @@ class QueryExecution:
         
         try:
             data = self.storage_manager.read_block(data_retrieval)
-            print(f"[RELATION] Retrieved {len(data)} rows from '{table_name}' via {method}")
+            logger.info(f"[RELATION] Retrieved {len(data)} rows from '{table_name}' via {method}")
+            
+            # Apply buffered operations for this transaction
+            if transaction_id:
+                data = self._apply_buffered_operations(data, transaction_id, table_name)
+                logger.info(f"[RELATION] After applying buffer: {len(data)} rows")
+            
             return data
         except Exception as e:
-            print(f"[RELATION] Error reading from storage manager: {e}")
-            print(f"[RELATION] Returning empty result")
+            logger.info(f"[RELATION] Error reading from storage manager: {e}")
+            logger.info(f"[RELATION] Returning empty result")
             return []
     
     def execute_alias(self, query_tree: QueryTree, transaction_id: int) -> list[dict]:
@@ -336,34 +440,34 @@ class QueryExecution:
         left_table = self.extract_table_name(left)
         right_table = self.extract_table_name(right)
         
-        print(f"[JOIN] Left table: '{left_table}'")
-        print(f"[JOIN] Right table: '{right_table}'")
+        logger.info(f"[JOIN] Left table: '{left_table}'")
+        logger.info(f"[JOIN] Right table: '{right_table}'")
         
         # Execute both sides
         left_data = self.execute_node(left, transaction_id)
         right_data = self.execute_node(right, transaction_id)
         
         if not left_data:
-            print(f"[JOIN] Left table empty, returning empty result")
+            logger.info(f"[JOIN] Left table empty, returning empty result")
             return []
         if not right_data:
-            print(f"[JOIN] Right table empty, returning empty result")
+            logger.info(f"[JOIN] Right table empty, returning empty result")
             return []
         
-        print(f"[JOIN] Left rows: {len(left_data)}, Right rows: {len(right_data)}")
+        logger.info(f"[JOIN] Left rows: {len(left_data)}, Right rows: {len(right_data)}")
         
         if join_method == "nested_loop":
             result = self._execute_nested_loop_join(join_type, left_data, right_data, query_tree, transaction_id)
         elif join_method == "hash_join":
             # TODO: Implement hash join algorithm
-            print(f"[JOIN] Hash join not yet implemented, falling back to nested loop")
+            logger.info(f"[JOIN] Hash join not yet implemented, falling back to nested loop")
             result = self._execute_nested_loop_join(join_type, left_data, right_data, query_tree, transaction_id)
         elif join_method == "merge_join":
             # TODO: Implement merge join algorithm
-            print(f"[JOIN] Merge join not yet implemented, falling back to nested loop")
+            logger.info(f"[JOIN] Merge join not yet implemented, falling back to nested loop")
             result = self._execute_nested_loop_join(join_type, left_data, right_data, query_tree, transaction_id)
         else:
-            print(f"[JOIN] Unknown join method '{join_method}', using nested loop")
+            logger.info(f"[JOIN] Unknown join method '{join_method}', using nested loop")
             result = self._execute_nested_loop_join(join_type, left_data, right_data, query_tree, transaction_id)
         
         return result
@@ -376,7 +480,7 @@ class QueryExecution:
         result = []
         
         if join_type == "NATURAL":
-            print(f"[JOIN] NATURAL JOIN - finding common columns...")
+            logger.info(f"[JOIN] NATURAL JOIN - finding common columns...")
             
             if not left_data or not right_data:
                 return []
@@ -386,13 +490,13 @@ class QueryExecution:
             common_cols = left_cols & right_cols
             
             if not common_cols:
-                print(f"[JOIN] No common columns found, performing cartesian product")
+                logger.info(f"[JOIN] No common columns found, performing cartesian product")
                 for left_row in left_data:
                     for right_row in right_data:
                         merged_row = {**left_row, **right_row}
                         result.append(merged_row)
             else:
-                print(f"[JOIN] Common columns: {common_cols}")
+                logger.info(f"[JOIN] Common columns: {common_cols}")
                 
                 for left_row in left_data:
                     for right_row in right_data:
@@ -405,7 +509,7 @@ class QueryExecution:
                             merged_row = {**left_row, **right_row}
                             result.append(merged_row)
             
-            print(f"[JOIN] NATURAL JOIN produced {len(result)} rows (nested loop)")
+            logger.info(f"[JOIN] NATURAL JOIN produced {len(result)} rows (nested loop)")
             return result
             
         elif join_type == "INNER":
@@ -414,7 +518,7 @@ class QueryExecution:
             
             condition = query_tree.childs[2]
             condition_str = self.condition_tree_to_string(condition)
-            print(f"[JOIN] INNER JOIN ON {condition_str}")
+            logger.info(f"[JOIN] INNER JOIN ON {condition_str}")
             
             matched_count = 0
             for left_row in left_data:
@@ -425,18 +529,18 @@ class QueryExecution:
                         result.append(merged_row)
                         matched_count += 1
             
-            print(f"[JOIN] INNER JOIN produced {len(result)} rows (nested loop, checked {len(left_data) * len(right_data)} combinations)")
+            logger.info(f"[JOIN] INNER JOIN produced {len(result)} rows (nested loop, checked {len(left_data) * len(right_data)} combinations)")
             return result
         
         elif join_type == "CROSS":
-            print(f"[JOIN] CROSS JOIN - cartesian product")
+            logger.info(f"[JOIN] CROSS JOIN - cartesian product")
             
             for left_row in left_data:
                 for right_row in right_data:
                     merged_row = {**left_row, **right_row}
                     result.append(merged_row)
             
-            print(f"[JOIN] CROSS JOIN produced {len(result)} rows (nested loop)")
+            logger.info(f"[JOIN] CROSS JOIN produced {len(result)} rows (nested loop)")
             return result
         
         return []
@@ -448,7 +552,7 @@ class QueryExecution:
         
         Uses READ-MODIFY-WRITE pattern to support expressions like SET y = y + 1
         """
-        print(f"\n[UPDATE] Executing UPDATE statement...")
+        logger.info(f"\n[UPDATE] Executing UPDATE statement...")
         
         if len(query_tree.childs) < 2:
             raise ValueError("UPDATE requires at least RELATION and ASSIGNMENT")
@@ -473,23 +577,35 @@ class QueryExecution:
         if i < len(query_tree.childs) and query_tree.childs[i].type == "FILTER":
             filter_node = query_tree.childs[i]
             condition_str = self.condition_tree_to_string(filter_node.childs[1])
-            print(f"[UPDATE] WHERE condition: {condition_str}")
+            logger.info(f"[UPDATE] WHERE condition: {condition_str}")
             try:
                 conditions = self.condition_tree_to_conditions(filter_node.childs[1])
             except ValueError as e:
-                print(f"[UPDATE] Complex condition not supported for UPDATE: {e}")
+                logger.info(f"[UPDATE] Complex condition not supported for UPDATE: {e}")
                 return 0
         
-        print(f"[UPDATE] Using READ-MODIFY-WRITE pattern for expression support")
-        print(f"[UPDATE]    Table: '{table_name}'")
-        print(f"[UPDATE]    Assignments: {len(assignment_exprs)} columns")
+        logger.info(f"[UPDATE] Using READ-MODIFY-WRITE pattern for expression support")
+        logger.info(f"[UPDATE]    Table: '{table_name}'")
+        logger.info(f"[UPDATE]    Assignments: {len(assignment_exprs)} columns")
         if conditions:
-            print(f"[UPDATE]    WHERE: {len(conditions)} condition(s)")
-        print(f"[UPDATE]    Transaction ID: {transaction_id}")
+            logger.info(f"[UPDATE]    WHERE: {len(conditions)} condition(s)")
+        logger.info(f"[UPDATE]    Transaction ID: {transaction_id}")
+        
+        # Validate WRITE access with CCM
+        if self.ccm_adapter and transaction_id:
+            response = self.ccm_adapter.validate_action(transaction_id, table_name, 'write')
+            if not response.allowed:
+                logger.info(f"[UPDATE] CCM denied WRITE access: {response.message}")
+                # Check if transaction was aborted (deadlock)
+                if "aborted" in response.message.lower():
+                    raise TransactionAbortedException(transaction_id, response.message)
+                return 0
+            # Log the object access
+            self.ccm_adapter.log_object(transaction_id, table_name)
         
         try:
             # STEP 1: READ
-            print(f"[UPDATE] STEP 1: Reading matching rows...")
+            logger.info(f"[UPDATE] STEP 1: Reading matching rows...")
             # Use storage adapter for reading
             matching_rows = self.storage_adapter.read_data(
                 table_name=table_name,
@@ -497,50 +613,83 @@ class QueryExecution:
                 conditions=conditions,
                 transaction_id=transaction_id
             )
-            print(f"[UPDATE]    Found {len(matching_rows)} matching row(s)")
+            logger.info(f"[UPDATE]    Found {len(matching_rows)} matching row(s)")
             
             if not matching_rows:
-                print(f"[UPDATE] No rows to update")
+                logger.info(f"[UPDATE] No rows to update")
                 return 0
             
             # STEP 2: MODIFY
-            print(f"[UPDATE] STEP 2: Evaluating expressions per row...")
+            logger.info(f"[UPDATE] STEP 2: Evaluating expressions per row...")
             rows_to_update = []
             for row in matching_rows:
                 updated_row = row.copy()
                 for col_name, value_expr in assignment_exprs:
                     new_value = self.evaluate_value_expression(value_expr, row)
                     updated_row[col_name] = new_value
-                    print(f"[UPDATE]    Row {row.get('id', '?')}: {col_name} = {row.get(col_name)} → {new_value}")
+                    logger.info(f"[UPDATE]    Row {row.get('id', '?')}: {col_name} = {row.get(col_name)} → {new_value}")
                 rows_to_update.append(updated_row)
             
-            # STEP 3: WRITE update each row
-            print(f"[UPDATE] STEP 3: Writing updated rows back to storage...")
-            rows_affected = 0
-            
-            all_columns = list(rows_to_update[0].keys())
-            
-            for row in rows_to_update:
-                # Create unique condition for this specific row (using all columns as identifier)
-                row_conditions = []
-                for col in all_columns:
-                    row_conditions.append(Condition(column=col, operation="=", operand=matching_rows[rows_affected][col]))
-                
-                # Update this specific row using storage adapter
-                affected = self.storage_adapter.write_data(
+            # Log to FRM
+            if self.frm_adapter and transaction_id:
+                self.frm_adapter.log_write(
+                    transaction_id=transaction_id,
+                    query=f"UPDATE {table_name}",
                     table_name=table_name,
-                    columns=all_columns,
-                    values=[row[col] for col in all_columns],
-                    conditions=row_conditions,
-                    transaction_id=transaction_id
+                    old_data=matching_rows,  # Original rows for rollback
+                    new_data=rows_to_update  # Modified rows
                 )
-                rows_affected += affected
             
-            print(f"[UPDATE] Updated {rows_affected} row(s)")
-            return rows_affected
+            # STEP 3: Buffer updates instead of writing immediately
+            logger.info(f"[UPDATE] STEP 3: Buffering updated rows...")
+            
+            if transaction_id:
+                # Get all columns from original matching rows
+                all_columns = list(matching_rows[0].keys()) if matching_rows else []
+                
+                for idx, new_row in enumerate(rows_to_update):
+                    # Create unique condition for this specific row
+                    row_conditions = []
+                    for col in all_columns:
+                        if col in matching_rows[idx]:
+                            row_conditions.append(Condition(column=col, operation="=", operand=matching_rows[idx][col]))
+                    
+                    # Buffer the update
+                    self.transaction_buffer.buffer_update(
+                        transaction_id=transaction_id,
+                        table_name=table_name,
+                        old_data=matching_rows[idx],
+                        new_data=new_row,
+                        conditions=row_conditions
+                    )
+                
+                logger.info(f"[UPDATE] Buffered {len(rows_to_update)} row(s) (will write on COMMIT)")
+                return len(rows_to_update)
+            else:
+                # No transaction - write directly
+                rows_affected = 0
+                all_columns = list(matching_rows[0].keys()) if matching_rows else []
+                
+                for idx, row in enumerate(rows_to_update):
+                    row_conditions = []
+                    for col in all_columns:
+                        if col in matching_rows[idx]:
+                            row_conditions.append(Condition(column=col, operation="=", operand=matching_rows[idx][col]))
+                    
+                    affected = self.storage_adapter.write_data(
+                        table_name=table_name,
+                        columns=all_columns,
+                        values=[row[col] for col in all_columns],
+                        conditions=row_conditions,
+                        transaction_id=transaction_id
+                    )
+                    rows_affected += affected
+                
+                logger.info(f"[UPDATE] Updated {rows_affected} row(s) (no transaction)")
+                return rows_affected
             
         except Exception as e:
-            print(f"[UPDATE] Error: {e}")
+            logger.info(f"[UPDATE] Error: {e}")
             # for debugging lmao
             import traceback
             traceback.print_exc()
@@ -565,24 +714,55 @@ class QueryExecution:
         values_clause = query_tree.childs[2]
         values = [self.extract_literal_value(child) for child in values_clause.childs]
         
-        print(f"[INSERT] -> STORAGE MANAGER: INSERT INTO '{table_name}'")
-        print(f"[INSERT]    Columns: {columns}")
-        print(f"[INSERT]    Values: {values}")
-        print(f"[INSERT]    Transaction ID: {transaction_id}")
+        logger.info(f"[INSERT] -> STORAGE MANAGER: INSERT INTO '{table_name}'")
+        logger.info(f"[INSERT]    Columns: {columns}")
+        logger.info(f"[INSERT]    Values: {values}")
+        logger.info(f"[INSERT]    Transaction ID: {transaction_id}")
+        
+        # Validate WRITE access with CCM
+        if self.ccm_adapter and transaction_id:
+            response = self.ccm_adapter.validate_action(transaction_id, table_name, 'write')
+            if not response.allowed:
+                logger.info(f"[INSERT] CCM denied WRITE access: {response.message}")
+                # Check if transaction was aborted (deadlock)
+                if "aborted" in response.message.lower():
+                    raise TransactionAbortedException(transaction_id, response.message)
+                return 0
+            # Log the object access
+            self.ccm_adapter.log_object(transaction_id, table_name)
         
         try:
-            # Use storage adapter for insert
-            rows_affected = self.storage_adapter.write_data(
-                table_name=table_name,
-                columns=columns,
-                values=values,
-                conditions=[],  # Empty conditions = INSERT
-                transaction_id=transaction_id
-            )
-            print(f"[INSERT] Inserted {rows_affected} row(s)")
-            return rows_affected
+            # Prepare new data for FRM logging
+            new_row = dict(zip(columns, values))
+            
+            # Log to FRM
+            if self.frm_adapter and transaction_id:
+                self.frm_adapter.log_write(
+                    transaction_id=transaction_id,
+                    query=f"INSERT INTO {table_name}",
+                    table_name=table_name,
+                    old_data=None,  # No old data for INSERT
+                    new_data=[new_row]
+                )
+            
+            # Buffer the write operation instead of writing to storage immediately
+            if transaction_id:
+                self.transaction_buffer.buffer_insert(transaction_id, table_name, new_row)
+                logger.info(f"[INSERT] Buffered 1 row (will write on COMMIT)")
+                return 1
+            else:
+                # No transaction - write directly (for DDL operations)
+                rows_affected = self.storage_adapter.write_data(
+                    table_name=table_name,
+                    columns=columns,
+                    values=values,
+                    conditions=[],
+                    transaction_id=transaction_id
+                )
+                logger.info(f"[INSERT] Inserted {rows_affected} row(s) (no transaction)")
+                return rows_affected
         except Exception as e:
-            print(f"[INSERT] Error: {e}")
+            logger.info(f"[INSERT] Error: {e}")
             return 0
     
     def execute_delete(self, query_tree: QueryTree, transaction_id: int) -> int:
@@ -602,46 +782,84 @@ class QueryExecution:
         if len(query_tree.childs) > 1 and query_tree.childs[1].type == "FILTER":
             filter_node = query_tree.childs[1]
             condition_str = self.condition_tree_to_string(filter_node.childs[1])
-            print(f"[DELETE] WHERE condition: {condition_str}")
+            logger.info(f"[DELETE] WHERE condition: {condition_str}")
             try:
                 conditions = self.condition_tree_to_conditions(filter_node.childs[1])
             except ValueError as e:
-                print(f"[DELETE] Complex condition not supported for DELETE: {e}")
+                logger.info(f"[DELETE] Complex condition not supported for DELETE: {e}")
                 return 0
         
-        print(f"[DELETE] -> STORAGE MANAGER: DELETE FROM '{table_name}'")
+        logger.info(f"[DELETE] -> STORAGE MANAGER: DELETE FROM '{table_name}'")
         if conditions:
-            print(f"[DELETE]    WHERE {len(conditions)} condition(s)")
+            logger.info(f"[DELETE]    WHERE {len(conditions)} condition(s)")
         else:
-            print(f"[DELETE]    (All rows)")
-        print(f"[DELETE]    Transaction ID: {transaction_id}")
+            logger.info(f"[DELETE]    (All rows)")
+        logger.info(f"[DELETE]    Transaction ID: {transaction_id}")
+        
+        # Validate WRITE access with CCM
+        if self.ccm_adapter and transaction_id:
+            response = self.ccm_adapter.validate_action(transaction_id, table_name, 'write')
+            if not response.allowed:
+                logger.info(f"[DELETE] CCM denied WRITE access: {response.message}")
+                # Check if transaction was aborted (deadlock)
+                if "aborted" in response.message.lower():
+                    raise TransactionAbortedException(transaction_id, response.message)
+                return 0
+            # Log the object access
+            self.ccm_adapter.log_object(transaction_id, table_name)
         
         try:
-            # Use storage adapter for delete
-            rows_affected = self.storage_adapter.delete_data(
-                table_name=table_name,
-                conditions=conditions,
-                transaction_id=transaction_id
+            # Read rows before deletion for FRM logging
+            data_retrieval = DataRetrieval(
+                table=table_name,
+                column=[],
+                conditions=conditions
             )
-            print(f"[DELETE] Deleted {rows_affected} row(s)")
-            return rows_affected
+            old_rows = self.storage_manager.read_block(data_retrieval)
+            
+            # Log to FRM
+            if self.frm_adapter and transaction_id:
+                self.frm_adapter.log_write(
+                    transaction_id=transaction_id,
+                    query=f"DELETE FROM {table_name}",
+                    table_name=table_name,
+                    old_data=old_rows,  # For rollback
+                    new_data=None  # No new data for DELETE
+                )
+            
+            if transaction_id:
+                # Buffer deletions
+                for row in old_rows:
+                    self.transaction_buffer.buffer_delete(
+                        transaction_id=transaction_id,
+                        table_name=table_name,
+                        row_data=row,
+                        conditions=conditions
+                    )
+                logger.info(f"[DELETE] Buffered {len(old_rows)} row(s) for deletion (will delete on COMMIT)")
+                return len(old_rows)
+            else:
+                # No transaction - delete directly
+                rows_affected = self.storage_adapter.delete_data(
+                    table_name=table_name,
+                    conditions=conditions,
+                    transaction_id=transaction_id
+                )
+                logger.info(f"[DELETE] Deleted {rows_affected} row(s) (no transaction)")
+                return rows_affected
         except Exception as e:
-            print(f"[DELETE] Error: {e}")
+            logger.info(f"[DELETE] Error: {e}")
             return 0
     
     # TODO: implement transaction management with ccm
     def execute_transaction(self, query_tree: QueryTree, transaction_id: int) -> None:
-        """
-        Execute BEGIN_TRANSACTION node
-        Structure: BEGIN_TRANSACTION with children: [statement*, COMMIT]
-        """
         print(f"\n[TRANSACTION] Executing BEGIN TRANSACTION...")
-        print(f"[TRANSACTION] -> CCM: Start transaction")
+        logger.info(f"[TRANSACTION] -> CCM: Start transaction")
         
         # Execute all statements in transaction
         for child in query_tree.childs:
             if child.type == "COMMIT":
-                print(f"[TRANSACTION] -> CCM: COMMIT transaction")
+                logger.info(f"[TRANSACTION] -> CCM: COMMIT transaction")
                 break
             else:
                 self.execute_node(child, transaction_id)
@@ -650,12 +868,6 @@ class QueryExecution:
     
     # TODO: TEStING!!!! DAN INTEGRASIIN LEBIH BAIK
     def execute_create_table(self, query_tree: QueryTree, transaction_id: int) -> None:
-        """
-        Execute CREATE_TABLE node
-        Structure: CREATE_TABLE with children: [IDENTIFIER(table_name), COLUMN_DEF_LIST]
-        COLUMN_DEF_LIST contains COLUMN_DEF nodes
-        COLUMN_DEF contains: [IDENTIFIER(col_name), DATA_TYPE, optional PRIMARY_KEY/FOREIGN_KEY]
-        """
         print(f"\n[CREATE TABLE] Executing CREATE TABLE statement...")
         
         if len(query_tree.childs) < 2:
@@ -667,10 +879,9 @@ class QueryExecution:
         if col_def_list.type != "COLUMN_DEF_LIST":
             raise ValueError(f"Expected COLUMN_DEF_LIST, got {col_def_list.type}")
         
-        print(f"[CREATE TABLE] Table name: '{table_name}'")
-        print(f"[CREATE TABLE] Columns: {len(col_def_list.childs)}")
+        logger.info(f"[CREATE TABLE] Table name: '{table_name}'")
+        logger.info(f"[CREATE TABLE] Columns: {len(col_def_list.childs)}")
         
-        from storage_manager import ColumnDefinition
         columns = []
         primary_keys = []
         foreign_keys = []
@@ -704,7 +915,7 @@ class QueryExecution:
                 if constraint.type == "PRIMARY_KEY":
                     is_primary_key = True
                     primary_keys.append(col_name)
-                    print(f"[CREATE TABLE]   - {col_name} {data_type_str} PRIMARY KEY")
+                    logger.info(f"[CREATE TABLE]   - {col_name} {data_type_str} PRIMARY KEY")
                 
                 elif constraint.type == "FOREIGN_KEY":
                     has_foreign_key = True
@@ -712,7 +923,6 @@ class QueryExecution:
                     ref_table = constraint.childs[0].val
                     ref_column = constraint.childs[1].val
                     
-                    from storage_manager import ForeignKey
                     foreign_keys.append(ForeignKey(
                         column=col_name,
                         references_table=ref_table,
@@ -720,11 +930,11 @@ class QueryExecution:
                         on_delete="RESTRICT",
                         on_update="RESTRICT"
                     ))
-                    print(f"[CREATE TABLE]   - {col_name} {data_type_str} FOREIGN KEY REFERENCES {ref_table}({ref_column})")
+                    logger.info(f"[CREATE TABLE]   - {col_name} {data_type_str} FOREIGN KEY REFERENCES {ref_table}({ref_column})")
                 else:
-                    print(f"[CREATE TABLE]   - {col_name} {data_type_str}")
+                    logger.info(f"[CREATE TABLE]   - {col_name} {data_type_str}")
             else:
-                print(f"[CREATE TABLE]   - {col_name} {data_type_str}")
+                logger.info(f"[CREATE TABLE]   - {col_name} {data_type_str}")
             
             # Create ColumnDefinition
             columns.append(ColumnDefinition(
@@ -736,14 +946,13 @@ class QueryExecution:
                 default_value=None
             ))
         
-        print(f"[CREATE TABLE] -> STORAGE MANAGER: Create table '{table_name}' with {len(columns)} columns")
+        logger.info(f"[CREATE TABLE] -> STORAGE MANAGER: Create table '{table_name}' with {len(columns)} columns")
         if primary_keys:
-            print(f"[CREATE TABLE]    Primary keys: {primary_keys}")
+            logger.info(f"[CREATE TABLE]    Primary keys: {primary_keys}")
         if foreign_keys:
-            print(f"[CREATE TABLE]    Foreign keys: {len(foreign_keys)}")
-        print(f"[CREATE TABLE]    Transaction ID: {transaction_id}")
+            logger.info(f"[CREATE TABLE]    Foreign keys: {len(foreign_keys)}")
+        logger.info(f"[CREATE TABLE]    Transaction ID: {transaction_id}")
         
-        # Use storage adapter for table creation
         try:
             self.storage_adapter.create_table(
                 table_name=table_name,
@@ -751,18 +960,13 @@ class QueryExecution:
                 primary_keys=primary_keys if primary_keys else None,
                 foreign_keys=foreign_keys if foreign_keys else None
             )
-            print(f"[CREATE TABLE] ✓ Table '{table_name}' created successfully")
+            logger.info(f"[CREATE TABLE] ✓ Table '{table_name}' created successfully")
             return None
         except Exception as e:
-            print(f"[CREATE TABLE] Error: {e}")
+            logger.info(f"[CREATE TABLE] Error: {e}")
             raise
     
     def execute_drop_table(self, query_tree: QueryTree, transaction_id: int) -> None:
-        """
-        Execute DROP_TABLE node
-        Structure: DROP_TABLE(behavior) with children: [IDENTIFIER(table_name)]
-        behavior: "CASCADE" or "RESTRICT" or empty string
-        """
         print(f"\n[DROP TABLE] Executing DROP TABLE statement...")
         
         if len(query_tree.childs) < 1:
@@ -774,32 +978,26 @@ class QueryExecution:
         # Get drop behavior (CASCADE/RESTRICT)
         behavior = query_tree.val if query_tree.val else "RESTRICT"
         
-        print(f"[DROP TABLE] Table name: '{table_name}'")
-        print(f"[DROP TABLE] Behavior: {behavior}")
-        print(f"[DROP TABLE] -> STORAGE MANAGER: Drop table '{table_name}'")
-        print(f"[DROP TABLE]    Transaction ID: {transaction_id}")
+        logger.info(f"[DROP TABLE] Table name: '{table_name}'")
+        logger.info(f"[DROP TABLE] Behavior: {behavior}")
+        logger.info(f"[DROP TABLE] -> STORAGE MANAGER: Drop table '{table_name}'")
+        logger.info(f"[DROP TABLE]    Transaction ID: {transaction_id}")
         
         # Note: Storage manager implements RESTRICT by default
         # CASCADE is not implemented in storage manager yet
         if behavior == "CASCADE":
-            print(f"[DROP TABLE] Warning: CASCADE not fully implemented in storage manager")
+            logger.info(f"[DROP TABLE] Warning: CASCADE not fully implemented in storage manager")
         
         # Use storage adapter for table drop
         try:
             self.storage_adapter.drop_table(table_name)
-            print(f"[DROP TABLE] ✓ Table '{table_name}' dropped successfully")
+            logger.info(f"[DROP TABLE] ✓ Table '{table_name}' dropped successfully")
             return None
         except Exception as e:
-            print(f"[DROP TABLE] Error: {e}")
+            logger.info(f"[DROP TABLE] Error: {e}")
             raise
         
     def extract_column_name(self, col_ref: QueryTree) -> str:
-        """
-        Extract column name from COLUMN_REF node
-        COLUMN_REF -> COLUMN_NAME -> IDENTIFIER
-        or
-        COLUMN_REF -> [COLUMN_NAME -> IDENTIFIER, TABLE_NAME -> IDENTIFIER]
-        """
         if col_ref.type != "COLUMN_REF":
             raise ValueError(f"Expected COLUMN_REF, got {col_ref.type}")
         
@@ -811,7 +1009,6 @@ class QueryExecution:
         return identifier.val
     
     def extract_identifier(self, node: QueryTree) -> str:
-        """Extract value from IDENTIFIER node"""
         if node.type == "IDENTIFIER":
             return node.val
         elif node.type == "COLUMN_NAME" and node.childs:
@@ -819,7 +1016,6 @@ class QueryExecution:
         return node.val
     
     def extract_literal_value(self, node: QueryTree):
-        """Extract value from LITERAL_* nodes"""
         if node.type == "LITERAL_NUMBER":
             try:
                 return int(node.val) if '.' not in node.val else float(node.val)
@@ -858,7 +1054,6 @@ class QueryExecution:
         
         return None
     
-    # Evaluate condition tree against a single row
     def evaluate_condition(self, condition: QueryTree, row: dict) -> bool:
         if condition.type == "COMPARISON":
             operator = condition.val
@@ -1045,7 +1240,6 @@ class QueryExecution:
         return "<condition>"
     
     def value_expr_to_string(self, expr: QueryTree) -> str:
-        """Convert value expression to string for logging"""
         if expr.type.startswith("LITERAL_"):
             return str(expr.val)
         elif expr.type == "COLUMN_REF":
@@ -1106,8 +1300,75 @@ class QueryExecution:
             if node.childs and node.childs[0].type == "RELATION":
                 return node.childs[0].val
             return node.val
+        elif node.type == "PROJECT":
+            # Parser wraps JOIN operands in PROJECT nodes (projection pushdown)
+            # The source is the last child
+            source = node.childs[-1]
+            return self.extract_table_name(source)
         else:
             raise ValueError(f"Cannot extract table name from node type {node.type}")
+    
+    def _apply_buffered_operations(self, storage_data: list[dict], 
+                                    transaction_id: int, table_name: str) -> list[dict]:
+        """
+        Apply transaction's buffered operations on top of storage data.
+        This allows transaction to see its own uncommitted writes (Read Committed isolation).
+        
+        Args:
+            storage_data: Data from storage (committed baseline)
+            transaction_id: Current transaction ID
+            table_name: Table being read
+            
+        Returns:
+            Merged view: storage data + buffered operations applied
+        """
+        if not transaction_id:
+            return storage_data
+        
+        # Start with storage data (committed baseline)
+        result = list(storage_data)  # Copy to avoid modifying original
+        
+        # Get all buffered operations for this transaction
+        ops = self.transaction_buffer.get_buffered_operations(transaction_id)
+        
+        for op in ops:
+            if op.table_name != table_name:
+                continue
+            
+            if op.operation_type == "INSERT":
+                # Add new rows from buffered INSERTs
+                result.append(op.data.copy())
+            
+            elif op.operation_type == "UPDATE":
+                # Replace matching rows with updated data
+                for i, row in enumerate(result):
+                    if self._row_matches_data(row, op.old_data):
+                        result[i] = op.data.copy()
+            
+            elif op.operation_type == "DELETE":
+                # Remove matching rows from buffered DELETEs
+                result = [
+                    row for row in result 
+                    if not self._row_matches_data(row, op.data)
+                ]
+        
+        return result
+    
+    def _row_matches_data(self, row: dict, target_data: dict) -> bool:
+        """
+        Check if a row matches target data (for finding rows affected by UPDATE/DELETE).
+        
+        Args:
+            row: Row to check
+            target_data: Target data to match against
+            
+        Returns:
+            True if all fields in target_data match corresponding fields in row
+        """
+        if not target_data:
+            return False
+        
+        return all(row.get(k) == v for k, v in target_data.items())
 
 
 def main():
