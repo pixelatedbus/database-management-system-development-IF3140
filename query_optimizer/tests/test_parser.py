@@ -36,8 +36,9 @@ class TestSelect(unittest.TestCase):
         tree = Parser(Tokenizer(sql)).parse()
         sort = tree.childs[-1]
         self.assertEqual(sort.type, "SORT")
-        order_item = sort.childs[0]
-        self.assertEqual(order_item.val, "DESC")
+        self.assertEqual(sort.val, "DESC")
+        order_expr = sort.childs[0]
+        self.assertEqual(order_expr.type, "COLUMN_REF")
         filt = sort.childs[1]
         self.assertEqual(filt.type, "FILTER")
         self.assertEqual(filt.val, "")
@@ -83,6 +84,104 @@ class TestJoin(unittest.TestCase):
         join1 = Parser(Tokenizer(sql)).parse().childs[-1]
         self.assertEqual(join1.type, "JOIN")
         self.assertEqual(join1.childs[0].type, "JOIN")
+    
+    def test_comma_separated_tables(self):
+        """Test FROM table1, table2 creates CROSS JOIN"""
+        sql = "SELECT * FROM users, profiles;"
+        tree = Parser(Tokenizer(sql)).parse()
+        join = tree.childs[-1]
+        
+        self.assertEqual(join.type, "JOIN")
+        self.assertEqual(join.val, "CROSS")
+        self.assertEqual(len(join.childs), 2)
+        self.assertEqual(join.childs[0].type, "RELATION")
+        self.assertEqual(join.childs[0].val, "users")
+        self.assertEqual(join.childs[1].type, "RELATION")
+        self.assertEqual(join.childs[1].val, "profiles")
+    
+    def test_comma_separated_three_tables(self):
+        """Test FROM table1, table2, table3 creates nested CROSS JOINs"""
+        sql = "SELECT * FROM a, b, c;"
+        tree = Parser(Tokenizer(sql)).parse()
+        join_outer = tree.childs[-1]
+        
+        # Outer join: (a CROSS b) CROSS c
+        self.assertEqual(join_outer.type, "JOIN")
+        self.assertEqual(join_outer.val, "CROSS")
+        self.assertEqual(len(join_outer.childs), 2)
+        
+        # Left side should be another CROSS JOIN
+        join_inner = join_outer.childs[0]
+        self.assertEqual(join_inner.type, "JOIN")
+        self.assertEqual(join_inner.val, "CROSS")
+        self.assertEqual(join_inner.childs[0].val, "a")
+        self.assertEqual(join_inner.childs[1].val, "b")
+        
+        # Right side should be table c
+        self.assertEqual(join_outer.childs[1].type, "RELATION")
+        self.assertEqual(join_outer.childs[1].val, "c")
+    
+    def test_comma_separated_with_aliases(self):
+        """Test FROM table1 alias1, table2 alias2"""
+        sql = "SELECT * FROM users u, profiles p;"
+        tree = Parser(Tokenizer(sql)).parse()
+        join = tree.childs[-1]
+        
+        self.assertEqual(join.type, "JOIN")
+        self.assertEqual(join.val, "CROSS")
+        
+        # Check aliases
+        self.assertEqual(join.childs[0].type, "ALIAS")
+        self.assertEqual(join.childs[0].val, "u")
+        self.assertEqual(join.childs[0].childs[0].val, "users")
+        
+        self.assertEqual(join.childs[1].type, "ALIAS")
+        self.assertEqual(join.childs[1].val, "p")
+        self.assertEqual(join.childs[1].childs[0].val, "profiles")
+    
+    def test_comma_separated_with_where(self):
+        """Test FROM table1, table2 WHERE condition (implicit join condition)"""
+        sql = "SELECT * FROM employees e, payroll p WHERE e.id = p.employee_id;"
+        tree = Parser(Tokenizer(sql)).parse()
+        
+        # Should have FILTER over CROSS JOIN
+        filter_node = tree.childs[-1]
+        self.assertEqual(filter_node.type, "FILTER")
+        
+        join = filter_node.childs[0]
+        self.assertEqual(join.type, "JOIN")
+        self.assertEqual(join.val, "CROSS")
+        self.assertEqual(join.childs[0].type, "ALIAS")
+        self.assertEqual(join.childs[1].type, "ALIAS")
+        
+        # Check WHERE condition
+        condition = filter_node.childs[1]
+        self.assertEqual(condition.type, "COMPARISON")
+        self.assertEqual(condition.val, "=")
+    
+    def test_mixed_comma_and_explicit_join(self):
+        """Test mixing comma-separated tables with explicit JOIN"""
+        sql = "SELECT * FROM a, b JOIN c ON b.id = c.bid;"
+        tree = Parser(Tokenizer(sql)).parse()
+        
+        # Outer should be explicit JOIN
+        outer_join = tree.childs[-1]
+        self.assertEqual(outer_join.type, "JOIN")
+        self.assertEqual(outer_join.val, "INNER")
+        
+        # Left side should be CROSS JOIN (a, b)
+        cross_join = outer_join.childs[0]
+        self.assertEqual(cross_join.type, "JOIN")
+        self.assertEqual(cross_join.val, "CROSS")
+        self.assertEqual(cross_join.childs[0].val, "a")
+        self.assertEqual(cross_join.childs[1].val, "b")
+        
+        # Right side should be table c
+        self.assertEqual(outer_join.childs[1].val, "c")
+        
+        # Should have ON condition
+        self.assertEqual(len(outer_join.childs), 3)
+        self.assertEqual(outer_join.childs[2].type, "COMPARISON")
 
 
 class TestWhereExpressions(unittest.TestCase):
@@ -194,9 +293,9 @@ class TestPDFExamples(unittest.TestCase):
         self.assertEqual(limit.val, "10")
         sort = limit.childs[0]
         self.assertEqual(sort.type, "SORT")
-        order_item = sort.childs[0]
-        self.assertEqual(order_item.type, "ORDER_ITEM")
-        self.assertEqual(order_item.val, "ASC")
+        self.assertEqual(sort.val, "ASC")
+        order_expr = sort.childs[0]
+        self.assertEqual(order_expr.type, "COLUMN_REF")
         filt = sort.childs[1]
         self.assertEqual(filt.type, "FILTER")
         join = filt.childs[0]
