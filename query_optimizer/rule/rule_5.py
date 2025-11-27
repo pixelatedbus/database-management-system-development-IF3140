@@ -3,23 +3,40 @@ from query_optimizer.query_tree import QueryTree
 import random
 from typing import Any
 
-def join_komutatif(query: ParsedQuery, join_orders: dict[int, bool] = None) -> ParsedQuery:
-    """
-    Mengubah urutan tabel pada operasi JOIN.
-    Rule: JOIN(A, B) ≡ JOIN(B, A)
+def apply_join_commutativity(
+    query: ParsedQuery,
+    join_child_params: dict[int, bool]
+) -> tuple[ParsedQuery, dict[int, bool]]:
     
-    Args:
-        query: Parsed query to transform
-        join_orders: Dict[join_id, should_swap]
-                    True = swap children (B, A)
-                    False = keep original (A, B)
-    """
-    if join_orders is None:
-        # Default: swap all joins
-        transformed_tree = join_komutatif_rec(query.query_tree, None)
-    else:
-        transformed_tree = join_komutatif_rec(query.query_tree, join_orders)
+    if not join_child_params:
+        return query, join_child_params
+    
+    transformed_query = join_komutatif(query, join_child_params)
+    
+    return transformed_query, join_child_params
+
+
+def join_komutatif(query: ParsedQuery, join_orders: dict[int, bool]) -> ParsedQuery:
+
+    def swap_rec(node: QueryTree) -> QueryTree:
+        if node is None:
+            return None
+        
+        for i in range(len(node.childs)):
+            node.childs[i] = swap_rec(node.childs[i])
+        
+        if node.is_node_type("JOIN") and len(node.childs) >= 2:
+            join_id = node.id
+            
+            if join_id in join_orders and join_orders[join_id]:
+                # Swap children
+                node.childs[0], node.childs[1] = node.childs[1], node.childs[0]
+        
+        return node
+    
+    transformed_tree = swap_rec(query.query_tree)
     return ParsedQuery(transformed_tree, query.query)
+
 
 def join_komutatif_rec(node: QueryTree, join_orders: dict[int, bool] = None) -> QueryTree:
     if node is None:

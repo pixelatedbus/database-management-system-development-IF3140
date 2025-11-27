@@ -7,8 +7,7 @@ from typing import Callable, Any
 from query_optimizer.optimization_engine import ParsedQuery, OptimizationEngine
 from query_optimizer.rule.rule_1 import (
     cascade_filters,
-    uncascade_filters,
-    clone_tree
+    uncascade_filters
 )
 from query_optimizer.rule.rule_2 import reorder_and_conditions
 from query_optimizer.rule import rule_4
@@ -65,51 +64,35 @@ class Individual:
         """
         Terapkan transformations ke query berdasarkan operation params.
         """
-        cloned_tree = clone_tree(base_query.query_tree)
+        cloned_tree = base_query.query_tree.clone(deep=True, preserve_id=True)
         current_query = ParsedQuery(cloned_tree, base_query.query)
+
+        filter_params = self.operation_params.get('filter_params', {})
+        join_child_params = self.operation_params.get('join_child_params', {})
+        join_params = self.operation_params.get('join_params', {})
         
-        # Step 1: Apply join child order operations (Rule 5)
-        if 'join_child_params' in self.operation_params and self.operation_params['join_child_params']:
-            join_child_orders = self.operation_params['join_child_params']
-            
-            if join_child_orders:
-                current_query = rule_5.join_komutatif(current_query, join_child_orders)
+        # Step 1: Apply Rule 1&2 (filter operations)
+        if filter_params:
+            from query_optimizer.rule.rule_1 import apply_rule1_rule2
+            current_query, filter_params = apply_rule1_rule2(current_query, filter_params)
         
-        # Step 2: Apply join operations (Rule 4)
-        if 'join_params' in self.operation_params and self.operation_params['join_params']:
-            join_params = self.operation_params['join_params']
-            
-            if join_params:
-                current_query = rule_4.apply_merge(current_query, join_params)
+        # Step 2: Apply Rule 5 (join child order)
+        if join_child_params:
+            from query_optimizer.rule.rule_5 import apply_join_commutativity
+            current_query, join_child_params = apply_join_commutativity(current_query, join_child_params)
         
-        # Step 3: Apply filter operations dengan unified order format
-        if 'filter_params' in self.operation_params and self.operation_params['filter_params']:
-            # Uncascade existing filters first
-            query_and = uncascade_filters(current_query)
-            
-            # Extract unified orders
-            unified_orders = self.operation_params['filter_params']
-            
-            # Step 3a: Apply reordering (flatten order untuk reorder_and_conditions)
-            reorder_orders = {}
-            for node_id, order in unified_orders.items():
-                # Flatten to get pure permutation
-                flat = []
-                for item in order:
-                    if isinstance(item, list):
-                        flat.extend(item)
-                    else:
-                        flat.append(item)
-                reorder_orders[node_id] = flat
-            
-            if reorder_orders:
-                query_and = reorder_and_conditions(query_and, operator_orders=reorder_orders)
-            
-            # Step 3b: Apply cascading dengan grouping structure
-            if unified_orders:
-                current_query = cascade_filters(query_and, operator_orders=unified_orders)
-            else:
-                current_query = query_and
+        # Step 3: Apply Rule 4 (join merge)
+        if join_params:
+            current_query, join_params, filter_params = rule_4.apply_merge(
+                current_query, join_params, filter_params
+            )
+        
+        # Update operation_params dengan adjusted params
+        self.operation_params = {
+            'filter_params': filter_params,
+            'join_child_params': join_child_params,
+            'join_params': join_params
+        }
         
         return current_query
     
@@ -155,6 +138,31 @@ class GeneticOptimizer:
         engine = OptimizationEngine()
         cost = engine.get_cost(query)
         return float(cost)
+
+    def _update_params(self, individual: Individual) -> Individual:
+        new_analysis = self._analyze_query_for_rules(individual.query)
+        
+        updated_params = {}
+        manager = get_rule_params_manager()
+        
+        for operation_name, new_metadata in new_analysis.items():
+            updated_params[operation_name] = {}
+            
+            for node_id, metadata in new_metadata.items():
+                old_params = self._find_matching_old_params(
+                    individual.operation_params.get(operation_name, {}),
+                    node_id,
+                    metadata
+                )
+                
+                if old_params is not None:
+                    updated_params[operation_name][node_id] = \
+                        self._adjust_params_to_metadata(old_params, metadata, operation_name)
+                else:
+                    updated_params[operation_name][node_id] = \
+                        manager.generate_random_params(operation_name, metadata)
+        
+        return Individual(updated_params, individual.base_query, lazy_eval=False)
     
     def optimize(self, query: ParsedQuery) -> ParsedQuery:
         """Jalankan GA untuk mencari struktur query optimal."""

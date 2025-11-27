@@ -129,118 +129,33 @@ class RuleParamsManager:
         # Filter operations (Rule 1 + Rule 2)
         from query_optimizer.rule.rule_1 import (
             analyze_and_operators,
+            generate_random_rule_1_params,
             copy_rule_1_params,
             mutate_rule_1_params,
         )
-        from query_optimizer.rule.rule_2 import (
-            mutate_rule_2_params,
-        )
         
-        def generate_filter_params(num_conditions: int) -> list[int | list[int]]:
-            """
-            Generate random filter params dengan unified order format.
-            
-            Format: Mixed list of int | list[int]
-            - int: single condition (akan di-cascade sebagai FILTER tunggal)
-            - list: grouped conditions (tetap dalam AND)
-            
-            Example outputs:
-            - [0, 1, 2]     : All single, no grouping
-            - [2, [0, 1]]   : cond2 single, [cond0, cond1] grouped
-            - [[0, 1, 2]]   : All grouped in one AND
-            """
-            indices = list(range(num_conditions))
-            random.shuffle(indices)
-            
-            # Random grouping
-            if num_conditions <= 1:
-                return indices
-            
-            num_groups = random.randint(0, max(1, num_conditions // 2))
-            
-            if num_groups == 0:
-                # Semua single
-                return indices
-            
-            # Buat groups
-            result = []
-            remaining = indices.copy()
-            
-            for _ in range(num_groups):
-                if len(remaining) < 2:
-                    break
-                
-                # Ambil 2-3 kondisi untuk di-group
-                group_size = random.randint(2, min(3, len(remaining)))
-                group = remaining[:group_size]
-                remaining = remaining[group_size:]
-                result.append(group)
-            
-            # Sisanya jadi single
-            result.extend(remaining)
-            
-            return result
-        
-        def copy_filter_params(params: list[int | list[int]]) -> list[int | list[int]]:
-            """Deep copy filter params."""
-            return copy_rule_1_params(params)
-        
-        def mutate_filter_params(params: list[int | list[int]]) -> list[int | list[int]]:
-            """
-            Mutate filter params dengan strategi campuran:
-            - Reorder: swap positions (dari mutate_rule_2)
-            - Group/ungroup: gabung/pisah conditions (dari mutate_rule_1)
-            """
-            # Randomly choose mutation strategy
-            if random.random() < 0.5:
-                # Strategy 1: Mutate as cascade (group/ungroup)
-                return mutate_rule_1_params(params)
-            else:
-                # Strategy 2: Flatten, mutate as permutation, then reconstruct groups
-                # Flatten to get all indices
-                flat = []
-                for item in params:
-                    if isinstance(item, list):
-                        flat.extend(item)
-                    else:
-                        flat.append(item)
-                
-                # Apply permutation mutation
-                mutated_flat = mutate_rule_2_params(flat)
-                
-                # Reconstruct with similar grouping structure
-                result = []
-                idx = 0
-                for item in params:
-                    if isinstance(item, list):
-                        group_size = len(item)
-                        result.append(mutated_flat[idx:idx+group_size])
-                        idx += group_size
-                    else:
-                        result.append(mutated_flat[idx])
-                        idx += 1
-                
-                return result
+        def generate_filter_params(condition_ids: list[int]) -> list[int | list[int]]:
+            """Generate random filter params dari condition IDs."""
+            return generate_random_rule_1_params(condition_ids)
         
         def validate_filter_params(params: list[int | list[int]]) -> bool:
             """Validate filter params structure."""
             if not isinstance(params, list):
                 return False
-            # Check all indices present
-            flat = []
             for item in params:
                 if isinstance(item, list):
-                    flat.extend(item)
-                else:
-                    flat.append(item)
-            return len(flat) > 0 and len(set(flat)) == len(flat)
+                    if not all(isinstance(x, int) for x in item):
+                        return False
+                elif not isinstance(item, int):
+                    return False
+            return True
         
         self.register_operation(
             operation_name='filter_params',
-            analyze_func=analyze_and_operators,  # Same analysis for both rules
-            generate_func=generate_filter_params,
-            copy_func=copy_filter_params,
-            mutate_func=mutate_filter_params,
+            analyze_func=analyze_and_operators,  # Returns {op_id: [cond_ids]}
+            generate_func=generate_filter_params,  # Input: [cond_ids]
+            copy_func=copy_rule_1_params,
+            mutate_func=mutate_rule_1_params,
             validate_func=validate_filter_params
         )
         
