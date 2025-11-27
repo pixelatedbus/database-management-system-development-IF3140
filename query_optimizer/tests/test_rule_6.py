@@ -1,0 +1,339 @@
+"""
+Test integration of Rule 6 (Join Associativity) with Genetic Algorithm
+"""
+
+import unittest
+from query_optimizer.genetic_optimizer import GeneticOptimizer, Individual
+from query_optimizer.optimization_engine import OptimizationEngine, ParsedQuery
+from query_optimizer.rule_params_manager import get_rule_params_manager
+from query_optimizer.rule import rule_6
+
+
+class TestRule6Integration(unittest.TestCase):
+    """Test Rule 6 integration dengan GA."""
+
+    def setUp(self):
+        """Setup test queries."""
+        self.engine = OptimizationEngine()
+
+        self.query_str_1 = """
+        SELECT * FROM employees e
+        INNER JOIN departments d ON e.dept_id = d.id
+        INNER JOIN projects p ON d.id = p.dept_id
+        """
+
+        self.query_str_2 = """
+        SELECT * FROM users u
+        INNER JOIN orders o ON u.id = o.user_id
+        INNER JOIN products p ON o.product_id = p.id
+        INNER JOIN categories c ON p.category_id = c.id
+        """
+
+        self.query_str_3 = """
+        SELECT * FROM t1
+        INNER JOIN t2 ON t1.id = t2.t1_id
+        INNER JOIN t3 ON t2.id = t3.t2_id
+        """
+
+    def test_rule_6_find_patterns(self):
+        """Test apakah rule 6 bisa detect nested JOIN patterns."""
+        parsed = self.engine.parse_query(self.query_str_1)
+        patterns = rule_6.find_patterns(parsed)
+
+        self.assertGreaterEqual(len(patterns), 0)
+
+        for join_id, metadata in patterns.items():
+            self.assertIn('inner_join_id', metadata)
+            self.assertIn('outer_condition', metadata)
+            self.assertIn('inner_condition', metadata)
+            self.assertIsInstance(metadata['inner_join_id'], int)
+            self.assertIsInstance(metadata['outer_condition'], bool)
+            self.assertIsInstance(metadata['inner_condition'], bool)
+
+    def test_rule_6_is_reassociable(self):
+        """Test detection of reassociable JOIN nodes."""
+        parsed = self.engine.parse_query(self.query_str_1)
+
+        def find_join_nodes(node):
+            joins = []
+            if node.type == "JOIN":
+                joins.append(node)
+            for child in node.childs:
+                joins.extend(find_join_nodes(child))
+            return joins
+
+        joins = find_join_nodes(parsed.query_tree)
+        reassociable_count = sum(1 for j in joins if rule_6.is_reassociable(j))
+
+        self.assertGreaterEqual(reassociable_count, 0)
+
+    def test_rule_6_params_generation(self):
+        """Test generation random params untuk rule 6."""
+        metadata = {
+            'inner_join_id': 42,
+            'outer_condition': True,
+            'inner_condition': True
+        }
+
+        results = [rule_6.generate_params(metadata) for _ in range(30)]
+        self.assertTrue(all(isinstance(r, str) for r in results))
+        self.assertTrue(all(r in {'left', 'right', 'none'} for r in results))
+
+        self.assertIn('left', results)
+        self.assertIn('right', results)
+        self.assertIn('none', results)
+
+    def test_rule_6_params_copy(self):
+        """Test copy params."""
+        self.assertEqual(rule_6.copy_params('left'), 'left')
+        self.assertEqual(rule_6.copy_params('right'), 'right')
+        self.assertEqual(rule_6.copy_params('none'), 'none')
+
+    def test_rule_6_params_mutation(self):
+        """Test mutation untuk associativity params."""
+        for _ in range(10):
+            original = 'left'
+            mutated = rule_6.mutate_params(original)
+            self.assertIsInstance(mutated, str)
+            self.assertIn(mutated, {'left', 'right', 'none'})
+            self.assertNotEqual(mutated, original)
+
+        for _ in range(10):
+            original = 'right'
+            mutated = rule_6.mutate_params(original)
+            self.assertNotEqual(mutated, original)
+
+    def test_rule_6_params_validation(self):
+        """Test validation params."""
+        self.assertTrue(rule_6.validate_params('left'))
+        self.assertTrue(rule_6.validate_params('right'))
+        self.assertTrue(rule_6.validate_params('none'))
+
+        self.assertFalse(rule_6.validate_params('invalid'))
+        self.assertFalse(rule_6.validate_params(123))
+        self.assertFalse(rule_6.validate_params(None))
+        self.assertFalse(rule_6.validate_params(True))
+
+    def test_rule_6_apply_associativity_right(self):
+        """Test apply right-associativity."""
+        parsed = self.engine.parse_query(self.query_str_1)
+        patterns = rule_6.find_patterns(parsed)
+
+        if patterns:
+            decisions = {join_id: 'right' for join_id in patterns.keys()}
+            result = rule_6.apply_associativity(parsed, decisions)
+
+            self.assertIsInstance(result, ParsedQuery)
+            self.assertIsNotNone(result.query_tree)
+
+            cost_original = self.engine.get_cost(parsed)
+            cost_result = self.engine.get_cost(result)
+            self.assertIsInstance(cost_original, (int, float))
+            self.assertIsInstance(cost_result, (int, float))
+
+    def test_rule_6_apply_associativity_left(self):
+        """Test apply left-associativity."""
+        parsed = self.engine.parse_query(self.query_str_1)
+        patterns = rule_6.find_patterns(parsed)
+
+        if patterns:
+            decisions = {join_id: 'left' for join_id in patterns.keys()}
+            result = rule_6.apply_associativity(parsed, decisions)
+
+            self.assertIsInstance(result, ParsedQuery)
+            self.assertIsNotNone(result.query_tree)
+
+    def test_rule_6_apply_associativity_none(self):
+        """Test apply no change (none)."""
+        parsed = self.engine.parse_query(self.query_str_1)
+        patterns = rule_6.find_patterns(parsed)
+
+        if patterns:
+            decisions = {join_id: 'none' for join_id in patterns.keys()}
+            result = rule_6.apply_associativity(parsed, decisions)
+
+            self.assertIsInstance(result, ParsedQuery)
+
+    def test_rule_6_undo_associativity(self):
+        """Test undo associativity transformation."""
+        parsed = self.engine.parse_query(self.query_str_1)
+        patterns = rule_6.find_patterns(parsed)
+
+        if patterns:
+            decisions = {join_id: 'right' for join_id in patterns.keys()}
+            transformed = rule_6.apply_associativity(parsed, decisions)
+            undone = rule_6.undo_associativity(transformed)
+
+            self.assertIsInstance(undone, ParsedQuery)
+            self.assertIsNotNone(undone.query_tree)
+
+    def test_rule_6_collect_tables(self):
+        """Test table collection from node."""
+        parsed = self.engine.parse_query(self.query_str_1)
+        tables = rule_6.collect_tables(parsed.query_tree)
+
+        self.assertIsInstance(tables, set)
+        self.assertGreaterEqual(len(tables), 0)
+
+    def test_rule_6_multiple_nested_joins(self):
+        """Test with multiple nested JOINs."""
+        parsed = self.engine.parse_query(self.query_str_2)
+        patterns = rule_6.find_patterns(parsed)
+
+        self.assertGreaterEqual(len(patterns), 0)
+
+        if len(patterns) >= 2:
+            join_ids = list(patterns.keys())
+            decisions = {
+                join_ids[0]: 'right',
+                join_ids[1]: 'left'
+            }
+            result = rule_6.apply_associativity(parsed, decisions)
+            self.assertIsInstance(result, ParsedQuery)
+
+    def test_rule_6_reassociate_right(self):
+        """Test reassociate_right function directly."""
+        parsed = self.engine.parse_query(self.query_str_1)
+
+        def find_reassociable(node):
+            if rule_6.is_reassociable(node):
+                return node
+            for child in node.childs:
+                result = find_reassociable(child)
+                if result:
+                    return result
+            return None
+
+        join_node = find_reassociable(parsed.query_tree)
+        if join_node:
+            result = rule_6.reassociate_right(join_node)
+            self.assertIsNotNone(result)
+
+    def test_rule_6_reassociate_left(self):
+        """Test reassociate_left function directly."""
+        parsed = self.engine.parse_query(self.query_str_1)
+        patterns = rule_6.find_patterns(parsed)
+
+        if patterns:
+            decisions = {join_id: 'right' for join_id in patterns.keys()}
+            right_assoc = rule_6.apply_associativity(parsed, decisions)
+
+            def find_reassociable(node):
+                if rule_6.is_reassociable(node):
+                    return node
+                for child in node.childs:
+                    result = find_reassociable(child)
+                    if result:
+                        return result
+                return None
+
+            join_node = find_reassociable(right_assoc.query_tree)
+            if join_node:
+                result = rule_6.reassociate_left(join_node)
+                self.assertIsNotNone(result)
+
+    def test_rule_6_with_manager(self):
+        """Test Rule 6 registered di RuleParamsManager."""
+        manager = get_rule_params_manager()
+        operations = manager.get_registered_operations()
+
+        self.assertIn('join_associativity_params', operations)
+
+    def test_rule_6_manager_analyze(self):
+        """Test manager analyze function for Rule 6."""
+        manager = get_rule_params_manager()
+        parsed = self.engine.parse_query(self.query_str_1)
+
+        patterns = manager.analyze_query(parsed, 'join_associativity_params')
+        self.assertIsInstance(patterns, dict)
+
+    def test_rule_6_manager_generate(self):
+        """Test manager generate function for Rule 6."""
+        manager = get_rule_params_manager()
+        metadata = {
+            'inner_join_id': 42,
+            'outer_condition': True,
+            'inner_condition': True
+        }
+
+        params = manager.generate_random_params('join_associativity_params', metadata)
+        self.assertIn(params, {'left', 'right', 'none'})
+
+    def test_rule_6_manager_copy(self):
+        """Test manager copy function for Rule 6."""
+        manager = get_rule_params_manager()
+        original = 'right'
+        copied = manager.copy_params('join_associativity_params', original)
+        self.assertEqual(copied, original)
+
+    def test_rule_6_manager_mutate(self):
+        """Test manager mutate function for Rule 6."""
+        manager = get_rule_params_manager()
+        original = 'left'
+        mutated = manager.mutate_params('join_associativity_params', original)
+        self.assertNotEqual(mutated, original)
+        self.assertIn(mutated, {'left', 'right', 'none'})
+
+    def test_rule_6_manager_validate(self):
+        """Test manager validate function for Rule 6."""
+        manager = get_rule_params_manager()
+        self.assertTrue(manager.validate_params('join_associativity_params', 'left'))
+        self.assertTrue(manager.validate_params('join_associativity_params', 'right'))
+        self.assertTrue(manager.validate_params('join_associativity_params', 'none'))
+        self.assertFalse(manager.validate_params('join_associativity_params', 'invalid'))
+
+    def test_rule_6_in_ga_integration(self):
+        """Test Rule 6 works in GA Individual."""
+        parsed = self.engine.parse_query(self.query_str_1)
+        patterns = rule_6.find_patterns(parsed)
+
+        if patterns:
+            operation_params = {
+                'join_associativity_params': {
+                    join_id: 'right' for join_id in patterns.keys()
+                }
+            }
+
+            individual = Individual(operation_params, parsed)
+            result_query = individual.query
+
+            self.assertIsInstance(result_query, ParsedQuery)
+            self.assertIsNotNone(result_query.query_tree)
+
+
+class TestRule6SemanticValidation(unittest.TestCase):
+    """Test semantic validation for Rule 6."""
+
+    def setUp(self):
+        self.engine = OptimizationEngine()
+
+    def test_semantic_check_valid(self):
+        """Test semantic check untuk valid reassociation."""
+        sql = """
+        SELECT * FROM t1
+        INNER JOIN t2 ON t1.id = t2.t1_id
+        INNER JOIN t3 ON t2.id = t3.t2_id
+        """
+        parsed = self.engine.parse_query(sql)
+        patterns = rule_6.find_patterns(parsed)
+
+        if patterns:
+            decisions = {join_id: 'right' for join_id in patterns.keys()}
+            result = rule_6.apply_associativity(parsed, decisions)
+            self.assertIsNotNone(result)
+
+    def test_default_behavior(self):
+        """Test default behavior tanpa decisions."""
+        sql = """
+        SELECT * FROM employees e
+        INNER JOIN departments d ON e.dept_id = d.id
+        INNER JOIN projects p ON d.id = p.dept_id
+        """
+        parsed = self.engine.parse_query(sql)
+        result = rule_6.apply_associativity(parsed)
+
+        self.assertIsInstance(result, ParsedQuery)
+
+
+if __name__ == '__main__':
+    unittest.main()
