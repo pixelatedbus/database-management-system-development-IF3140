@@ -5,7 +5,9 @@ Genetic Algorithm
 import random
 from typing import Callable, Any
 from query_optimizer.optimization_engine import ParsedQuery, OptimizationEngine
-from query_optimizer.rule import rule_4
+from query_optimizer.rule.rule_1_2 import apply_rule1_rule2
+from query_optimizer.rule.rule_5 import apply_join_commutativity
+from query_optimizer.rule import rule_4, rule_6
 from query_optimizer.rule_params_manager import get_rule_params_manager
 
 
@@ -64,18 +66,21 @@ class Individual:
         filter_params = self.operation_params.get('filter_params', {})
         join_child_params = self.operation_params.get('join_child_params', {})
         join_params = self.operation_params.get('join_params', {})
+        join_associativity_params = self.operation_params.get('join_associativity_params', {})
         
         # Step 1: Apply Rule 1&2 (filter operations)
         if filter_params:
-            from query_optimizer.rule.rule_1_2 import apply_rule1_rule2
             current_query, filter_params = apply_rule1_rule2(current_query, filter_params)
         
         # Step 2: Apply Rule 5 (join child order)
         if join_child_params:
-            from query_optimizer.rule.rule_5 import apply_join_commutativity
             current_query, join_child_params = apply_join_commutativity(current_query, join_child_params)
         
-        # Step 3: Apply Rule 4 (join merge)
+        # Step 3: Apply Rule 6 (join associativity)
+        if join_associativity_params:
+            current_query = rule_6.apply_associativity(current_query, join_associativity_params)
+        
+        # Step 4: Apply Rule 4 (join merge)
         if join_params:
             current_query, join_params, filter_params = rule_4.apply_merge(
                 current_query, join_params, filter_params
@@ -85,7 +90,8 @@ class Individual:
         self.operation_params = {
             'filter_params': filter_params,
             'join_child_params': join_child_params,
-            'join_params': join_params
+            'join_params': join_params,
+            'join_associativity_params': join_associativity_params
         }
         
         return current_query

@@ -5,6 +5,8 @@ Centralized management untuk semua operation parameters dalam Genetic Algorithm.
 Menggunakan parameter umum berdasarkan tipe operasi:
 - filter_params: Parameter untuk filter operations (Rule 1 + 2 - AND operators)
 - join_params: Parameter untuk join operations (Rule 4 - Push selection into joins)
+- join_child_params: Parameter untuk join commutativity (Rule 5 - Swap join children)
+- join_associativity_params: Parameter untuk join associativity (Rule 6 - Reassociate nested joins)
 
 Struktur params menggunakan format:
 {
@@ -45,6 +47,17 @@ Contoh join_params:
 - {42: [10, 15]}  → Merge conditions 10 dan 15 ke JOIN dengan ID 42
 - {57: []}        → Keep FILTER separate untuk JOIN dengan ID 57
 - {88: [5, 8, 12]} → Merge conditions 5, 8, dan 12 ke JOIN dengan ID 88
+
+Format join_associativity_params:
+- {join_id: 'left'|'right'|'none'}
+- 'left': Left-associate (shift joins to left)
+- 'right': Right-associate (shift joins to right)
+- 'none': Keep current structure
+
+Contoh join_associativity_params:
+- {42: 'right'}  → Right-associate JOIN 42: ((E1⋈E2)⋈E3) → (E1⋈(E2⋈E3))
+- {57: 'left'}   → Left-associate JOIN 57: (E1⋈(E2⋈E3)) → ((E1⋈E2)⋈E3)
+- {88: 'none'}   → Keep JOIN 88 structure unchanged
 """
 
 from typing import Any, Literal
@@ -52,7 +65,7 @@ from query_optimizer.optimization_engine import ParsedQuery
 import random
 
 
-OperationType = Literal['filter_params', 'join_params', 'join_child_params']
+OperationType = Literal['filter_params', 'join_params', 'join_child_params', 'join_associativity_params']
 
 
 class RuleParamsManager:
@@ -255,6 +268,32 @@ class RuleParamsManager:
             copy_func=copy_join_child_order,
             mutate_func=mutate_join_child_order,
             validate_func=validate_join_child_order
+        )
+
+        from query_optimizer.rule import rule_6
+
+        def analyze_join_associativity(query: ParsedQuery) -> dict[int, Any]:
+            return rule_6.find_patterns(query)
+
+        def generate_associativity_params(metadata: dict) -> str:
+            return rule_6.generate_params(metadata)
+
+        def copy_associativity_params(params: str) -> str:
+            return rule_6.copy_params(params)
+
+        def mutate_associativity_params(params: str) -> str:
+            return rule_6.mutate_params(params)
+
+        def validate_associativity_params(params: str) -> bool:
+            return rule_6.validate_params(params)
+
+        self.register_operation(
+            operation_name='join_associativity_params',
+            analyze_func=analyze_join_associativity,
+            generate_func=generate_associativity_params,
+            copy_func=copy_associativity_params,
+            mutate_func=mutate_associativity_params,
+            validate_func=validate_associativity_params
         )
 
 
