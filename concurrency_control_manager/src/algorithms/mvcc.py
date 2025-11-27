@@ -6,7 +6,7 @@ from ..transaction import Transaction
 from ..row import Row
 from ..action import Action
 from ..log_handler import LogHandler
-from ..response import Response
+from ..response import AlgorithmResponse
 from ..enums import TransactionStatus, ActionType, ActionStatus
 
 class MVCCVariant(Enum):
@@ -63,7 +63,7 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
         self.next_action_id: int = 1                                # Action counter untuk generate action_id
         self.lock_queue: Dict[str, List[Tuple[int, str]]] = {}      # Lock queue (untuk MV2PL)
     
-    def begin_transaction(self, transaction: Transaction) -> Response:
+    def begin_transaction(self, transaction: Transaction) -> AlgorithmResponse:
         if self.variant == MVCCVariant.MVTO:
             timestamp = transaction.transaction_id
         else:
@@ -84,12 +84,12 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
                 f"BEGIN (TS={timestamp}, variant={self.variant.value})"
             )
         
-        return Response(
+        return AlgorithmResponse(
             allowed=True,
             message=f"Transaction T{transaction.transaction_id} started with TS={timestamp}"
         )
     
-    def validate_read(self, transaction: Transaction, row: Row) -> Response:
+    def validate_read(self, transaction: Transaction, row: Row) -> AlgorithmResponse:
         action = Action(
             action_id=self._generate_action_id(),
             transaction_id=transaction.transaction_id,
@@ -126,9 +126,9 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
                 status
             )
         
-        return Response(allowed=success, message=message, value=value)
+        return AlgorithmResponse(allowed=success, message=message, value=value)
     
-    def validate_write(self, transaction: Transaction, row: Row) -> Response:
+    def validate_write(self, transaction: Transaction, row: Row) -> AlgorithmResponse:
         action = Action(
             action_id=self._generate_action_id(),
             transaction_id=transaction.transaction_id,
@@ -168,16 +168,16 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
                 status
             )
         
-        return Response(allowed=success, message=message)
+        return AlgorithmResponse(allowed=success, message=message)
     
-    def commit_transaction(self, transaction: Transaction) -> Response:
+    def commit_transaction(self, transaction: Transaction) -> AlgorithmResponse:
         if transaction.transaction_id not in self.transaction_info:
-            return Response(False, f"Transaction T{transaction.transaction_id} not found")
+            return AlgorithmResponse(False, f"Transaction T{transaction.transaction_id} not found")
         
         trans_info = self.transaction_info[transaction.transaction_id]
         
         if transaction.status == TransactionStatus.Aborted:
-            return Response(False, f"Transaction T{transaction.transaction_id} already aborted")
+            return AlgorithmResponse(False, f"Transaction T{transaction.transaction_id} already aborted")
         
         if self.variant == MVCCVariant.MVTO:
             success, message = self._commit_mvto(transaction, trans_info)
@@ -195,11 +195,11 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
             event = "COMMIT" if success else "ABORT"
             self.log_handler.log_transaction_event(transaction.transaction_id, event)
         
-        return Response(allowed=success, message=message)
+        return AlgorithmResponse(allowed=success, message=message)
     
-    def abort_transaction(self, transaction: Transaction) -> Response:
+    def abort_transaction(self, transaction: Transaction) -> AlgorithmResponse:
         if transaction.transaction_id not in self.transaction_info:
-            return Response(True, f"Transaction T{transaction.transaction_id} not found")
+            return AlgorithmResponse(True, f"Transaction T{transaction.transaction_id} not found")
         
         trans_info = self.transaction_info[transaction.transaction_id]
         trans_info.rollback_count += 1
@@ -216,18 +216,18 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
                 f"ABORT (rollback #{trans_info.rollback_count})"
             )
         
-        return Response(
+        return AlgorithmResponse(
             allowed=True,
             message=f"Transaction T{transaction.transaction_id} aborted"
         )
     
-    def check_permission(self, t: Transaction, obj: Row, action: ActionType) -> Response:
+    def check_permission(self, t: Transaction, obj: Row, action: ActionType) -> AlgorithmResponse:
         if action == ActionType.READ:
             return self.validate_read(t, obj)
         elif action == ActionType.WRITE:
             return self.validate_write(t, obj)
         else:
-            return type('Response', (), {
+            return type('AlgorithmResponse', (), {
                 'allowed': False,
                 'message': f"Unknown action type: {action}"
             })()
@@ -323,10 +323,10 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
         
         return new_timestamp
     
-    def _commit_mvto(self, transaction: Transaction) -> Tuple[bool, str]:
+    def _commit_mvto(self, transaction: Transaction, trans_info: TransactionInfo) -> Tuple[bool, str]:
         return True, f"T{transaction.transaction_id} COMMIT"
     
-    def _read_mv2pl(self, transaction: Transaction, row: Row) -> Tuple[bool, Any, str]:
+    def _read_mv2pl(self, transaction: Transaction, row: Row, trans_info: TransactionInfo) -> Tuple[bool, Any, str]:
         object_id = row.object_id
         trans_info = self.transaction_info[transaction.transaction_id]
         
