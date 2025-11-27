@@ -10,8 +10,9 @@ processor.execute_query("INSERT INTO test_users (id, name, age) VALUES (1, 'mifu
 processor.execute_query("INSERT INTO test_users (id, name, age) VALUES (2, 'link', 30)", client_id=0)
 processor.execute_query("INSERT INTO test_users (id, name, age) VALUES (3, 'samus', 28)", client_id=0)
 processor.execute_query("INSERT INTO test_users (id, name, age) VALUES (4, 'mario', 35)", client_id=0)
-processor.execute_query("CREATE TABLE test_products (id INTEGER, product_name VARCHAR(50), proce INTEGER)", client_id=0)
-processor.execute_query("INSERT INTO test_products (id, product_name, age) VALUES (1, 'alkohol', 25)", client_id=0)
+processor.execute_query("DROP TABLE test_products", client_id=0)
+processor.execute_query("CREATE TABLE test_products (id INTEGER, product_name VARCHAR(50), price INTEGER)", client_id=0)
+processor.execute_query("INSERT INTO test_products (id, product_name, price) VALUES (1, 'alkohol', 25)", client_id=0)
 processor.execute_query("COMMIT", client_id=0)
 print("=== test_users ready ===\n")
 
