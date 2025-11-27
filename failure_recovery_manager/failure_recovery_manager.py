@@ -4,6 +4,7 @@ from recovery_criteria import RecoveryCriteria
 from logFile import logFile
 import threading
 from typing import List
+from datetime import datetime
 
 # replace with the correct one later
 from fake_exec_result import ExecutionResult 
@@ -35,9 +36,18 @@ class FailureRecovery:
         self.wal_size: int = wal_size
         self.undo_list: List[int] = []
 
+        self.current_transaction_id: int = 0
+        self.current_table_name: str = ""
+
         # singleton class attr
         self._initialized = True
     
+    def _flush_mem_wal(self):
+        with self.lock:
+            for infos in self.mem_wal:
+                logFile.write_log_execRes(infos)
+        self.mem_wal = []
+
     def write_log(self, info: ExecutionResult):
         '''
         Important notice: this only updates the memory's write-ahead log, maybe some adjustment is needed in the future? idk
@@ -45,6 +55,10 @@ class FailureRecovery:
         
         - if a commit is to occur, write from mem_wal to .log file via logFile
         '''
+
+        # Maybe set the current transaction id here?
+        self.current_transaction_id = info.transaction_id
+        self.current_table_name = info.table_name
 
         try:
             with self.lock:
@@ -70,8 +84,65 @@ class FailureRecovery:
         pass
 
     def _save_checkpoint(self):
+
+        checkpoint_log = log(
+            transaction_id=self.current_transaction_id, 
+            action=actiontype.checkpoint,
+            timestamp=datetime.now(),
+            old_data=self.undo_list,
+            new_data=None,
+            table_name=self.current_table_name
+        )
+
+        # Dalam method ini, semua entri dalam write-ahead log sejak checkpoint terakhir akan digunakan untuk memperbarui data di physical storage, agar data tetap sinkron.
+        # Assume this is the part where we renew the .dat file
+
+        self.logFile.write_log(checkpoint_log)
+
         pass
+
+    def _recover_transaction(self, transaction_id: int) -> None:
+        self._flush_mem_wal()
+
+        l_list = self.logFile.get_logs()
+
+
+        for i in range(len(l_list) - 1, -1, -1):
+            print(i, end=" ")
+            l = l_list[i]
+            if l.transaction_id == transaction_id:
+                if l.action == actiontype.write:
+                    undo_log = log(
+                        transaction_id=l.transaction_id,
+                        action=actiontype.write,
+                        timestamp=datetime.now(), # TODO: check if this is correct?
+                        old_data=l.new_data,
+                        new_data=l.old_data,
+                        table_name=l.table_name
+                    )
+                    self.logFile.write_log(undo_log)
+                    # TODO: DO THE UNDO TO THE BUFFER HERE
+                else: # start, commit, abort.
+                    break
+        abort_log = log(
+            transaction_id=transaction_id,
+            action=actiontype.abort,
+            timestamp=datetime.now(), # TODO: check if this is correct?
+            old_data={},
+            new_data={}
+        )
+        self.logFile.write_log(abort_log)
     
-    def recover(self, criteria: RecoveryCriteria = None):
-        pass
+    def recover(self, criteria: RecoveryCriteria = None) -> None:
+        '''
+        Implemented so far: transactional recovery
+        TODO: add recovery for system crash (?)
+        '''
+        if criteria == None:
+            raise("Recovery Criteria cannot be None")
+        
+        # For now we assume its transactional
+        self._recover_transaction(criteria.transaction_id)
+        
+
 

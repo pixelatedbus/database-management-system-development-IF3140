@@ -91,7 +91,7 @@ class logFile:
 
                 # append to buffer
                 self.logFile_buffer.append(valid[0] + "\n")  # there's a downside of using this... subject to change
-                print(self.logFile_buffer)
+                # print(self.logFile_buffer)
 
                 # TODO: fix broken log files
         
@@ -142,8 +142,8 @@ class logFile:
                     data['new_data'] = {}
                 
                 l_list.append(log(
-                    transaction_id=data['transaction_id'],
-                    action=data['action'],
+                    transaction_id=int(data['transaction_id']),
+                    action=int(data['action']),
                     timestamp=data['timestamp'],
                     new_data=data['new_data'],
                     old_data=data['old_data'],
