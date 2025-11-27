@@ -5,6 +5,8 @@ Buffers write operations per transaction until COMMIT
 
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
+import logging
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -25,7 +27,7 @@ class TransactionBuffer:
     def start_transaction(self, transaction_id: int):
         self.buffers[transaction_id] = []
         self.uncommitted_data[transaction_id] = {}
-        print(f"[BUFFER] Started buffer for transaction {transaction_id}")
+        logger.info(f"[BUFFER] Started buffer for transaction {transaction_id}")
     
     def buffer_insert(self, transaction_id: int, table_name: str, row_data: Dict[str, Any]):
         if transaction_id not in self.buffers:
@@ -42,7 +44,7 @@ class TransactionBuffer:
             self.uncommitted_data[transaction_id][table_name] = []
         self.uncommitted_data[transaction_id][table_name].append(row_data.copy())
         
-        print(f"[BUFFER] Buffered INSERT into '{table_name}' for transaction {transaction_id}")
+        logger.info(f"[BUFFER] Buffered INSERT into '{table_name}' for transaction {transaction_id}")
     
     def buffer_update(self, transaction_id: int, table_name: str, 
                      old_data: Dict[str, Any], new_data: Dict[str, Any], 
@@ -67,7 +69,7 @@ class TransactionBuffer:
             if self._matches_conditions(row, old_data):
                 uncommitted_rows[i] = new_data.copy()
         
-        print(f"[BUFFER] Buffered UPDATE on '{table_name}' for transaction {transaction_id}")
+        logger.info(f"[BUFFER] Buffered UPDATE on '{table_name}' for transaction {transaction_id}")
     
     def buffer_delete(self, transaction_id: int, table_name: str, 
                      row_data: Dict[str, Any], conditions: List[Any]):
@@ -89,7 +91,7 @@ class TransactionBuffer:
                 if not self._matches_conditions(row, row_data)
             ]
         
-        print(f"[BUFFER] Buffered DELETE from '{table_name}' for transaction {transaction_id}")
+        logger.info(f"[BUFFER] Buffered DELETE from '{table_name}' for transaction {transaction_id}")
     
     def get_buffered_operations(self, transaction_id: int) -> List[BufferedOperation]:
         """Get all buffered operations for a transaction"""
@@ -107,7 +109,7 @@ class TransactionBuffer:
             del self.buffers[transaction_id]
         if transaction_id in self.uncommitted_data:
             del self.uncommitted_data[transaction_id]
-        print(f"[BUFFER] Cleared buffer for transaction {transaction_id}")
+        logger.info(f"[BUFFER] Cleared buffer for transaction {transaction_id}")
     
     def _matches_conditions(self, row: Dict[str, Any], target: Dict[str, Any]) -> bool:
         """Check if row matches target data (for finding rows to update/delete)"""

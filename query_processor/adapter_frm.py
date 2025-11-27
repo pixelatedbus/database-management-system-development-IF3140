@@ -6,7 +6,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from failure_recovery_manager.failure_recovery_manager import FailureRecovery
 from failure_recovery_manager.fake_exec_result import ExecutionResult
-
+import logging
+logger = logging.getLogger(__name__)
 
 class AdapterFRM:
     """
@@ -36,7 +37,7 @@ class AdapterFRM:
         exec_result.message = f"Transaction {transaction_id}: {action} on {table_name}"
         
         self.frm.write_log(exec_result)
-        print(f"[FRM] Logged {action} for transaction {transaction_id} on table '{table_name}'")
+        logger.info(f"[FRM] Logged {action} for transaction {transaction_id} on table '{table_name}'")
     
     def log_begin(self, transaction_id: int) -> None:
         """Log transaction start"""

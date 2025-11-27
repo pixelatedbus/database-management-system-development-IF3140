@@ -536,7 +536,7 @@ class QueryExecution:
         
         Uses READ-MODIFY-WRITE pattern to support expressions like SET y = y + 1
         """
-        print(f"\n[UPDATE] Executing UPDATE statement...")
+        logger.info(f"\n[UPDATE] Executing UPDATE statement...")
         
         if len(query_tree.childs) < 2:
             raise ValueError("UPDATE requires at least RELATION and ASSIGNMENT")
