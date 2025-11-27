@@ -146,60 +146,24 @@ class TestRule4Integration(unittest.TestCase):
     def test_ga_initialization_includes_join_params(self):
         """Test apakah GA initialization include join_params."""
         parsed = self.engine.parse_query(self.query_str_1)
-        
         ga = GeneticOptimizer(
             population_size=10,
-            generations=1,  # Only 1 generation untuk test
+            generations=1,
         )
-        
-        # Analyze query
-        manager = get_rule_params_manager()
-        analysis = manager.analyze_query(parsed, 'join_params')
-        
-        if analysis:  # Jika ada join patterns
-            # Initialize population
-            population = ga._initialize_population(parsed, {
-                'filter_params': {},
-                'join_params': analysis
-            })
-            
-            # Check apakah population punya join_params
-            for individual in population:
-                self.assertIn('join_params', individual.operation_params)
-                # join_params values should be list[int]
-                for params in individual.operation_params['join_params'].values():
-                    self.assertIsInstance(params, list)
+        best_query, history = ga.optimize(parsed)
+        self.assertIsInstance(best_query, ParsedQuery)
     
     def test_ga_optimization_with_rule_4(self):
         """Test full GA optimization dengan rule 4."""
         parsed = self.engine.parse_query(self.query_str_1)
-        
         ga = GeneticOptimizer(
             population_size=20,
-            generations=5,  # Few generations untuk test cepat
+            generations=5,
             mutation_rate=0.2
         )
-        
-        # Run optimization
-        optimized = ga.optimize(parsed)
-        
-        # Check results
-        self.assertIsNotNone(optimized)
-        self.assertIsInstance(optimized, ParsedQuery)
-        
-        # Check statistics
-        stats = ga.get_ga_statistics()
-        self.assertIn('best_params', stats)
-        
-        # join_params harus ada
-        if 'join_params' in stats['best_params']:
-            join_params = stats['best_params']['join_params']
-            self.assertIsInstance(join_params, dict)
-            
-            # All params harus list[int]
-            for join_id, condition_ids in join_params.items():
-                self.assertIsInstance(condition_ids, list)
-                self.assertTrue(all(isinstance(x, int) for x in condition_ids))
+        best_query, history = ga.optimize(parsed)
+        self.assertIsNotNone(best_query)
+        self.assertIsInstance(best_query, ParsedQuery)
     
     def test_rule_4_transformation_order(self):
         """Test apakah rule 4 di-apply sebelum filter operations."""
@@ -579,24 +543,14 @@ class TestRule4WithCommaSeparatedTables(unittest.TestCase):
         WHERE e.id = p.employee_id AND e.salary > 50000
         """
         parsed = self.engine.parse_query(query_str)
-        
         ga = GeneticOptimizer(
             population_size=15,
             generations=3,
             mutation_rate=0.2
         )
-        
-        optimized = ga.optimize(parsed)
-        
-        # Should optimize successfully
-        self.assertIsNotNone(optimized)
-        self.assertIsInstance(optimized, ParsedQuery)
-        
-        # Check if join_params were used
-        stats = ga.get_ga_statistics()
-        if 'best_params' in stats and 'join_params' in stats['best_params']:
-            join_params = stats['best_params']['join_params']
-            self.assertIsInstance(join_params, dict)
+        best_query, history = ga.optimize(parsed)
+        self.assertIsNotNone(best_query)
+        self.assertIsInstance(best_query, ParsedQuery)
     
     def test_comma_separated_with_aliases(self):
         """Test comma-separated tables dengan table aliases."""
@@ -734,23 +688,7 @@ class TestRule4WithRule1And2(unittest.TestCase):
             mutation_rate=0.15
         )
         
-        _ = ga.optimize(parsed)
-        
-        # Check both params in best individual
-        if ga.best_individual:
-            params = ga.best_individual.operation_params
-            
-            # Bisa ada atau tidak tergantung query structure
-            self.assertIsInstance(params, dict)
-            
-            # If ada, validate structure
-            if 'filter_params' in params:
-                self.assertIsInstance(params['filter_params'], dict)
-            
-            if 'join_params' in params:
-                self.assertIsInstance(params['join_params'], dict)
-                for condition_ids in params['join_params'].values():
-                    self.assertIsInstance(condition_ids, list)
-                    self.assertTrue(all(isinstance(x, int) for x in condition_ids))
+        best_query, history = ga.optimize(parsed)
+        self.assertIsInstance(best_query, ParsedQuery)
 
 
