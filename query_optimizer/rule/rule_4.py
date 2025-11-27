@@ -1,71 +1,78 @@
+"""
+Rule 4 (Join ID Key Edition)
+Key Params: int (Join Node ID)
+Value: list[int] (Selected IDs to merge)
+
+Menggunakan Join ID sebagai anchor karena posisi join relatif stabil,
+berbeda dengan Filter yang strukturnya cair (Signature-based).
+"""
+
 from query_optimizer.optimization_engine import ParsedQuery
 from query_optimizer.query_tree import QueryTree
+import random
 
+# --- HELPER FUNCTIONS ---
 
 def get_underlying_join(node: QueryTree) -> QueryTree | None:
-
-    current = node
-    while current:
-        if current.type == "JOIN":
-            return current
-        elif current.type == "FILTER":
-            if not current.childs:
+    """
+    Menelusuri ke bawah melewati tumpukan FILTER untuk menemukan JOIN.
+    """
+    curr = node
+    while curr:
+        if curr.type == "JOIN":
+            return curr
+        elif curr.type == "FILTER":
+            if not curr.childs:
                 return None
-            current = current.childs[0]
+            curr = curr.childs[0]
         else:
             return None
     return None
 
+def collect_conditions(node: QueryTree) -> list[QueryTree]:
+    if not node: return []
+    if node.type == "OPERATOR" and node.val == "AND":
+        return list(node.childs)
+    return [node]
 
-def is_mergeable(node: QueryTree) -> bool:
 
-    if not node or node.type != "FILTER":
-        return False
-    if len(node.childs) != 2:
-        return False
-    
-    # Cek apakah source path berujung ke JOIN
-    target_join = get_underlying_join(node.childs[0])
-    return target_join is not None
-
+# --- MAIN LOGIC ---
 
 def find_patterns(query: ParsedQuery) -> dict[int, dict]:
     """
-    Analisa query untuk mencari semua JOIN yang bisa menerima kondisi dari FILTER.
-    Support Deep Search: Bisa menemukan JOIN meskipun tertutup banyak FILTER.
+    Analisa query untuk mencari Join target.
+    Returns: {join_id: metadata}
     """
     result = {}
-
+    
     def walk(node: QueryTree):
-        if node is None:
-            return
+        if node is None: return
 
-        if is_mergeable(node):
-            # Gunakan deep search untuk menemukan join target
+        if node.type == "FILTER" and len(node.childs) == 2:
+            # Cek apakah di bawah filter ini ada Join
             join = get_underlying_join(node.childs[0])
-            filter_condition = node.childs[1]
-            
-            # Init entry jika belum ada
-            if join.id not in result:
-                result[join.id] = {
-                    'filter_conditions': [],
-                    'existing_conditions': []
-                }
+            if join:
+                # Kumpulkan kandidat kondisi dari filter ini
+                filter_conds = collect_conditions(node.childs[1])
+                candidates = [c.id for c in filter_conds]
                 
-                # Collect existing conditions di JOIN (hanya sekali per JOIN)
-                if len(join.childs) >= 3:
-                    existing_conds = collect_conditions(join.childs[2])
-                    result[join.id]['existing_conditions'] = [c.id for c in existing_conds]
-
-            # Collect candidates dari FILTER ini dan tambahkan ke list
-            filter_conditions = collect_conditions(filter_condition)
-            new_candidates = [c.id for c in filter_conditions]
-            
-            # Append unique candidates
-            current_list = result[join.id]['filter_conditions']
-            for cand in new_candidates:
-                if cand not in current_list:
-                    current_list.append(cand)
+                if candidates:
+                    # Init entry untuk Join ID ini jika belum ada
+                    if join.id not in result:
+                        result[join.id] = {
+                            'filter_conditions': [],
+                            'existing_conditions': []
+                        }
+                        # Ambil kondisi eksisting di dalam join (hanya sekali init)
+                        if len(join.childs) >= 3:
+                            exist_conds = collect_conditions(join.childs[2])
+                            result[join.id]['existing_conditions'] = [c.id for c in exist_conds]
+                    
+                    # Tambahkan kandidat unik ke list
+                    current_cands = result[join.id]['filter_conditions']
+                    for c in candidates:
+                        if c not in current_cands:
+                            current_cands.append(c)
 
         for child in node.childs:
             walk(child)
@@ -74,202 +81,169 @@ def find_patterns(query: ParsedQuery) -> dict[int, dict]:
     return result
 
 
-def collect_conditions(condition_node: QueryTree) -> list[QueryTree]:
-    """
-    Collect all condition nodes from a condition tree.
-    """
-    if condition_node is None:
-        return []
-    
-    if condition_node.type == "OPERATOR" and condition_node.val == "AND":
-        return list(condition_node.childs)
-    else:
-        return [condition_node]
-
-
 def apply_merge(
     query: ParsedQuery,
-    join_params: dict[int, list[int]],
-    filter_params: dict[int, list[int | list[int]]]
-) -> tuple[ParsedQuery, dict[int, list[int]], dict[int, list[int | list[int]]]]:
+    join_params: dict[int, list[int]],  # Key sekarang INT (Join ID)
+    filter_params: dict
+) -> tuple[ParsedQuery, dict, dict]:
     
     if not join_params:
         return query, join_params, filter_params
     
-    new_tree = clone(query.query_tree, preserve_id=True)
-    merged_condition_ids = set()
+    new_tree = query.query_tree.clone(deep=True, preserve_id=True)
+    merged_ids = set()
     
     def walk(node: QueryTree) -> QueryTree:
-        nonlocal merged_condition_ids
+        nonlocal merged_ids
+        if node is None: return None
         
-        if node is None:
-            return None
-
-        # Post-order traversal (proses anak dulu) penting agar update dari bawah naik ke atas
+        # Post-order traversal (Bottom-up)
+        # Penting agar jika ada rantai filter F1 -> F2 -> Join,
+        # kita proses F2 dulu, merge ke Join, lalu F1 melihat Join yang sudah ter-merge.
         for i in range(len(node.childs)):
             node.childs[i] = walk(node.childs[i])
-
-        if is_mergeable(node):
-            # Cari target join menggunakan deep search
+            
+        if node.type == "FILTER" and len(node.childs) == 2:
             target_join = get_underlying_join(node.childs[0])
             
+            # Cek Join ID di params
             if target_join and target_join.id in join_params:
-                condition_ids_to_merge = join_params[target_join.id]
+                to_merge_global = join_params[target_join.id]
                 
-                # Cek apakah FILTER ini punya kondisi yang diminta JOIN
-                # Kita hanya memproses kondisi yang dimiliki FILTER node ini saat ini
-                current_filter_conditions = collect_conditions(node.childs[1])
-                relevant_conditions = [c.id for c in current_filter_conditions if c.id in condition_ids_to_merge]
+                # Kita hanya bisa merge kondisi yang ADA di node Filter ini
+                # Filter ini mungkin hanya memiliki sebagian dari 'to_merge_global'
+                # jika filternya terpecah-pecah (cascaded).
                 
-                if relevant_conditions:
-                    merged_condition_ids.update(relevant_conditions)
-                    return merge_selected_conditions(node, condition_ids_to_merge)
-
+                return merge_selected(node, to_merge_global, target_join, merged_ids)
+                        
         return node
 
-    transformed_tree = walk(new_tree)
-    transformed_query = ParsedQuery(transformed_tree, query.query)
+    transformed = walk(new_tree)
     
-    updated_filter_params = adjust_filter_params(filter_params, merged_condition_ids)
+    # Update filter_params: Hapus ID yang sudah di-merge
+    # filter_params tetap menggunakan Signature Key (frozenset) karena dari Rule 1
+    updated_filter_params = adjust_filter_params(filter_params, merged_ids)
     
-    return transformed_query, join_params, updated_filter_params
+    return ParsedQuery(transformed, query.query), join_params, updated_filter_params
 
 
-def merge_selected_conditions(filter_node: QueryTree, global_merge_ids: list[int]) -> QueryTree:
-
-    source_child = filter_node.childs[0]
-    filter_condition_node = filter_node.childs[1]
+def merge_selected(filter_node, merge_ids_target, target_join, merged_ids_tracker):
+    """
+    Memindahkan kondisi dari Filter ke Join.
+    """
+    conds = collect_conditions(filter_node.childs[1])
     
-    # 1. Identifikasi kondisi di level ini yang harus turun
-    all_local_conditions = collect_conditions(filter_condition_node)
+    keep = []
+    move = []
     
-    conditions_to_move_down = []
-    conditions_to_stay_here = []
-    
-    for cond in all_local_conditions:
-        if cond.id in global_merge_ids:
-            conditions_to_move_down.append(clone(cond, preserve_id=True))
+    for c in conds:
+        if c.id in merge_ids_target:
+            move.append(c.clone(deep=True, preserve_id=True))
+            merged_ids_tracker.add(c.id) # Track bahwa ID ini berhasil dipindah
         else:
-            conditions_to_stay_here.append(clone(cond, preserve_id=True))
-    
-    if not conditions_to_move_down:
+            keep.append(c.clone(deep=True, preserve_id=True))
+        
+    if not move:
         return filter_node
-
-    # 2. Modifikasi Source (Subtree) untuk meng-inject kondisi ke JOIN
-    # Kita harus mencari JOIN di dalam source_child dan menyuntikkan kondisi
-    # Karena kita sudah clone tree di awal proses apply_merge, kita bisa mutate source_child
     
-    target_join = get_underlying_join(source_child)
-    if not target_join:
-        # Should not happen if is_mergeable checked out, but safety first
-        return filter_node
-
-    # Ubah type JOIN menjadi INNER jika sebelumnya CROSS/None
+    # Inject ke Join
+    # Ubah type jadi INNER jika sebelumnya CROSS/None
     if target_join.val in ("CROSS", "", None):
         target_join.val = "INNER"
     
-    # Siapkan kondisi yang akan ditambahkan ke JOIN
-    conditions_to_inject = conditions_to_move_down
-    
-    # Ambil kondisi eksisting di JOIN (jika ada)
-    existing_join_conditions = []
+    existing = []
     if len(target_join.childs) >= 3:
-        existing_join_conditions = collect_conditions(target_join.childs[2])
-    
-    # Gabungkan
-    final_join_conditions = existing_join_conditions + conditions_to_inject
-    
-    # Reconstruct kondisi di JOIN
-    if len(final_join_conditions) == 1:
-        # Jika JOIN child < 3, kita expand childs
-        if len(target_join.childs) < 3:
-            target_join.add_child(final_join_conditions[0])
-        else:
-            target_join.childs[2] = final_join_conditions[0]
-    else:
-        # Wrap in AND
-        and_node = QueryTree("OPERATOR", "AND")
-        for cond in final_join_conditions:
-            and_node.add_child(cond)
+        existing = collect_conditions(target_join.childs[2])
         
-        if len(target_join.childs) < 3:
-            target_join.add_child(and_node)
-        else:
-            target_join.childs[2] = and_node
-            
-    # 3. Return Node Pengganti
-    # Jika masih ada kondisi yang tertinggal di FILTER level ini
-    if conditions_to_stay_here:
-        new_filter = QueryTree("FILTER", "")
-        new_filter.add_child(source_child) # source_child sudah termutasi (JOIN-nya sudah update)
-        
-        if len(conditions_to_stay_here) == 1:
-            new_filter.add_child(conditions_to_stay_here[0])
-        else:
-            and_node = QueryTree("OPERATOR", "AND")
-            for cond in conditions_to_stay_here:
-                and_node.add_child(cond)
-            new_filter.add_child(and_node)
-        return new_filter
+    final = existing + move
+    
+    # Rebuild Join Condition Node
+    if len(final) == 1:
+        cond_node = final[0]
     else:
-        # Semua kondisi turun ke bawah, FILTER node ini hilang
-        return source_child
+        cond_node = QueryTree("OPERATOR", "AND")
+        for c in final: cond_node.add_child(c)
+        
+    if len(target_join.childs) < 3:
+        target_join.add_child(cond_node)
+    else:
+        target_join.childs[2] = cond_node
+    
+    # Rebuild Filter Node (Sisa kondisi yang tidak di-merge)
+    if not keep:
+        # Jika semua kondisi pindah, Filter node hilang, return childnya (source)
+        # Child 0 adalah jalur menuju Join (yang sekarang sudah termodifikasi)
+        return filter_node.childs[0]
+    
+    new_filter = QueryTree("FILTER")
+    new_filter.add_child(filter_node.childs[0])
+    
+    if len(keep) == 1:
+        new_filter.add_child(keep[0])
+    else:
+        and_op = QueryTree("OPERATOR", "AND")
+        for c in keep: and_op.add_child(c)
+        new_filter.add_child(and_op)
+        
+    return new_filter
 
 
-def adjust_filter_params(
-    filter_params: dict[int, list[int | list[int]]],
-    merged_condition_ids: set[int]
-) -> dict[int, list[int | list[int]]]:
-    if not merged_condition_ids:
+def adjust_filter_params(filter_params: dict, merged_ids: set) -> dict:
+    """
+    Membersihkan ID yang sudah di-merge dari filter_params.
+    Key tetap Signature (frozenset) agar konsisten dengan Rule 1.
+    """
+    if not merged_ids or not filter_params:
         return filter_params
     
     updated = {}
-    for op_id, order_spec in filter_params.items():
+    for sig, order_spec in filter_params.items():
         new_order = []
         for item in order_spec:
             if isinstance(item, list):
-                filtered_group = [cid for cid in item if cid not in merged_condition_ids]
-                if len(filtered_group) == 1:
-                    new_order.append(filtered_group[0])
-                elif len(filtered_group) > 1:
-                    new_order.append(filtered_group)
+                # Group handling
+                kept = [x for x in item if x not in merged_ids]
+                if len(kept) == 1: new_order.append(kept[0])
+                elif len(kept) > 1: new_order.append(kept)
             else:
-                if item not in merged_condition_ids:
+                # Single handling
+                if item not in merged_ids:
                     new_order.append(item)
-        if new_order:
-            updated[op_id] = new_order
+        
+        # Simpan entry walaupun kosong (opsional, tapi aman untuk kestabilan key)
+        updated[sig] = new_order
+            
     return updated
 
 
+# --- GENERATE & MUTATE ---
+
 def generate_params(metadata: dict) -> list[int]:
-    import random
-    filter_conditions = metadata.get('filter_conditions', [])
-    if not filter_conditions:
-        return []
-    # Logic: Randomly select subset of conditions to merge
-    num_to_merge = random.randint(0, len(filter_conditions))
-    if num_to_merge == 0:
-        return []
-    return random.sample(filter_conditions, num_to_merge)
+    """
+    Generate list of condition IDs to merge for a specific JOIN ID.
+    """
+    cands = metadata.get('filter_conditions', [])
+    if not cands: return []
+    
+    # Randomly select subset
+    num = random.randint(0, len(cands))
+    if num == 0: return []
+    return random.sample(cands, num)
 
+def copy_params(p: list[int]) -> list[int]:
+    return p.copy() if p else []
 
-def copy_params(params: list[int]) -> list[int]:
-    return params.copy() if params else []
+def mutate_params(p: list[int]) -> list[int]:
+    # Simple mutation: remove random condition
+    if p and random.random() < 0.5:
+        p_copy = p.copy()
+        p_copy.pop(random.randint(0, len(p_copy)-1))
+        return p_copy
+    return p
+    # Note: Untuk menambah kondisi (add mutation), kita butuh metadata (candidates).
+    # Implementasi simpel ini hanya support pengurangan/pengacakan subset saat init.
+    # Idealnya mutation punya akses ke metadata context.
 
-
-def mutate_params(params: list[int]) -> list[int]:
-    import random
-    if not params: return params
-    mutated = params.copy()
-    if random.random() < 0.5 and mutated:
-        mutated.pop(random.randint(0, len(mutated) - 1))
-    return mutated
-
-
-def validate_params(params: list[int]) -> bool:
-    if not isinstance(params, list): return False
-    return all(isinstance(x, int) for x in params)
-
-
-def clone(node: QueryTree, preserve_id: bool = False) -> QueryTree:
-    return node.clone(deep=True, preserve_id=preserve_id) if node else None
+def validate_params(p: list[int]) -> bool:
+    if not isinstance(p, list): return False
+    return all(isinstance(x, int) for x in p)
