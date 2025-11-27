@@ -725,8 +725,7 @@ class TestDeterministicRulesInteraction(unittest.TestCase):
         query = ParsedQuery(outer_project, "test")
         
         # Path 1: Rule 3 -> Rule 8
-        from query_optimizer.rule.rule_1 import clone_tree
-        cloned1 = clone_tree(query.query_tree)
+        cloned1 = query.query_tree.clone()
         query1 = ParsedQuery(cloned1, query.query)
         result1 = seleksi_proyeksi(query1)
         result1 = push_projection_over_joins(result1)
@@ -735,7 +734,7 @@ class TestDeterministicRulesInteraction(unittest.TestCase):
         check_query(result1.query_tree)
         
         # Path 2: Rule 8 -> Rule 3
-        cloned2 = clone_tree(query.query_tree)
+        cloned2 = query.query_tree.clone()
         query2 = ParsedQuery(cloned2, query.query)
         result2 = push_projection_over_joins(query2)
         result2 = seleksi_proyeksi(result2)

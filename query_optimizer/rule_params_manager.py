@@ -5,6 +5,8 @@ Centralized management untuk semua operation parameters dalam Genetic Algorithm.
 Menggunakan parameter umum berdasarkan tipe operasi:
 - filter_params: Parameter untuk filter operations (Rule 1 + 2 - AND operators)
 - join_params: Parameter untuk join operations (Rule 4 - Push selection into joins)
+- join_child_params: Parameter untuk join commutativity (Rule 5 - Swap join children)
+- join_associativity_params: Parameter untuk join associativity (Rule 6 - Reassociate nested joins)
 
 Struktur params menggunakan format:
 {
@@ -45,6 +47,17 @@ Contoh join_params:
 - {42: [10, 15]}  → Merge conditions 10 dan 15 ke JOIN dengan ID 42
 - {57: []}        → Keep FILTER separate untuk JOIN dengan ID 57
 - {88: [5, 8, 12]} → Merge conditions 5, 8, dan 12 ke JOIN dengan ID 88
+
+Format join_associativity_params:
+- {join_id: 'left'|'right'|'none'}
+- 'left': Left-associate (shift joins to left)
+- 'right': Right-associate (shift joins to right)
+- 'none': Keep current structure
+
+Contoh join_associativity_params:
+- {42: 'right'}  → Right-associate JOIN 42: ((E1⋈E2)⋈E3) → (E1⋈(E2⋈E3))
+- {57: 'left'}   → Left-associate JOIN 57: (E1⋈(E2⋈E3)) → ((E1⋈E2)⋈E3)
+- {88: 'none'}   → Keep JOIN 88 structure unchanged
 """
 
 from typing import Any, Literal
@@ -52,7 +65,7 @@ from query_optimizer.optimization_engine import ParsedQuery
 import random
 
 
-OperationType = Literal['filter_params', 'join_params']
+OperationType = Literal['filter_params', 'join_params', 'join_child_params', 'join_associativity_params']
 
 
 class RuleParamsManager:
@@ -127,120 +140,35 @@ class RuleParamsManager:
     def _register_default_operations(self):
         """Register default operations."""
         # Filter operations (Rule 1 + Rule 2)
-        from query_optimizer.rule.rule_1 import (
+        from query_optimizer.rule.rule_1_2 import (
             analyze_and_operators,
+            generate_random_rule_1_params,
             copy_rule_1_params,
             mutate_rule_1_params,
         )
-        from query_optimizer.rule.rule_2 import (
-            mutate_rule_2_params,
-        )
         
-        def generate_filter_params(num_conditions: int) -> list[int | list[int]]:
-            """
-            Generate random filter params dengan unified order format.
-            
-            Format: Mixed list of int | list[int]
-            - int: single condition (akan di-cascade sebagai FILTER tunggal)
-            - list: grouped conditions (tetap dalam AND)
-            
-            Example outputs:
-            - [0, 1, 2]     : All single, no grouping
-            - [2, [0, 1]]   : cond2 single, [cond0, cond1] grouped
-            - [[0, 1, 2]]   : All grouped in one AND
-            """
-            indices = list(range(num_conditions))
-            random.shuffle(indices)
-            
-            # Random grouping
-            if num_conditions <= 1:
-                return indices
-            
-            num_groups = random.randint(0, max(1, num_conditions // 2))
-            
-            if num_groups == 0:
-                # Semua single
-                return indices
-            
-            # Buat groups
-            result = []
-            remaining = indices.copy()
-            
-            for _ in range(num_groups):
-                if len(remaining) < 2:
-                    break
-                
-                # Ambil 2-3 kondisi untuk di-group
-                group_size = random.randint(2, min(3, len(remaining)))
-                group = remaining[:group_size]
-                remaining = remaining[group_size:]
-                result.append(group)
-            
-            # Sisanya jadi single
-            result.extend(remaining)
-            
-            return result
-        
-        def copy_filter_params(params: list[int | list[int]]) -> list[int | list[int]]:
-            """Deep copy filter params."""
-            return copy_rule_1_params(params)
-        
-        def mutate_filter_params(params: list[int | list[int]]) -> list[int | list[int]]:
-            """
-            Mutate filter params dengan strategi campuran:
-            - Reorder: swap positions (dari mutate_rule_2)
-            - Group/ungroup: gabung/pisah conditions (dari mutate_rule_1)
-            """
-            # Randomly choose mutation strategy
-            if random.random() < 0.5:
-                # Strategy 1: Mutate as cascade (group/ungroup)
-                return mutate_rule_1_params(params)
-            else:
-                # Strategy 2: Flatten, mutate as permutation, then reconstruct groups
-                # Flatten to get all indices
-                flat = []
-                for item in params:
-                    if isinstance(item, list):
-                        flat.extend(item)
-                    else:
-                        flat.append(item)
-                
-                # Apply permutation mutation
-                mutated_flat = mutate_rule_2_params(flat)
-                
-                # Reconstruct with similar grouping structure
-                result = []
-                idx = 0
-                for item in params:
-                    if isinstance(item, list):
-                        group_size = len(item)
-                        result.append(mutated_flat[idx:idx+group_size])
-                        idx += group_size
-                    else:
-                        result.append(mutated_flat[idx])
-                        idx += 1
-                
-                return result
+        def generate_filter_params(condition_ids: list[int]) -> list[int | list[int]]:
+            """Generate random filter params dari condition IDs."""
+            return generate_random_rule_1_params(condition_ids)
         
         def validate_filter_params(params: list[int | list[int]]) -> bool:
             """Validate filter params structure."""
             if not isinstance(params, list):
                 return False
-            # Check all indices present
-            flat = []
             for item in params:
                 if isinstance(item, list):
-                    flat.extend(item)
-                else:
-                    flat.append(item)
-            return len(flat) > 0 and len(set(flat)) == len(flat)
+                    if not all(isinstance(x, int) for x in item):
+                        return False
+                elif not isinstance(item, int):
+                    return False
+            return True
         
         self.register_operation(
             operation_name='filter_params',
-            analyze_func=analyze_and_operators,  # Same analysis for both rules
-            generate_func=generate_filter_params,
-            copy_func=copy_filter_params,
-            mutate_func=mutate_filter_params,
+            analyze_func=analyze_and_operators,  # Returns {op_id: [cond_ids]}
+            generate_func=generate_filter_params,  # Input: [cond_ids]
+            copy_func=copy_rule_1_params,
+            mutate_func=mutate_rule_1_params,
             validate_func=validate_filter_params
         )
         
@@ -292,6 +220,80 @@ class RuleParamsManager:
             copy_func=copy_join_params,
             mutate_func=mutate_join_params,
             validate_func=validate_join_params
+        )
+        
+        # Join child order operations (Rule 5: Join commutativity)
+        from query_optimizer.rule import rule_5
+        
+        def analyze_join_children(query: ParsedQuery) -> dict[int, Any]:
+            """Find all JOIN nodes untuk rule 5.
+            
+            Returns:
+                Dict[join_id, metadata]
+                metadata = {
+                    'left_child': node,
+                    'right_child': node,
+                    'join_type': str
+                }
+            """
+            return rule_5.find_join_nodes(query)
+        
+        def generate_join_child_order(metadata: dict) -> bool:
+            """Generate random bool: swap children or not.
+            
+            Args:
+                metadata: JOIN node metadata
+            
+            Returns:
+                bool: True = swap, False = keep original
+            """
+            return rule_5.generate_join_child_params(metadata)
+        
+        def copy_join_child_order(params: bool) -> bool:
+            """Copy join child order params."""
+            return rule_5.copy_join_child_params(params)
+        
+        def mutate_join_child_order(params: bool) -> bool:
+            """Mutate join child order by flipping."""
+            return rule_5.mutate_join_child_params(params)
+        
+        def validate_join_child_order(params: bool) -> bool:
+            """Validate join child order params."""
+            return rule_5.validate_join_child_params(params)
+        
+        self.register_operation(
+            operation_name='join_child_params',
+            analyze_func=analyze_join_children,
+            generate_func=generate_join_child_order,
+            copy_func=copy_join_child_order,
+            mutate_func=mutate_join_child_order,
+            validate_func=validate_join_child_order
+        )
+
+        from query_optimizer.rule import rule_6
+
+        def analyze_join_associativity(query: ParsedQuery) -> dict[int, Any]:
+            return rule_6.find_patterns(query)
+
+        def generate_associativity_params(metadata: dict) -> str:
+            return rule_6.generate_params(metadata)
+
+        def copy_associativity_params(params: str) -> str:
+            return rule_6.copy_params(params)
+
+        def mutate_associativity_params(params: str) -> str:
+            return rule_6.mutate_params(params)
+
+        def validate_associativity_params(params: str) -> bool:
+            return rule_6.validate_params(params)
+
+        self.register_operation(
+            operation_name='join_associativity_params',
+            analyze_func=analyze_join_associativity,
+            generate_func=generate_associativity_params,
+            copy_func=copy_associativity_params,
+            mutate_func=mutate_associativity_params,
+            validate_func=validate_associativity_params
         )
 
 

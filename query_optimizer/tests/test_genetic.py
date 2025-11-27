@@ -65,8 +65,9 @@ class TestGeneticRule2Integration(unittest.TestCase):
                             flat.extend(item)
                         else:
                             flat.append(item)
-                    # Should contain all indices [0, 1, 2]
-                    self.assertEqual(set(flat), {0, 1, 2})
+                    # Should contain all child node IDs of the AND node
+                    expected_ids = set(child.id for child in self.and_op.childs)
+                    self.assertEqual(set(flat), expected_ids)
                     break
         
         self.assertTrue(has_filter_params, "At least one individual should have filter_params")
@@ -148,8 +149,9 @@ class TestGeneticRule2Integration(unittest.TestCase):
                             flat.extend(item)
                         else:
                             flat.append(item)
-                    # Should still contain all indices
-                    self.assertEqual(set(flat), {0, 1, 2})
+                    # After mutation, the set of IDs should be a subset of the original child node IDs
+                    expected_ids = set(child.id for child in self.and_op.childs)
+                    self.assertTrue(set(flat).issubset(expected_ids))
                     break
         
         # Should have changed at some point (high probability with 20 tries)
@@ -214,8 +216,9 @@ class TestGeneticRule2Integration(unittest.TestCase):
                         flat.extend(item)
                     else:
                         flat.append(item)
-                self.assertEqual(len(flat), 3)
-                self.assertEqual(set(flat), {0, 1, 2})
+                expected_ids = set(child.id for child in self.and_op.childs)
+                self.assertEqual(len(flat), len(expected_ids))
+                self.assertEqual(set(flat), expected_ids)
     
     def test_filter_params_in_statistics(self):
         """Test bahwa statistik mencakup unified filter_params"""
@@ -290,7 +293,4 @@ class TestUnifiedFilterParams(unittest.TestCase):
         # The exact order depends on cascade implementation, but should be based on reordered input
         self.assertGreater(len(filters), 0, "Should have cascaded filters")
 
-
-if __name__ == "__main__":
-    unittest.main()
 

@@ -18,24 +18,6 @@ def print_separator(title=""):
         print(f"  {title}")
         print("="*70)
 
-
-def print_query_tree(query_tree, indent=0):
-    """Print query tree structure recursively"""
-    if query_tree is None:
-        return
-    
-    prefix = "  " * indent
-    node_info = f"{query_tree.type}"
-    
-    if query_tree.val:
-        node_info += f" [{query_tree.val}]"
-    
-    print(f"{prefix}{node_info}")
-    
-    for child in query_tree.childs:
-        print_query_tree(child, indent + 1)
-
-
 def print_help():
     """Print help message for demo usage"""
     print_separator("QUERY OPTIMIZER DEMO HELP")
@@ -64,7 +46,12 @@ def print_help():
     print("  4.4  -   Scenario: Nested filters")
     print("  4.5  -   Scenario: Merge into already-merged JOIN & undo options")
     print("")
-    print("  5    - Rule 5: Cascade Projections (Coming soon)")
+    print("  5    - Rule 5: Join Commutativity")
+    print("  5.1  -   Scenario: Basic JOIN swap")
+    print("  5.2  -   Scenario: Multiple JOINs selective swap")
+    print("  5.3  -   Scenario: NATURAL JOIN commutativity")
+    print("  5.4  -   Scenario: Bidirectional transformation")
+    print("  5.5  -   Scenario: GA exploration of join orders")
     print("")
     print("  6    - Rule 6: Associativity/Commutativity of Joins (Coming soon)")
     print("")
@@ -79,7 +66,8 @@ def print_help():
     print("General demos:")
     print("  9    - Parse: Parse SQL queries and show query trees")
     print("  10   - Optimize: Compare with/without Genetic Algorithm")
-    print("  11   - Genetic Algorithm: Full demo with all rules")
+    print("  11   - Genetic Algorithm: Two-phase optimization (Deterministic + GA)")
+    print("         Complex query with multiple JOINs, filters, and projections")
     print("  12   - All: Run all demos sequentially")
     print_separator()
 
@@ -119,41 +107,6 @@ def demo_rule_1():
     print("- Best order depends on selectivity of conditions")
     print("- More selective conditions should be evaluated first")
     print("- Genetic Algorithm can find optimal configuration (see Demo 11)")
-
-
-# =============================================================================
-# RULE 2: REORDER AND CONDITIONS
-# =============================================================================
-
-def demo_rule_2():
-    """Demo 2: Rule 2 - Reorder AND Conditions (all scenarios)"""
-    print_separator("DEMO 2: Rule 2 - Reorder AND Conditions (Seleksi Komutatif)")
-    
-    print("\nThis demo has multiple scenarios:")
-    print("  2.1 - Original order baseline")
-    print("  2.2 - Reversed order")
-    print("  2.3 - Finding optimal order")
-    
-    print("\nRunning all scenarios...")
-    
-    from query_optimizer.subdemo.demo_rule2_scenarios import (
-        scenario_1_original_order,
-        scenario_2_reversed_order,
-        scenario_3_optimal_order
-    )
-    
-    scenario_1_original_order()
-    scenario_2_reversed_order()
-    scenario_3_optimal_order()
-    
-    print_separator("DEMO 2 COMPLETED")
-    print("\nKey Insights:")
-    print("- Rule 2 reorders AND conditions without changing structure")
-    print("- All conditions remain in single AND operator")
-    print("- Different orders can have different costs")
-    print("- Best order evaluates most selective conditions first")
-    print("- Genetic Algorithm can find optimal order (see Demo 11)")
-
 
 # =============================================================================
 # RULE 3: PROJECTION ELIMINATION
@@ -226,6 +179,47 @@ def demo_rule_4():
     print("- undo_merge() provides reverse transformation (INNER -> CROSS)")
     print("- Transformations are bidirectional and semantics-preserving")
     print("- Genetic Algorithm can find optimal decision (see Demo 11)")
+
+
+# =============================================================================
+# RULE 5: JOIN COMMUTATIVITY
+# =============================================================================
+
+def demo_rule_5():
+    """Demo 5: Rule 5 - Join Commutativity (all scenarios)"""
+    print_separator("DEMO 5: Rule 5 - Join Commutativity")
+    
+    print("\nThis demo has multiple scenarios:")
+    print("  5.1 - Basic JOIN swap (A JOIN B → B JOIN A)")
+    print("  5.2 - Multiple JOINs selective swap")
+    print("  5.3 - NATURAL JOIN commutativity")
+    print("  5.4 - Bidirectional transformation (swap twice)")
+    print("  5.5 - GA exploration of join orders")
+    
+    print("\nRunning all scenarios...")
+    
+    from query_optimizer.subdemo.demo_rule5_scenarios import (
+        scenario_1_basic_swap,
+        scenario_2_multiple_joins,
+        scenario_3_natural_join,
+        scenario_4_bidirectional,
+        scenario_5_ga_exploration
+    )
+    
+    scenario_1_basic_swap()
+    scenario_2_multiple_joins()
+    scenario_3_natural_join()
+    scenario_4_bidirectional()
+    scenario_5_ga_exploration()
+    
+    print_separator("DEMO 5 COMPLETED")
+    print("\nKey Insights:")
+    print("- Rule 5 enables swapping JOIN children: JOIN(A,B) ≡ JOIN(B,A)")
+    print("- Works with all JOIN types: INNER, LEFT, RIGHT, CROSS, NATURAL")
+    print("- join_child_params uses boolean per JOIN (True=swap, False=keep)")
+    print("- Different orders can have different costs")
+    print("- Transformation is bidirectional (swap twice returns original)")
+    print("- Genetic Algorithm can find optimal join order (see Demo 11)")
 
 
 # =============================================================================
@@ -366,77 +360,76 @@ def demo_optimized():
 # =============================================================================
 
 def demo_genetic_with_rules():
-    """Demo 11: Genetic Optimizer with Rule 1 + Rule 2 + Rule 4 Integration"""
-    print_separator("DEMO 11: GENETIC ALGORITHM with Unified Rules (1, 2, 4)")
+    """Demo 11: Genetic Optimizer with All Rules Integration"""
+    print_separator("DEMO 11: GENETIC ALGORITHM (Deterministic + GA Optimization)")
     
     from query_optimizer.query_tree import QueryTree
-    from query_optimizer.optimization_engine import ParsedQuery
+    from query_optimizer.optimization_engine import ParsedQuery, OptimizationEngine
     from query_optimizer.genetic_optimizer import GeneticOptimizer
+    from query_optimizer.rule import rule_3, rule_7, rule_8
     
-    # Build query with multiple AND conditions
-    print("\nBuilding query with 4 conjunctive conditions...")
-    
-    relation = QueryTree("RELATION", "orders")
-    
-    comp1 = QueryTree("COMPARISON", ">")   # amount > 1000
-    comp2 = QueryTree("COMPARISON", "=")   # status = 'pending'
-    comp3 = QueryTree("COMPARISON", "<")   # date < '2024-01-01'
-    comp4 = QueryTree("COMPARISON", "!=")  # customer_id != null
-    
-    and_operator = QueryTree("OPERATOR", "AND")
-    and_operator.add_child(comp1)
-    and_operator.add_child(comp2)
-    and_operator.add_child(comp3)
-    and_operator.add_child(comp4)
-    
-    filter_node = QueryTree("FILTER")
-    filter_node.add_child(relation)
-    filter_node.add_child(and_operator)
-    
-    query = ParsedQuery(
-        filter_node,
-        "SELECT * FROM orders WHERE amount > 1000 AND status = 'pending' AND date < '2024-01-01' AND customer_id != null"
-    )
+    sql = "SELECT users.name, orders.amount, products.name FROM users JOIN orders ON users.id = orders.user_id JOIN products ON orders.product_id = products.id WHERE (amount > 100 OR amount < 10) AND price > 10"
+
+    engine = OptimizationEngine()
+    query = engine.parse_query(sql)
     
     print("\nOriginal Query Tree:")
-    print_query_tree(query.query_tree)
+    print(query.query_tree.tree())
     
-    print_separator("Running Genetic Optimizer...")
-    print("Population Size: 20")
-    print("Generations: 10")
-    print("Mutation Rate: 0.2")
-    print("Using Unified Filter Parameters (combines reordering and cascading)")
+    engine = OptimizationEngine()
+    original_cost = engine.get_cost(query)
+    print(f"\nOriginal Cost: {original_cost:.2f}")
+    
+    deterministic_query = rule_3.seleksi_proyeksi(query)
+    
+    deterministic_query = rule_7.apply_pushdown(deterministic_query)
+    
+    deterministic_query = rule_8.push_projection_over_joins(deterministic_query)
+    
+    print("\nQuery Tree after Deterministic Rules:")
+    print(deterministic_query.query_tree.tree())
+    
+    deterministic_cost = engine.get_cost(deterministic_query)
+    print(f"\nCost after Deterministic Rules: {deterministic_cost:.2f}")
+    print(f"Improvement: {original_cost - deterministic_cost:.2f} ({((original_cost - deterministic_cost) / original_cost * 100):.1f}%)")
     
     ga = GeneticOptimizer(
-        population_size=20,
-        generations=10,
+        population_size=30,
+        generations=15,
         mutation_rate=0.2,
         crossover_rate=0.8,
-        elitism=2,
+        elitism=3,
     )
     
-    optimized_query = ga.optimize(query)
+    optimized_query = ga.optimize(deterministic_query)
     
     print_separator("Optimization Results")
     
     print("\nOptimized Query Tree:")
-    print_query_tree(optimized_query.query_tree)
+    print(optimized_query.query_tree.tree())
     
     print_separator("Statistics")
     
     stats = ga.get_ga_statistics()
-    print(f"\nBest Fitness: {stats['best_fitness']:.2f}")
+    print(f"\nBest Fitness (GA): {stats['best_fitness']:.2f}")
     print(f"Total Generations: {stats['generations']}")
     
+    print("\n" + "="*70)
+    print("Cost Progression:")
+    print(f"  Original Query:           {original_cost:.2f}")
+    print(f"  After Deterministic:      {deterministic_cost:.2f} ({((original_cost - deterministic_cost) / original_cost * 100):+.1f}%)")
+    print(f"  After GA:                 {stats['best_fitness']:.2f} ({((deterministic_cost - stats['best_fitness']) / deterministic_cost * 100):+.1f}%)")
+    print(f"  Total Improvement:        {original_cost - stats['best_fitness']:.2f} ({((original_cost - stats['best_fitness']) / original_cost * 100):.1f}%)")
+    print("="*70)
+    
     if stats['best_params']:
-        print("\nBest Parameters Found:")
+        print("\nBest GA Parameters Found:")
         for param_type, node_params in stats['best_params'].items():
             if node_params:
                 print(f"\n  {param_type}:")
                 for node_id, params in node_params.items():
                     print(f"    Node {node_id}: {params}")
                     if param_type == 'filter_params' and isinstance(params, list):
-                        # Unified format: explains both reorder and cascade
                         explanations = []
                         for item in params:
                             if isinstance(item, list):
@@ -445,7 +438,14 @@ def demo_genetic_with_rules():
                                 explanations.append(f"{item} single")
                         if explanations:
                             print(f"      → {' -> '.join(explanations)}")
-                            print("      → Unified format combines reordering and cascading")
+                    elif param_type == 'join_params' and isinstance(params, dict):
+                        for key, cond_list in params.items():
+                            if cond_list:
+                                print(f"      → {key}: merge conditions")
+                            else:
+                                print(f"      → {key}: keep separate")
+                    elif param_type == 'join_child_params' and isinstance(params, bool):
+                        print(f"      → {'SWAP children' if params else 'KEEP original order'}")
     
     print_separator("Fitness Progress")
     print("\nGen | Best    | Average | Worst")
@@ -467,12 +467,6 @@ def demo_genetic_with_rules():
                   f"{last['worst_fitness']:7.2f}")
     
     print_separator("DEMO 11 COMPLETED")
-    print("\nKey Insights:")
-    print("- Genetic Algorithm explores large search space efficiently")
-    print("- Unified filter_params format combines reordering and cascading")
-    print("- Finds near-optimal solutions without exhaustive search")
-    print("- Scalable to complex queries with many optimization choices")
-    
     return optimized_query
 
 
@@ -486,9 +480,9 @@ def demo_all():
     
     # Rules
     demo_rule_1()
-    demo_rule_2()
     demo_rule_3()
     demo_rule_4()
+    demo_rule_5()
     demo_rule_7()
     demo_rule_8()
     
@@ -566,31 +560,7 @@ def main():
                     return
                 
                 print_separator("DEMO COMPLETED")
-        
-        # Rule 2: Reorder AND Conditions
-        elif demo_num == 2:
-            if scenario_num is None:
-                demo_rule_2()
-            else:
-                from query_optimizer.subdemo.demo_rule2_scenarios import (
-                    scenario_1_original_order,
-                    scenario_2_reversed_order,
-                    scenario_3_optimal_order
-                )
-                
-                if scenario_num == 1:
-                    scenario_1_original_order()
-                elif scenario_num == 2:
-                    scenario_2_reversed_order()
-                elif scenario_num == 3:
-                    scenario_3_optimal_order()
-                else:
-                    print(f"\n Error: Invalid scenario number {scenario_num}")
-                    print("Valid scenarios: 2.1, 2.2, 2.3")
-                    return
-                
-                print_separator("DEMO COMPLETED")
-        
+               
         # Rule 3: Projection Elimination
         elif demo_num == 3:
             if scenario_num is None:
@@ -642,11 +612,35 @@ def main():
                 
                 print_separator("DEMO COMPLETED")
         
-        # Rule 5: Coming soon
+        # Rule 5: Join Commutativity
         elif demo_num == 5:
-            print_separator("DEMO 5: Rule 5 - Cascade Projections")
-            print("\n⚠ This rule is not yet implemented.")
-            print("Coming soon...")
+            if scenario_num is None:
+                demo_rule_5()
+            else:
+                from query_optimizer.subdemo.demo_rule5_scenarios import (
+                    scenario_1_basic_swap,
+                    scenario_2_multiple_joins,
+                    scenario_3_natural_join,
+                    scenario_4_bidirectional,
+                    scenario_5_ga_exploration
+                )
+                
+                if scenario_num == 1:
+                    scenario_1_basic_swap()
+                elif scenario_num == 2:
+                    scenario_2_multiple_joins()
+                elif scenario_num == 3:
+                    scenario_3_natural_join()
+                elif scenario_num == 4:
+                    scenario_4_bidirectional()
+                elif scenario_num == 5:
+                    scenario_5_ga_exploration()
+                else:
+                    print(f"\n Error: Invalid scenario number {scenario_num}")
+                    print("Valid scenarios: 5.1, 5.2, 5.3, 5.4, 5.5")
+                    return
+                
+                print_separator("DEMO COMPLETED")
         
         # Rule 6: Coming soon
         elif demo_num == 6:
