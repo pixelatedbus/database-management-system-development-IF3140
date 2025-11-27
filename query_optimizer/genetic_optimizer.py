@@ -11,7 +11,7 @@ from query_optimizer.rule.rule_1 import (
     clone_tree
 )
 from query_optimizer.rule.rule_2 import reorder_and_conditions
-from query_optimizer.rule import rule_4
+from query_optimizer.rule import rule_4, rule_6
 from query_optimizer.rule import rule_5
 from query_optimizer.rule_params_manager import get_rule_params_manager
 
@@ -71,26 +71,33 @@ class Individual:
         # Step 1: Apply join child order operations (Rule 5)
         if 'join_child_params' in self.operation_params and self.operation_params['join_child_params']:
             join_child_orders = self.operation_params['join_child_params']
-            
+
             if join_child_orders:
                 current_query = rule_5.join_komutatif(current_query, join_child_orders)
-        
-        # Step 2: Apply join operations (Rule 4)
+
+        # Step 2: Apply join associativity operations (Rule 6)
+        if 'join_associativity_params' in self.operation_params and self.operation_params['join_associativity_params']:
+            associativity_decisions = self.operation_params['join_associativity_params']
+
+            if associativity_decisions:
+                current_query = rule_6.apply_associativity(current_query, associativity_decisions)
+
+        # Step 3: Apply join operations (Rule 4)
         if 'join_params' in self.operation_params and self.operation_params['join_params']:
             join_params = self.operation_params['join_params']
             
             if join_params:
                 current_query = rule_4.apply_merge(current_query, join_params)
         
-        # Step 3: Apply filter operations dengan unified order format
+        # Step 4: Apply filter operations dengan unified order format
         if 'filter_params' in self.operation_params and self.operation_params['filter_params']:
             # Uncascade existing filters first
             query_and = uncascade_filters(current_query)
-            
+
             # Extract unified orders
             unified_orders = self.operation_params['filter_params']
-            
-            # Step 3a: Apply reordering (flatten order untuk reorder_and_conditions)
+
+            # Step 4a: Apply reordering (flatten order untuk reorder_and_conditions)
             reorder_orders = {}
             for node_id, order in unified_orders.items():
                 # Flatten to get pure permutation
@@ -105,7 +112,7 @@ class Individual:
             if reorder_orders:
                 query_and = reorder_and_conditions(query_and, operator_orders=reorder_orders)
             
-            # Step 3b: Apply cascading dengan grouping structure
+            # Step 4b: Apply cascading dengan grouping structure
             if unified_orders:
                 current_query = cascade_filters(query_and, operator_orders=unified_orders)
             else:
