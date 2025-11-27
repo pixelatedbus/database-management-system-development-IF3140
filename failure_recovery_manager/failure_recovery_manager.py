@@ -4,6 +4,7 @@ from recovery_criteria import RecoveryCriteria
 from logFile import logFile
 import threading
 from typing import List
+from datetime import datetime
 
 # replace with the correct one later
 from fake_exec_result import ExecutionResult 
@@ -38,6 +39,12 @@ class FailureRecovery:
         # singleton class attr
         self._initialized = True
     
+    def _flush_mem_wal(self):
+        with self.lock:
+            for infos in self.mem_wal:
+                logFile.write_log_execRes(infos)
+        self.mem_wal = []
+
     def write_log(self, info: ExecutionResult):
         '''
         Important notice: this only updates the memory's write-ahead log, maybe some adjustment is needed in the future? idk
@@ -71,7 +78,49 @@ class FailureRecovery:
 
     def _save_checkpoint(self):
         pass
+
+    def _recover_transaction(self, transaction_id: int) -> None:
+        self._flush_mem_wal()
+
+        l_list = self.logFile.get_logs()
+
+
+        for i in range(len(l_list) - 1, -1, -1):
+            print(i, end=" ")
+            l = l_list[i]
+            if l.transaction_id == transaction_id:
+                if l.action == actiontype.write:
+                    undo_log = log(
+                        transaction_id=l.transaction_id,
+                        action=actiontype.write,
+                        timestamp=datetime.now(), # TODO: check if this is correct?
+                        old_data=l.new_data,
+                        new_data=l.old_data,
+                        table_name=l.table_name
+                    )
+                    self.logFile.write_log(undo_log)
+                    # TODO: DO THE UNDO TO THE BUFFER HERE
+                else: # start, commit, abort.
+                    break
+        abort_log = log(
+            transaction_id=transaction_id,
+            action=actiontype.abort,
+            timestamp=datetime.now(), # TODO: check if this is correct?
+            old_data={},
+            new_data={}
+        )
+        self.logFile.write_log(abort_log)
     
-    def recover(self, criteria: RecoveryCriteria = None):
-        pass
+    def recover(self, criteria: RecoveryCriteria = None) -> None:
+        '''
+        Implemented so far: transactional recovery
+        TODO: add recovery for system crash (?)
+        '''
+        if criteria == None:
+            raise("Recovery Criteria cannot be None")
+        
+        # For now we assume its transactional
+        self._recover_transaction(criteria.transaction_id)
+        
+
 
