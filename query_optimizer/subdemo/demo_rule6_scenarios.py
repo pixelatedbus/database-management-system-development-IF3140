@@ -12,20 +12,19 @@ def scenario_1_basic_reassociation():
     print("\n")
     print_separator("SCENARIO 6.1: Basic JOIN Associativity")
 
-    print("Concept: (A ⋈ B) ⋈ C ≡ A ⋈ (B ⋈ C)")
+    print("Concept: (A JOIN B) JOIN C = A JOIN (B JOIN C)")
     print("Rule: We can change the nesting structure of JOINs")
-    print("Query: SELECT * FROM employees e JOIN departments d ON e.dept_id = d.id JOIN projects p ON d.id = p.dept_id")
+    print("Query: SELECT * FROM employees e JOIN payroll p ON e.id = p.employee_id JOIN accounts a ON p.id = a.payroll_id")
 
     engine = OptimizationEngine()
     sql = """
     SELECT * FROM employees e
-    INNER JOIN departments d ON e.dept_id = d.id
-    INNER JOIN projects p ON d.id = p.dept_id
+    INNER JOIN payroll p ON e.id = p.employee_id
+    INNER JOIN accounts a ON p.id = a.payroll_id
     """
     parsed = engine.parse_query(sql)
 
-    print("\nOriginal Query Tree (Left-Associate: ((E⋈D)⋈P)):")
-    print(parsed.query_tree.tree(show_id=True))
+    print("\nOriginal Query Tree (Left-Associate: ((E JOIN P) JOIN A)):")
     cost_original = engine.get_cost(parsed)
     print(f"Cost: {cost_original:.2f}")
 
@@ -38,18 +37,16 @@ def scenario_1_basic_reassociation():
         print(f"    Inner condition: {metadata['inner_condition']}")
 
     print("\n" + "-"*70)
-    print("Option 1: Keep left-associate ((E⋈D)⋈P)")
+    print("Option 1: Keep left-associate ((E JOIN P) JOIN A)")
     decisions_left = {join_id: 'left' for join_id in patterns.keys()}
     left_assoc = rule_6.apply_associativity(parsed, decisions_left)
-    print(left_assoc.query_tree.tree(show_id=True))
     cost_left = engine.get_cost(left_assoc)
     print(f"Cost: {cost_left:.2f}")
 
     print("\n" + "-"*70)
-    print("Option 2: Right-associate to (E⋈(D⋈P))")
+    print("Option 2: Right-associate to (E JOIN (P JOIN A))")
     decisions_right = {join_id: 'right' for join_id in patterns.keys()}
     right_assoc = rule_6.apply_associativity(parsed, decisions_right)
-    print(right_assoc.query_tree.tree(show_id=True))
     cost_right = engine.get_cost(right_assoc)
     print(f"Cost: {cost_right:.2f}")
 
@@ -57,7 +54,6 @@ def scenario_1_basic_reassociation():
     print("Option 3: No change (keep original)")
     decisions_none = {join_id: 'none' for join_id in patterns.keys()}
     no_change = rule_6.apply_associativity(parsed, decisions_none)
-    print(no_change.query_tree.tree(show_id=True))
     cost_none = engine.get_cost(no_change)
     print(f"Cost: {cost_none:.2f}")
 
@@ -68,11 +64,11 @@ def scenario_1_basic_reassociation():
     print(f"  No change:       {cost_none:.2f}")
 
     best = min([('left', cost_left), ('right', cost_right), ('none', cost_none)], key=lambda x: x[1])
-    print(f"\n✓ Best strategy: {best[0]} with cost {best[1]:.2f}")
+    print(f"\nBest strategy: {best[0]} with cost {best[1]:.2f}")
 
     print("\nKey Point: join_associativity_params = {join_id: 'left'|'right'|'none'}")
-    print("  'left': Shift joins to left - ((A⋈B)⋈C)")
-    print("  'right': Shift joins to right - (A⋈(B⋈C))")
+    print("  'left': Shift joins to left - ((A JOIN B) JOIN C)")
+    print("  'right': Shift joins to right - (A JOIN (B JOIN C))")
     print("  'none': Keep current structure")
 
     return right_assoc, left_assoc, no_change
@@ -88,14 +84,13 @@ def scenario_2_semantic_validation():
 
     engine = OptimizationEngine()
     sql = """
-    SELECT * FROM employees e
-    INNER JOIN departments d ON e.dept_id = d.id
-    INNER JOIN projects p ON d.budget > 100000
+    SELECT * FROM users u
+    INNER JOIN orders o ON u.id = o.user_id
+    INNER JOIN products p ON o.product_id = p.id
     """
     parsed = engine.parse_query(sql)
 
     print("\nOriginal Query Tree:")
-    print(parsed.query_tree.tree(show_id=True))
     cost_original = engine.get_cost(parsed)
     print(f"Cost: {cost_original:.2f}")
 
@@ -107,14 +102,13 @@ def scenario_2_semantic_validation():
         print("Attempting right-associate...")
         decisions = {join_id: 'right' for join_id in patterns.keys()}
         result = rule_6.apply_associativity(parsed, decisions)
-        print(result.query_tree.tree(show_id=True))
         cost_result = engine.get_cost(result)
         print(f"Cost: {cost_result:.2f}")
 
         print("\nAnalysis:")
-        print("✓ Outer condition 'd.budget > 100000' only references departments")
-        print("✓ Can safely move to inner join (D⋈P)")
-        print("✓ Result: E ⋈ (D ⋈_(budget>100000) P)")
+        print("Outer condition references orders and products")
+        print("Can safely reassociate the nested joins")
+        print("Result: U JOIN (O JOIN P)")
     else:
         print("\nNo nested JOIN patterns found for this query structure")
 
@@ -126,36 +120,36 @@ def scenario_3_performance_impact():
     print_separator("SCENARIO 6.3: Performance Impact Analysis")
 
     print("Concept: Join order affects intermediate result size")
-    print("Scenario: Large employees table, medium departments, small projects")
+    print("Scenario: Large users table, medium orders, small products")
 
     engine = OptimizationEngine()
     sql = """
-    SELECT * FROM employees e
-    INNER JOIN departments d ON e.dept_id = d.id
-    INNER JOIN projects p ON d.id = p.dept_id
+    SELECT * FROM users u
+    INNER JOIN orders o ON u.id = o.user_id
+    INNER JOIN products p ON o.product_id = p.id
     """
     parsed = engine.parse_query(sql)
 
     print("\nAssume table sizes:")
-    print("  - employees: 10,000 rows")
-    print("  - departments: 50 rows")
-    print("  - projects: 500 rows (10 per department)")
+    print("  - users: 10,000 rows")
+    print("  - orders: 5,000 rows")
+    print("  - products: 500 rows")
 
     patterns = rule_6.find_patterns(parsed)
 
     print("\n" + "-"*70)
-    print("Strategy 1: Left-Associate ((E⋈D)⋈P)")
-    print("  Step 1: E ⋈ D → 10,000 rows")
-    print("  Step 2: (E⋈D) ⋈ P → 10,000 × 10 = 100,000 comparisons")
+    print("Strategy 1: Left-Associate ((U JOIN O) JOIN P)")
+    print("  Step 1: U JOIN O -> 5,000 rows")
+    print("  Step 2: (U JOIN O) JOIN P -> 5,000 x 500 comparisons")
     decisions_left = {join_id: 'left' for join_id in patterns.keys()}
     left_result = rule_6.apply_associativity(parsed, decisions_left)
     cost_left = engine.get_cost(left_result)
     print(f"  Estimated cost: {cost_left:.2f}")
 
     print("\n" + "-"*70)
-    print("Strategy 2: Right-Associate (E⋈(D⋈P))")
-    print("  Step 1: D ⋈ P → 500 rows")
-    print("  Step 2: E ⋈ (D⋈P) → 10,000 × 500 = 5,000,000 comparisons")
+    print("Strategy 2: Right-Associate (U JOIN (O JOIN P))")
+    print("  Step 1: O JOIN P -> intermediate result")
+    print("  Step 2: U JOIN (O JOIN P) -> different comparisons")
     decisions_right = {join_id: 'right' for join_id in patterns.keys()}
     right_result = rule_6.apply_associativity(parsed, decisions_right)
     cost_right = engine.get_cost(right_result)
@@ -164,17 +158,17 @@ def scenario_3_performance_impact():
     print("\n" + "-"*70)
     print("Analysis:")
     if cost_left < cost_right:
-        print(f"✓ Left-associate is better by {cost_right - cost_left:.2f}")
+        print(f"Left-associate is better by {cost_right - cost_left:.2f}")
         print("  Reason: Smaller intermediate result (10K vs 500)")
     else:
-        print(f"✓ Right-associate is better by {cost_left - cost_right:.2f}")
+        print(f"Right-associate is better by {cost_left - cost_right:.2f}")
         print("  Reason: Depends on join selectivity")
 
     print("\nKey Insight: Optimal associativity depends on:")
     print("  - Table sizes")
     print("  - Join selectivity")
     print("  - Available indexes")
-    print("  → This is why GA exploration is valuable!")
+    print("  -> This is why GA exploration is valuable!")
 
     return left_result, right_result
 
@@ -188,15 +182,14 @@ def scenario_4_complex_nested():
 
     engine = OptimizationEngine()
     sql = """
-    SELECT * FROM employees e
-    INNER JOIN departments d ON e.dept_id = d.id
-    INNER JOIN projects p ON d.id = p.dept_id
-    INNER JOIN tasks t ON p.id = t.project_id
+    SELECT * FROM users u
+    INNER JOIN orders o ON u.id = o.user_id
+    INNER JOIN products p ON o.product_id = p.id
+    INNER JOIN logs l ON u.id = l.user_id
     """
     parsed = engine.parse_query(sql)
 
-    print("\nOriginal Query Tree (Left-Associate: (((E⋈D)⋈P)⋈T)):")
-    print(parsed.query_tree.tree(show_id=True))
+    print("\nOriginal Query Tree (Left-Associate: (((U JOIN O) JOIN P) JOIN L)):")
     cost_original = engine.get_cost(parsed)
     print(f"Cost: {cost_original:.2f}")
 
@@ -234,7 +227,7 @@ def scenario_4_complex_nested():
         print(f"  Strategy 3: {cost3:.2f}")
 
         best = min([('1', cost1), ('2', cost2), ('3', cost3)], key=lambda x: x[1])
-        print(f"\n✓ Best strategy: Strategy {best[0]} with cost {best[1]:.2f}")
+        print(f"\nBest strategy: Strategy {best[0]} with cost {best[1]:.2f}")
 
         return result1, result2, result3
     else:
@@ -243,18 +236,18 @@ def scenario_4_complex_nested():
 
 
 def run_all_scenarios():
-    print("\n" + "█"*70)
+    print("\n" + "="*70)
     print("  RULE 6 DEMO: JOIN ASSOCIATIVITY")
-    print("█"*70)
+    print("="*70)
 
     scenario_1_basic_reassociation()
     scenario_2_semantic_validation()
     scenario_3_performance_impact()
     scenario_4_complex_nested()
 
-    print("\n" + "█"*70)
+    print("\n" + "="*70)
     print("  DEMO COMPLETE")
-    print("█"*70)
+    print("="*70)
     print("\nKey Takeaways:")
     print("1. Join associativity changes join tree structure")
     print("2. Semantic validation ensures correctness")

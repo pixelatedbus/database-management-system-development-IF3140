@@ -18,21 +18,21 @@ class TestRule6Integration(unittest.TestCase):
 
         self.query_str_1 = """
         SELECT * FROM employees e
-        INNER JOIN departments d ON e.dept_id = d.id
-        INNER JOIN projects p ON d.id = p.dept_id
+        INNER JOIN payroll p ON e.id = p.employee_id
+        INNER JOIN accounts a ON p.id = a.payroll_id
         """
 
         self.query_str_2 = """
         SELECT * FROM users u
         INNER JOIN orders o ON u.id = o.user_id
         INNER JOIN products p ON o.product_id = p.id
-        INNER JOIN categories c ON p.category_id = c.id
+        INNER JOIN logs l ON u.id = l.user_id
         """
 
         self.query_str_3 = """
-        SELECT * FROM t1
-        INNER JOIN t2 ON t1.id = t2.t1_id
-        INNER JOIN t3 ON t2.id = t3.t2_id
+        SELECT * FROM users u1
+        INNER JOIN orders o ON u1.id = o.user_id
+        INNER JOIN users u2 ON o.id = u2.id
         """
 
     def test_rule_6_find_patterns(self):
@@ -310,9 +310,9 @@ class TestRule6SemanticValidation(unittest.TestCase):
     def test_semantic_check_valid(self):
         """Test semantic check untuk valid reassociation."""
         sql = """
-        SELECT * FROM t1
-        INNER JOIN t2 ON t1.id = t2.t1_id
-        INNER JOIN t3 ON t2.id = t3.t2_id
+        SELECT * FROM users u
+        INNER JOIN orders o ON u.id = o.user_id
+        INNER JOIN products p ON o.product_id = p.id
         """
         parsed = self.engine.parse_query(sql)
         patterns = rule_6.find_patterns(parsed)
@@ -326,8 +326,8 @@ class TestRule6SemanticValidation(unittest.TestCase):
         """Test default behavior tanpa decisions."""
         sql = """
         SELECT * FROM employees e
-        INNER JOIN departments d ON e.dept_id = d.id
-        INNER JOIN projects p ON d.id = p.dept_id
+        INNER JOIN payroll p ON e.id = p.employee_id
+        INNER JOIN accounts a ON p.id = a.payroll_id
         """
         parsed = self.engine.parse_query(sql)
         result = rule_6.apply_associativity(parsed)
