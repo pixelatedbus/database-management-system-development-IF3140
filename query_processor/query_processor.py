@@ -9,7 +9,7 @@ from .adapter_ccm import AdapterCCM, AlgorithmType
 from .adapter_storage import AdapterStorage
 from .adapter_optimizer import AdapterOptimizer
 from .adapter_frm import AdapterFRM
-from .query_execution import QueryExecution
+from .query_execution import QueryExecution, TransactionAbortedException
 
 class ExecutionResult:
     def __init__(self, message: str, success: bool = True, data: Rows = Rows([]), transaction_id: int = -1, query: str = ""):
@@ -164,9 +164,37 @@ class QueryProcessor:
                     transaction_id=t_id,
                     query=query
                 )
+            except TransactionAbortedException as e:
+                # Transaction was aborted by CCM (deadlock, etc.)
+                print(f"\n[ABORT] Transaction {t_id} aborted by CCM: {e.reason}")
+                
+                # Clear buffer for aborted transaction
+                self.query_execution_engine.transaction_buffer.clear_transaction(t_id)
+                
+                # Log abort to FRM
+                self.adapter_frm.log_abort(t_id)
+                
+                # Remove from active transactions
+                if client_id in self.active_transactions:
+                    del self.active_transactions[client_id]
+                
+                return ExecutionResult(
+                    message=f"Transaction {t_id} aborted: {e.reason}", 
+                    success=False,
+                    transaction_id=t_id,
+                    query=query
+                )
             except Exception as e:
+                # Other errors - abort transaction
+                print(f"\n[ERROR] Execution failed for transaction {t_id}: {e}")
                 self.adapter_ccm.abort_transaction(t_id)
-                del self.active_transactions[client_id]
+                
+                # Clear buffer
+                self.query_execution_engine.transaction_buffer.clear_transaction(t_id)
+                
+                if client_id in self.active_transactions:
+                    del self.active_transactions[client_id]
+                
                 return ExecutionResult(
                     message=f"Execution failed, Transaction {t_id} aborted: {e}", 
                     success=False,

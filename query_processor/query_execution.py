@@ -6,6 +6,13 @@ logger = logging.getLogger(__name__)
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+
+class TransactionAbortedException(Exception):
+    def __init__(self, transaction_id: int, reason: str):
+        self.transaction_id = transaction_id
+        self.reason = reason
+        super().__init__(f"Transaction {transaction_id} aborted: {reason}")
+
 from query_optimizer.query_tree import QueryTree
 
 # Try relative import first (when used as package), fallback to direct import (when used standalone)
@@ -114,6 +121,9 @@ class QueryExecution:
                 response = self.ccm_adapter.validate_action(transaction_id, table_name, 'read')
                 if not response.allowed:
                     logger.info(f"[PROJECT] CCM denied READ access: {response.message}")
+                    # Check if transaction was aborted (deadlock)
+                    if "aborted" in response.message.lower():
+                        raise TransactionAbortedException(transaction_id, response.message)
                     return []
                 # Log the object access
                 self.ccm_adapter.log_object(transaction_id, table_name)
@@ -255,6 +265,9 @@ class QueryExecution:
                 response = self.ccm_adapter.validate_action(transaction_id, table_name, 'read')
                 if not response.allowed:
                     logger.info(f"[FILTER] CCM denied READ access: {response.message}")
+                    # Check if transaction was aborted (deadlock)
+                    if "aborted" in response.message.lower():
+                        raise TransactionAbortedException(transaction_id, response.message)
                     return []
                 # Log the object access
                 self.ccm_adapter.log_object(transaction_id, table_name)
@@ -368,6 +381,9 @@ class QueryExecution:
             response = self.ccm_adapter.validate_action(transaction_id, table_name, 'read')
             if not response.allowed:
                 logger.info(f"[RELATION] CCM denied READ access: {response.message}")
+                # Check if transaction was aborted (deadlock)
+                if "aborted" in response.message.lower():
+                    raise TransactionAbortedException(transaction_id, response.message)
                 return []
             # Log the object access
             self.ccm_adapter.log_object(transaction_id, table_name)
@@ -580,6 +596,9 @@ class QueryExecution:
             response = self.ccm_adapter.validate_action(transaction_id, table_name, 'write')
             if not response.allowed:
                 logger.info(f"[UPDATE] CCM denied WRITE access: {response.message}")
+                # Check if transaction was aborted (deadlock)
+                if "aborted" in response.message.lower():
+                    raise TransactionAbortedException(transaction_id, response.message)
                 return 0
             # Log the object access
             self.ccm_adapter.log_object(transaction_id, table_name)
@@ -705,6 +724,9 @@ class QueryExecution:
             response = self.ccm_adapter.validate_action(transaction_id, table_name, 'write')
             if not response.allowed:
                 logger.info(f"[INSERT] CCM denied WRITE access: {response.message}")
+                # Check if transaction was aborted (deadlock)
+                if "aborted" in response.message.lower():
+                    raise TransactionAbortedException(transaction_id, response.message)
                 return 0
             # Log the object access
             self.ccm_adapter.log_object(transaction_id, table_name)
@@ -779,6 +801,9 @@ class QueryExecution:
             response = self.ccm_adapter.validate_action(transaction_id, table_name, 'write')
             if not response.allowed:
                 logger.info(f"[DELETE] CCM denied WRITE access: {response.message}")
+                # Check if transaction was aborted (deadlock)
+                if "aborted" in response.message.lower():
+                    raise TransactionAbortedException(transaction_id, response.message)
                 return 0
             # Log the object access
             self.ccm_adapter.log_object(transaction_id, table_name)
