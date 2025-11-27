@@ -781,13 +781,16 @@ class StorageManager:
             # scan dan update rows yang match
             new_rows = []
             rows_affected = 0
+            updated_rows_info: List[Tuple[int, Dict[str, Any], Dict[str, Any]]] = []  # (record_id, old_row, new_row)
 
-            for row in all_rows:
+            for record_id, row in enumerate(all_rows):
                 if self._row_matches_all_conditions(row, data_write.conditions):
+                    old_row = row.copy()
                     updated_row = row.copy()
                     for col_name, new_val in update_data.items():
                         updated_row[col_name] = new_val
                     new_rows.append(updated_row)
+                    updated_rows_info.append((record_id, old_row, updated_row))
                     rows_affected += 1
                 else:
                     new_rows.append(row)
@@ -796,10 +799,10 @@ class StorageManager:
             if rows_affected > 0:
                 write_binary_table(table_file, new_rows, schema_names, self.block_size)
 
-                # rebuild index karena data berubah
-                self._rebuild_table_indexes(table_name)
+                # efficient index update (no rebuild!)
+                self._update_indexes_after_update(table_name, updated_rows_info)
 
-            print(f"updated {rows_affected} rows di tabel '{table_name}'")
+            print(f"updated {rows_affected} rows di tabel '{table_name}' (efficient index update!)")
             return rows_affected
 
 
@@ -875,6 +878,54 @@ class StorageManager:
             # save updated index
             index_file = self._get_index_file_path(table, column)
             index.save(index_file)
+
+    def _update_indexes_after_update(
+        self,
+        table_name: str,
+        updated_rows_info: List[Tuple[int, Dict[str, Any], Dict[str, Any]]]
+    ) -> None:
+        # efficient index update setelah UPDATE - no rebuild!
+        # strategy: cuma update index entries buat kolom yang berubah dan di-index
+        # record_id TETAP (ga kayak delete yang compact), jadi ga perlu shift!
+
+        indexes_to_update = [(t, c) for t, c in self.indexes.keys() if t == table_name]
+
+        if not indexes_to_update:
+            return
+
+        for table, column in indexes_to_update:
+            index = self.indexes[(table, column)]
+            index_updated = False
+
+            # cuma update index kalo kolom yang di-index berubah
+            for record_id, old_row, new_row in updated_rows_info:
+                old_value = old_row.get(column)
+                new_value = new_row.get(column)
+
+                # cek apakah value berubah
+                if old_value != new_value:
+                    # value berubah: delete old key, insert new key
+                    # record_id TETAP SAMA (ga kayak delete!)
+
+                    # prepare keys
+                    if isinstance(index, BPlusTreeIndex):
+                        old_key = "NULL" if old_value is None else old_value
+                        new_key = "NULL" if new_value is None else new_value
+                    else:
+                        old_key = str(old_value) if old_value is not None else "NULL"
+                        new_key = str(new_value) if new_value is not None else "NULL"
+
+                    # delete old entry
+                    index.delete(old_key, record_id)
+                    # insert new entry (SAME record_id!)
+                    index.insert(new_key, record_id)
+                    index_updated = True
+
+            # save updated index (cuma kalo ada perubahan)
+            if index_updated:
+                index_file = self._get_index_file_path(table, column)
+                index.save(index_file)
+                print(f"  efficiently updated index {table}.{column} (no rebuild!)")
 
     def _update_indexes_after_delete_efficient(
         self,
@@ -956,45 +1007,6 @@ class StorageManager:
             # save updated index
             index_file = self._get_index_file_path(table, column)
             index.save(index_file)
-
-    def _rebuild_table_indexes(self, table_name: str) -> None:
-        # rebuild semua index yang ada buat tabel ini
-        # dipanggil setelah delete/update yang bisa ubah record_id
-        indexes_to_rebuild = [(t, c) for t, c in self.indexes.keys() if t == table_name]
-
-        for table, column in indexes_to_rebuild:
-            print(f"  rebuilding index {table}.{column}...")
-
-            # dapetin index type yang lama buat bikin yang baru dengan tipe sama
-            old_index = self.indexes[(table, column)]
-
-            # bikin index baru dengan tipe yang sama
-            if isinstance(old_index, BPlusTreeIndex):
-                index = BPlusTreeIndex(table, column, order=old_index.order)
-            else:
-                index = HashIndex(table, column)
-
-            # scan ulang semua rows
-            table_file = self._get_table_file_path(table)
-            if os.path.exists(table_file):
-                record_id = 0
-                for row in read_binary_table_streaming(table_file):
-                    if column in row:
-                        key = row[column]
-                        # preserve key type buat b+ tree, convert to str buat hash
-                        if isinstance(index, BPlusTreeIndex):
-                            key_value = "NULL" if key is None else key
-                        else:
-                            key_value = str(key) if key is not None else "NULL"
-                        index.insert(key_value, record_id)
-                    record_id += 1
-
-                # save index ke disk
-                index_file = self._get_index_file_path(table, column)
-                index.save(index_file)
-
-                # update di memory
-                self.indexes[(table, column)] = index
 
     def set_index(self, table: str, column: str, index_type: str) -> None:
         # bikin index buat kolom tertentu di tabel
