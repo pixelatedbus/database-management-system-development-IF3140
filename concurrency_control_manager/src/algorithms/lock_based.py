@@ -1,54 +1,58 @@
 """
-Lock-based concurrency control algorithm
+Wait-Die concurrency control algorithm (Deadlock Prevention)
 """
 
 from typing import Dict, List, Set, Optional
 from datetime import datetime
+from enum import Enum
 from .base import ConcurrencyAlgorithm
 from ..transaction import Transaction
 from ..row import Row
-from ..enums import ActionType, LockType, TransactionStatus
-from ..response import Response, AlgorithmResponse
+from ..enums import ActionType, LockType, TransactionStatus, LockResultStatus
+from ..response import AlgorithmResponse
 
 
 class LockEntry:
     """Represents a lock entry in the lock table"""
     
-    def __init__(self, object_id: str, transaction_id: int, lock_type: LockType):
+    def __init__(self, object_id: str, transaction_id: int, 
+                 transaction_timestamp: datetime, lock_type: LockType):
         self.object_id: str = object_id
         self.transaction_id: int = transaction_id
+        # Timestamp untuk menentukan older/younger
+        self.transaction_timestamp: datetime = transaction_timestamp
         self.lock_type: LockType = lock_type
         self.granted: bool = False
         self.timestamp: datetime = datetime.now()
         self.wait_start: Optional[datetime] = None
     
     def is_expired(self, timeout: float) -> bool:
-        """Check if lock request has expired (waited too long)
-            timeout in seconds"""
-        
+        """Check if lock request has expired (waited too long)"""
         if self.granted:
-            return False
-            
+            return False 
         if self.wait_start is None:
             return False
-            
         waiting_time = (datetime.now() - self.wait_start).total_seconds()
         return waiting_time > timeout
 
 
 class LockManager:
-    """Manages locks for lock-based concurrency control"""
+    """Manages locks for Wait-Die concurrency control"""
     
     def __init__(self):
         self.lock_table: Dict[str, List[LockEntry]] = {}
-        self.wait_for_graph: Dict[int, Set[int]] = {}
+        # self.wait_for_graph: Dict[int, Set[int]]
         self.timeout_seconds: float = 30.0
-        # To track deadlock victim
-        self.last_detected_cycle: List[int] = []
+        # self.last_detected_cycle: List[int] = []
     
-    def acquire_lock(self, object_id: str, transaction_id: int, lock_type: LockType) -> bool:
-        """Attempt to acquire a lock for a transaction on a database object"""
+    def acquire_lock(self, object_id: str, transaction: Transaction, lock_type: LockType) -> LockResultStatus:
+        """
+        Attempt to acquire a lock using WAIT-DIE scheme.
+        """
         
+        transaction_id = transaction.transaction_id
+        transaction_ts = transaction.start_timestamp 
+
         if object_id not in self.lock_table:
             self.lock_table[object_id] = []
         lock_list = self.lock_table[object_id]
@@ -61,43 +65,70 @@ class LockManager:
                 break
         
         # Transaction (id) which already holds the requested lock
-        conflicting_transactions : Set[int] = set()
+        conflicting_locks : List[LockEntry] = []
         for lock in lock_list:
             if lock.transaction_id != transaction_id and lock.granted == True:
                 if self._is_compatible(lock.lock_type, lock_type) == False:
-                    conflicting_transactions.add(lock.transaction_id)
+                    conflicting_locks.append(lock)
         
         # Logic to acquire lock
         if existing_locks:
             if existing_locks.granted:
                 if existing_locks.lock_type == lock_type or existing_locks.lock_type == LockType.WRITE_LOCK:
-                    return True
+                    return LockResultStatus.GRANTED
+                
+                # Upgrade Case: Read -> Write
                 if existing_locks.lock_type == LockType.READ_LOCK and lock_type == LockType.WRITE_LOCK:
-                    if conflicting_transactions:
+                    if conflicting_locks:
+                        # Wait-die logic
+                        decision = self._check_wait_die_constraint(transaction_ts, conflicting_locks)
+                        if decision == LockResultStatus.ABORTED:
+                            return LockResultStatus.ABORTED
+                        
                         existing_locks.granted = False
                         existing_locks.wait_start = datetime.now()
-                        self.wait_for_graph.setdefault(transaction_id, set()).update(conflicting_transactions)
-                        return False
+                        # self.wait_for_graph.setdefault(transaction_id, set()).update(...)
+                        return LockResultStatus.WAITING
                     else:
                         existing_locks.lock_type = LockType.WRITE_LOCK
                         existing_locks.timestamp = datetime.now()
-                        return True
+                        return LockResultStatus.GRANTED
             else:
-                return False
+                return LockResultStatus.WAITING
         
-        new_lock_entry = LockEntry(object_id, transaction_id, lock_type)
+        new_lock_entry = LockEntry(object_id, transaction_id, transaction_ts, lock_type)
 
-        if conflicting_transactions:
+        if conflicting_locks:
+            # wait-die logic
+            decision = self._check_wait_die_constraint(transaction_ts, conflicting_locks)
+            
+            if decision == LockResultStatus.ABORTED:
+                return LockResultStatus.ABORTED #transaksi muda die
+
+            # Transaksi old wait
             new_lock_entry.granted = False
             new_lock_entry.wait_start = datetime.now()
             lock_list.append(new_lock_entry)
-            # self.wait_for_graph.setdefault(transaction_id, set()).update(conflicting_transactions)
-            return False
+            return LockResultStatus.WAITING
         else:
             new_lock_entry.granted = True
             lock_list.append(new_lock_entry)
-            return True
-    
+            return LockResultStatus.GRANTED
+
+    def _check_wait_die_constraint(self, requester_ts: datetime, conflicting_locks: List[LockEntry]) -> LockResultStatus:
+        """
+        - If TS(Requester) < TS(Holder) => Requester is older => wait
+        - If TS(Requester) > TS(Holder) => Requester is younger => die (abort)
+        """
+        for holder in conflicting_locks:
+            holder_ts = holder.transaction_timestamp
+            
+            # Requester lebih Muda
+            if requester_ts > holder_ts:
+                return LockResultStatus.ABORTED
+            else:
+                return LockResultStatus.WAITING
+
     def release_locks(self, transaction_id: int) -> List[str]:
         """Release all locks held by a transaction"""
         released_object_id = []
@@ -123,8 +154,6 @@ class LockManager:
                 
                 if not lock_list:
                     del self.lock_table[object_id]
-        
-        # self.wait_for_graph.pop(transaction_id, None)
                 
         return released_object_id
     
@@ -157,6 +186,7 @@ class LockManager:
 
         current_granted_locks = [l for l in lock_list if l.granted]
 
+        # Prioritas menunggu berdasarkan waktu mulai menunggu
         waiting_locks = sorted(
             (l for l in lock_list if not l.granted), 
             key=lambda l: l.wait_start
@@ -175,8 +205,6 @@ class LockManager:
                 
                 current_granted_locks.append(lock)
                 
-                # self.wait_for_graph.pop(lock.transaction_id, None)
-                
                 if lock.lock_type == LockType.READ_LOCK:
                     continue
                 else:
@@ -193,87 +221,87 @@ class LockManager:
             if lock.granted and lock.transaction_id != transaction_id:
                 if not self._is_compatible(lock.lock_type, lock_type):
                     return True
-        
         return False
     
-    def detect_deadlock(self) -> bool:
-        """Detect if there is a deadlock"""
-        self._build_wait_for_graph()
-        return self._has_cycle()
-    
-    def get_deadlock_victim(self) -> int:
-        """
-        Select a transaction to abort in case of deadlock
-        Must be called after detect_deadlock() returns True.
-        Abort the youngest (highest Transaction ID)
-        """
-        if not self.last_detected_cycle:
-            return -1
-        
-        victim = max(self.last_detected_cycle)
-        return victim
+    # Tidak digunakan untuk wait-die prevention
 
+    # def detect_deadlock(self) -> bool:
+    #     """Detect if there is a deadlock"""
+    #     self._build_wait_for_graph()
+    #     return self._has_cycle()
     
-    def upgrade_lock(self, object_id: str, transaction_id: int) -> bool:
-        """Upgrade a read lock to a write lock"""
-        return self.acquire_lock(object_id, transaction_id, LockType.WRITE_LOCK)
+    # def get_deadlock_victim(self) -> int:
+    #     """
+    #     Select a transaction to abort in case of deadlock
+    #     Must be called after detect_deadlock() returns True.
+    #     Abort the youngest (highest Transaction ID)
+    #     """
+    #     if not self.last_detected_cycle:
+    #         return -1
+    #     
+    #     victim = max(self.last_detected_cycle)
+    #     return victim
+
+    # def upgrade_lock(self, object_id: str, transaction_id: int) -> bool:
+    #     """Upgrade a read lock to a write lock"""
+    #     return self.acquire_lock(object_id, transaction_id, LockType.WRITE_LOCK)
     
-    def _build_wait_for_graph(self) -> None:
-        """Build the wait-for graph for deadlock detection"""
-        self.wait_for_graph.clear()
-        
-        for object_id, lock_list in self.lock_table.items():
-            
-            granted_locks = [lock for lock in lock_list if lock.granted]
-            waiting_locks = [lock for lock in lock_list if not lock.granted]
-
-            if not waiting_locks or not granted_locks:
-                continue
-
-            for wait_lock in waiting_locks:
-                waiting_trans_id = wait_lock.transaction_id
-                
-                for granted_lock in granted_locks:
-                    if granted_lock.transaction_id == waiting_trans_id:
-                        continue
-                        
-                    if not self._is_compatible(wait_lock.lock_type, granted_lock.lock_type):
-                        self.wait_for_graph.setdefault(waiting_trans_id, set()).add(granted_lock.transaction_id)
+    # def _build_wait_for_graph(self) -> None:
+    #     """Build the wait-for graph for deadlock detection"""
+    #     self.wait_for_graph.clear()
+    #     
+    #     for object_id, lock_list in self.lock_table.items():
+    #         
+    #         granted_locks = [lock for lock in lock_list if lock.granted]
+    #         waiting_locks = [lock for lock in lock_list if not lock.granted]
+    #
+    #         if not waiting_locks or not granted_locks:
+    #             continue
+    #
+    #         for wait_lock in waiting_locks:
+    #             waiting_trans_id = wait_lock.transaction_id
+    #             
+    #             for granted_lock in granted_locks:
+    #                 if granted_lock.transaction_id == waiting_trans_id:
+    #                     continue
+    #                     
+    #                 if not self._is_compatible(wait_lock.lock_type, granted_lock.lock_type):
+    #                     self.wait_for_graph.setdefault(waiting_trans_id, set()).add(granted_lock.transaction_id)
     
-    def _has_cycle(self) -> bool:
-        """Check if wait-for graph has a cycle"""
-        self.last_detected_cycle.clear()
-        visited = set()        
-        recursion_stack = set() 
-        
-        def dfs(node: int, path: List[int]) -> bool:
-            """Helper DFS function"""
-            visited.add(node)
-            recursion_stack.add(node)
-            path.append(node)
-            
-            neighbors = self.wait_for_graph.get(node, set())
-            for neighbor in neighbors:
-                if neighbor not in visited:
-                    if dfs(neighbor, path):
-                        return True
-                elif neighbor in recursion_stack:
-                    cycle_start_index = path.index(neighbor)
-                    self.last_detected_cycle = path[cycle_start_index:]
-                    return True
-            
-            # Backtrack
-            path.pop()
-            recursion_stack.remove(node)
-            return False
-
-        all_waiting_nodes = list(self.wait_for_graph.keys())
-        for node in all_waiting_nodes:
-            if node not in visited:
-                if dfs(node, []):
-                    return True # Siklus found
-                    
-        return False
+    # def _has_cycle(self) -> bool:
+    #     """Check if wait-for graph has a cycle"""
+    #     self.last_detected_cycle.clear()
+    #     visited = set()        
+    #     recursion_stack = set() 
+    #     
+    #     def dfs(node: int, path: List[int]) -> bool:
+    #         """Helper DFS function"""
+    #         visited.add(node)
+    #         recursion_stack.add(node)
+    #         path.append(node)
+    #         
+    #         neighbors = self.wait_for_graph.get(node, set())
+    #         for neighbor in neighbors:
+    #             if neighbor not in visited:
+    #                 if dfs(neighbor, path):
+    #                     return True
+    #             elif neighbor in recursion_stack:
+    #                 cycle_start_index = path.index(neighbor)
+    #                 self.last_detected_cycle = path[cycle_start_index:]
+    #                 return True
+    #         
+    #         # Backtrack
+    #         path.pop()
+    #         recursion_stack.remove(node)
+    #         return False
+    #
+    #     all_waiting_nodes = list(self.wait_for_graph.keys())
+    #     for node in all_waiting_nodes:
+    #         if node not in visited:
+    #             if dfs(node, []):
+    #                 return True # Siklus found
+    #                 
+    #     return False
     
     def _is_compatible(self, lock_type1: LockType, lock_type2: LockType) -> bool:
         """Check if two lock types are compatible"""
@@ -283,51 +311,66 @@ class LockManager:
             return False
 
 class LockBasedAlgorithm(ConcurrencyAlgorithm):
-    """Lock-based concurrency control algorithm implementation"""
+    """Wait-Die concurrency control algorithm implementation"""
     
     def __init__(self):
         self.lock_manager: LockManager = LockManager()
     
     def check_permission(self, t: Transaction, obj: Row, 
-                        action: ActionType) -> Response:
-        """Check permission using locks"""
+                        action: ActionType) -> AlgorithmResponse:
+        """Check permission using locks with Wait-Die logic"""
         required_lock_type = (
             LockType.READ_LOCK if action == ActionType.READ 
             else LockType.WRITE_LOCK
         )
         
-        trans_id = t.transaction_id
-        obj_id = obj.object_id
-        
-        lock_granted = self.lock_manager.acquire_lock(
-            obj_id, trans_id, required_lock_type
+        # Mengirim object transaction, bukan hanya ID, agar bisa akses timestamp
+        lock_status = self.lock_manager.acquire_lock(
+            obj.object_id, t, required_lock_type
         )
         
-        if lock_granted:
+        if lock_status == LockResultStatus.GRANTED:
             return AlgorithmResponse(
                 allowed=True, 
-                message=f"Lock {required_lock_type.name} for obj {obj_id} granted."
+                message=f"Lock {required_lock_type.name} for obj {obj.object_id} granted."
             )
-        else:
-            if self.lock_manager.detect_deadlock():
-                victim_id = self.lock_manager.get_deadlock_victim()
-                
-                if victim_id == trans_id:
-                    self.abort_transaction(t) 
-                    return AlgorithmResponse(
-                        allowed=False, 
-                        message=f"Transaction {trans_id} aborted due to deadlock."
-                    )
-                else:
-                    return AlgorithmResponse(
-                        allowed=False, 
-                        message=f"Transaction {trans_id} must wait (deadlock detected, victim is {victim_id})."
-                    )
-            else:
-                return AlgorithmResponse(
-                    allowed=False, 
-                    message=f"Transaction {trans_id} must wait for lock on {obj_id}."
-                )
+        
+        elif lock_status == LockResultStatus.WAITING:
+            return AlgorithmResponse(
+                allowed=False, 
+                message=f"Transaction {t.transaction_id} (Older) must wait for lock on {obj.object_id}."
+            )
+            
+        elif lock_status == LockResultStatus.ABORTED:
+            # Transaksi Muda bertemu Tua -> die
+            self.abort_transaction(t)
+            return AlgorithmResponse(
+                allowed=False, 
+                message=f"Transaction {t.transaction_id} (Younger) died (aborted) to prevent deadlock."
+            )
+
+        # Tidak ada deadlock
+        
+        # else:
+        #     if self.lock_manager.detect_deadlock():
+        #         victim_id = self.lock_manager.get_deadlock_victim()
+        #         
+        #         if victim_id == trans_id:
+        #             self.abort_transaction(t) 
+        #             return AlgorithmAlgorithmResponse(
+        #                 allowed=False, 
+        #                 message=f"Transaction {trans_id} aborted due to deadlock."
+        #             )
+        #         else:
+        #             return AlgorithmAlgorithmResponse(
+        #                 allowed=False, 
+        #                 message=f"Transaction {trans_id} must wait (deadlock detected, victim is {victim_id})."
+        #             )
+        #     else:
+        #         return AlgorithmAlgorithmResponse(
+        #             allowed=False, 
+        #             message=f"Transaction {trans_id} must wait for lock on {obj_id}."
+        #         )
     
     def commit_transaction(self, t: Transaction) -> None:
         """Commit transaction and release locks"""

@@ -41,3 +41,9 @@ class AlgorithmType(Enum):
     TimestampBased = "TimestampBased"
     ValidationBased = "ValidationBased"
     MVCC = "MVCC"
+
+# For wait die purpose (lock-based)
+class LockResultStatus(Enum):
+    GRANTED = "GRANTED"
+    WAITING = "WAITING"
+    ABORTED = "ABORTED" # Signal to die

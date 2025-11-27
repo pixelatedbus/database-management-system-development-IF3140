@@ -1,21 +1,15 @@
-"""
-Demo scenarios for Rule 7 - Filter Pushdown over Join
-"""
-
 from query_optimizer.query_tree import QueryTree
 from query_optimizer.optimization_engine import OptimizationEngine
 from query_optimizer.rule.rule_7 import apply_pushdown
 
 
 def print_separator(title):
-    """Print section separator"""
     print("\n" + "="*70)
     print(f"  {title}")
     print("="*70)
 
 
 def make_column_ref(col_name, table_name=None):
-    """Helper to create COLUMN_REF node"""
     col_ref = QueryTree("COLUMN_REF", "")
     col_name_node = QueryTree("COLUMN_NAME", "")
     identifier = QueryTree("IDENTIFIER", col_name)
@@ -32,7 +26,6 @@ def make_column_ref(col_name, table_name=None):
 
 
 def count_filters(node):
-    """Count FILTER nodes in tree"""
     if node is None:
         return 0
     count = 1 if node.type == "FILTER" else 0
@@ -42,7 +35,6 @@ def count_filters(node):
 
 
 def scenario_1_single_condition():
-    """Scenario 7.1: Pushdown single filter condition"""
     print("\n")
     print_separator("SCENARIO 7.1: Single Condition Pushdown")
     
@@ -73,7 +65,6 @@ def scenario_1_single_condition():
 
 
 def scenario_2_multiple_conditions():
-    """Scenario 7.2: Pushdown multiple filter conditions"""
     print("\n")
     print_separator("SCENARIO 7.2: Multiple Conditions Pushdown")
     

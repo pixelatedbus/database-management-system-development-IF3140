@@ -3,7 +3,7 @@ Demo scenarios for Rule 1 - Cascade Filters (Seleksi Konjungtif)
 """
 
 from query_optimizer.optimization_engine import OptimizationEngine
-from query_optimizer.rule.rule_1 import cascade_filters, uncascade_filters
+from query_optimizer.rule.rule_1_2 import cascade_filters, uncascade_filters
 
 
 def print_separator(title):

@@ -1,405 +1,173 @@
 """
-Genetic Algorithm
+Genetic Algorithm - Hybrid Support
+- Filter Params: Uses Signature-Based Crossover
+- Join/Other Params: Uses ID-Based Crossover (Dictionary Match)
 """
 
 import random
 from typing import Callable, Any
 from query_optimizer.optimization_engine import ParsedQuery, OptimizationEngine
-from query_optimizer.rule.rule_1 import (
-    cascade_filters,
-    uncascade_filters,
-    clone_tree
-)
-from query_optimizer.rule.rule_2 import reorder_and_conditions
-from query_optimizer.rule import rule_4
 from query_optimizer.rule_params_manager import get_rule_params_manager
-
+from query_optimizer.rule import rule_1_2, rule_4, rule_5, rule_6
 
 class Individual:
-    """
-    Kromosom
-    Attributes:
-        operation_params: Dict[operation_type, Dict[node_id, order]]
-                         Example: {
-                             'filter_params': {
-                                 42: [2, [0, 1]],  # Unified order: cond2 single, [0,1] grouped
-                                 57: [1, 0]        # All singles
-                             },
-                             'join_params': {
-                                 33: {
-                                    filtered_conditon: []  # Keep separate (no merge)
-                                    existing_condition: [5, 8]  # conditions merged in JOIN 33
-                                 }
-                                 42: {
-                                    filtered_conditon: [10, 15]  # conditions to merge into JOIN 42
-                                    existing_condition: []  # Keep separate (no merge)
-                                 }
-                             }
-                         }
-        fitness: Fitness value (lower is better)
-    """
-    
-    def __init__(
-        self, 
-        operation_params: dict[str, dict[int, Any]],
-        base_query: ParsedQuery,
-        lazy_eval: bool = False
-    ):
+    def __init__(self, operation_params, base_query, lazy_eval=False):
         self.operation_params = operation_params
         self.base_query = base_query
         self._query_cache = None
-        self.fitness: float | None = None
-        
+        self.fitness = None
         if not lazy_eval:
-            self._query_cache = self._apply_transformations(base_query)
-    
+             self._query_cache = self._apply_transformations(base_query)
+             
     @property
-    def query(self) -> ParsedQuery:
-        """Lazy evaluation of query transformations."""
+    def query(self):
         if self._query_cache is None:
             self._query_cache = self._apply_transformations(self.base_query)
         return self._query_cache
-    
-    def _apply_transformations(self, base_query: ParsedQuery) -> ParsedQuery:
-        """
-        Terapkan transformations ke query berdasarkan operation params.
-        """
-        cloned_tree = clone_tree(base_query.query_tree)
-        current_query = ParsedQuery(cloned_tree, base_query.query)
         
-        # Step 1: Apply join operations (Rule 4: Push selection into joins)
-        # Harus dilakukan SEBELUM filter operations karena mengubah struktur FILTER-JOIN
-        if 'join_params' in self.operation_params and self.operation_params['join_params']:            
-            # join_params format: Dict[join_id, list[condition_ids]]
-            # Example: {42: [10, 15]} = merge conditions 10 and 15 into JOIN 42
-            join_params = self.operation_params['join_params']
-            
-            if join_params:
-                current_query = rule_4.apply_merge(current_query, join_params)
+    def _apply_transformations(self, base_query):
+        # Selalu clone dari base clean
+        new_tree = base_query.query_tree.clone(deep=True, preserve_id=True)
+        q = ParsedQuery(new_tree, base_query.query)
         
-        # Step 2: Apply filter operations dengan unified order format
-        if 'filter_params' in self.operation_params and self.operation_params['filter_params']:
-            # Uncascade existing filters first
-            query_and = uncascade_filters(current_query)
-            
-            # Extract unified orders
-            unified_orders = self.operation_params['filter_params']
-            
-            # Step 2a: Apply reordering (flatten order untuk reorder_and_conditions)
-            reorder_orders = {}
-            for node_id, order in unified_orders.items():
-                # Flatten to get pure permutation
-                flat = []
-                for item in order:
-                    if isinstance(item, list):
-                        flat.extend(item)
-                    else:
-                        flat.append(item)
-                reorder_orders[node_id] = flat
-            
-            if reorder_orders:
-                query_and = reorder_and_conditions(query_and, operator_orders=reorder_orders)
-            
-            # Step 2b: Apply cascading dengan grouping structure
-            if unified_orders:
-                current_query = cascade_filters(query_and, operator_orders=unified_orders)
-            else:
-                current_query = query_and
+        # Get params (Mutable copies)
+        fp = self.operation_params.get('filter_params', {})
+        jp = self.operation_params.get('join_params', {})
+        jcp = self.operation_params.get('join_child_params', {})
+        jap = self.operation_params.get('join_associativity_params', {})
         
-        return current_query
-    
-    def __repr__(self):
-        return f"Individual(fitness={self.fitness}, params={self.operation_params})"
+        # Apply Rules
+        # Rule 1 (Filter) - Key: Signature (frozenset)
+        if fp:
+            q, fp = rule_1_2.apply_rule1_rule2(q, fp)
+            self.operation_params['filter_params'] = fp
+            
+        # Rule 5 (Join Swap) - Key: Int
+        if jcp:
+            q, jcp = rule_5.apply_join_commutativity(q, jcp)
+            self.operation_params['join_child_params'] = jcp
 
+        # Rule 6 (Associativity) - Key: Int
+        if jap:
+            q = rule_6.apply_associativity(q, jap)
+            
+        # Rule 4 (Join Merge) - Key: Int
+        if jp:
+            q, jp, fp = rule_4.apply_merge(q, jp, fp)
+            self.operation_params['join_params'] = jp
+            self.operation_params['filter_params'] = fp
+            
+        return q
 
 class GeneticOptimizer:
-    """
-    Args:
-        population_size: Jumlah individu dalam populasi
-        generations: Jumlah generasi evolusi
-        mutation_rate: Probabilitas mutasi (0.0 - 1.0)
-        crossover_rate: Probabilitas crossover (0.0 - 1.0)
-        elitism: Jumlah individu terbaik yang dipertahankan tiap generasi
-        fitness_func: Fungsi untuk menghitung fitness (cost function)
-    """
-    
-    def __init__(
-        self,
-        population_size: int = 50,
-        generations: int = 100,
-        mutation_rate: float = 0.1,
-        crossover_rate: float = 0.8,
-        elitism: int = 2,
-        fitness_func: Callable[[ParsedQuery], float] | None = None
-    ):
-        self.population_size = population_size
-        self.generations = generations
-        self.mutation_rate = mutation_rate
-        self.crossover_rate = crossover_rate
-        self.elitism = elitism
-        self.fitness_func = fitness_func or self._default_fitness
+    def __init__(self, population_size=50, generations=100, mutation_rate=0.1):
+        self.pop_size = population_size
+        self.gens = generations
+        self.mut_rate = mutation_rate
+        self.history = []
         
-        self.best_individual: Individual | None = None
-        self.best_fitness: float = float('inf')
-        self.history: list[dict] = []
+    def optimize(self, query):
+        mgr = get_rule_params_manager()
+        ops = mgr.get_registered_operations()
         
-        self._rule_analysis_cache: dict[str, dict[int, Any]] | None = None
-    
-    def _default_fitness(self, query: ParsedQuery) -> float:
-        """Fungsi fitness default menggunakan cost dari OptimizationEngine (lebih rendah lebih baik)."""
-        engine = OptimizationEngine()
-        cost = engine.get_cost(query)
-        return float(cost)
-    
-    def optimize(self, query: ParsedQuery) -> ParsedQuery:
-        """Jalankan GA untuk mencari struktur query optimal."""
-        
-        self._rule_analysis_cache = self._analyze_query_for_rules(query)
-        
-        population = self._initialize_population(query, self._rule_analysis_cache)
-        
-        for generation in range(self.generations):
-            # Evaluasi fitness
-            for individual in population:
-                if individual.fitness is None:
-                    individual.fitness = self.fitness_func(individual.query)
+        # Analyze Base Query
+        # Hasilnya akan mixed: Filter punya key frozenset, Join punya key Int
+        base_analysis = {}
+        for op in ops:
+            base_analysis[op] = mgr.analyze_query(query, op)
             
-            population.sort(key=lambda ind: ind.fitness)
+        # Init Pop
+        pop = []
+        for _ in range(self.pop_size):
+            params = {}
+            for op, metadata in base_analysis.items():
+                params[op] = {}
+                for key, meta in metadata.items():
+                    # Key akan otomatis mengikuti hasil analyze (Signature atau Int)
+                    params[op][key] = mgr.generate_random_params(op, meta)
+            pop.append(Individual(params, query))
             
-            # Track individu terbaik
-            if population[0].fitness < self.best_fitness:
-                self.best_fitness = population[0].fitness
-                self.best_individual = population[0]
+        # Evolution Loop
+        for g in range(self.gens):
+            # Fitness Eval
+            for ind in pop:
+                if ind.fitness is None:
+                    # Ganti dengan cost function asli Anda
+                    eng = OptimizationEngine()
+                    ind.fitness = float(eng.get_cost(ind.query))
             
-            # Catat statistik generasi
-            self.history.append({
-                'generation': generation,
-                'best_fitness': population[0].fitness,
-                'avg_fitness': sum(ind.fitness for ind in population) / len(population),
-                'worst_fitness': population[-1].fitness
-            })
+            pop.sort(key=lambda x: x.fitness)
+            self.history.append({'gen': g, 'best': pop[0].fitness})
             
-            # Buat generasi berikutnya
-            next_population = []
-            next_population.extend(population[:self.elitism])  # Elitism
+            next_pop = pop[:2] # Elitism
             
-            while len(next_population) < self.population_size:
-                parent1 = self._tournament_selection(population)
-                parent2 = self._tournament_selection(population)
+            while len(next_pop) < self.pop_size:
+                p1, p2 = random.sample(pop[:10], 2)
+                c1, c2 = self._crossover(p1, p2, query)
                 
-                if random.random() < self.crossover_rate:
-                    child1, child2 = self._crossover(parent1, parent2, query)
+                if random.random() < self.mut_rate: c1 = self._mutate(c1)
+                if random.random() < self.mut_rate: c2 = self._mutate(c2)
+                
+                next_pop.extend([c1, c2])
+            pop = next_pop[:self.pop_size]
+            
+        return pop[0].query, self.history
+
+    def _crossover(self, p1, p2, base_query):
+        """
+        Hybrid Crossover:
+        - filter_params: Menggunakan Signature Logic (Key: frozenset)
+        - join_params dll: Menggunakan ID Logic (Key: int)
+        """
+        c1_params = {}
+        c2_params = {}
+        
+        all_ops = set(p1.operation_params.keys()) | set(p2.operation_params.keys())
+        
+        for op in all_ops:
+            c1_params[op] = {}
+            c2_params[op] = {}
+            
+            p1_data = p1.operation_params.get(op, {})
+            p2_data = p2.operation_params.get(op, {})
+            
+            # Logic sama untuk keduanya karena kita sudah pakai Signature Key untuk filter
+            # Key untuk filter sekarang adalah frozenset, Key untuk join adalah int.
+            # Karena frozenset dan int keduanya hashable, kita bisa pakai set union biasa.
+            
+            all_keys = set(p1_data.keys()) | set(p2_data.keys())
+            
+            for k in all_keys:
+                # Ambil gen
+                val1 = p1_data.get(k)
+                val2 = p2_data.get(k)
+                
+                if val1 is None: val1 = val2
+                if val2 is None: val2 = val1
+                
+                # Swap coin flip
+                if random.random() < 0.5:
+                    c1_params[op][k] = val1 
+                    c2_params[op][k] = val2
                 else:
-                    child1, _ = self._crossover(parent1, parent1, query)
-                    child2, _ = self._crossover(parent2, parent2, query)
-                
-                if random.random() < self.mutation_rate:
-                    child1 = self._mutate(child1, query, self._rule_analysis_cache)
-                if random.random() < self.mutation_rate:
-                    child2 = self._mutate(child2, query, self._rule_analysis_cache)
-                
-                next_population.append(child1)
-                if len(next_population) < self.population_size:
-                    next_population.append(child2)
-            
-            population = next_population
-        
-        # Evaluasi final
-        for individual in population:
-            if individual.fitness is None:
-                individual.fitness = self.fitness_func(individual.query)
-        
-        population.sort(key=lambda ind: ind.fitness)
-        self.best_individual = population[0]
-        self.best_fitness = population[0].fitness
-        
-        return self.best_individual.query
-    
-    def _analyze_query_for_rules(self, query: ParsedQuery) -> dict[str, dict[int, Any]]:
-        """
-        Analisa query untuk semua operations yang ter-register.
-        
-        Returns:
-            Dict[operation_name, Dict[node_id, metadata]]
-        """
-        manager = get_rule_params_manager()
-        analysis_results = {}
-        
-        for operation_name in manager.get_registered_operations():
-            analysis_results[operation_name] = manager.analyze_query(query, operation_name)
-        
-        return analysis_results
-    
-    def _initialize_population(
-        self,
-        base_query: ParsedQuery,
-        rule_analysis: dict[str, dict[int, Any]]
-    ) -> list[Individual]:
-        """Inisialisasi populasi dengan random params untuk semua operations."""
-        population = []
-        manager = get_rule_params_manager()
-        
-        for _ in range(self.population_size):
-            # Generate random params untuk setiap operation
-            operation_params = {}
-            
-            for operation_name, analysis_data in rule_analysis.items():
-                operation_params[operation_name] = {}
-                for node_id, metadata in analysis_data.items():
-                    params = manager.generate_random_params(operation_name, metadata)
-                    operation_params[operation_name][node_id] = params
-            
-            individual = Individual(operation_params, base_query)
-            population.append(individual)
-        
-        return population
-    
-    def _tournament_selection(
-        self,
-        population: list[Individual],
-        tournament_size: int = 3
-    ) -> Individual:
-        """Seleksi individu menggunakan tournament selection."""
-        tournament = random.sample(population, min(tournament_size, len(population)))
-        return min(tournament, key=lambda ind: ind.fitness)
-    
-    def _crossover(
-        self,
-        parent1: Individual,
-        parent2: Individual,
-        base_query: ParsedQuery
-    ) -> tuple[Individual, Individual]:
-        """
-        Crossover dua parent. Optimized: simple uniform crossover.
-        """
-        import copy
-        
-        # Simple uniform crossover per operation
-        child1_params = {}
-        child2_params = {}
-        
-        all_operations = set(parent1.operation_params.keys()) | set(parent2.operation_params.keys())
-        
-        for operation_name in all_operations:
-            if random.random() < 0.5:
-                child1_params[operation_name] = copy.deepcopy(parent1.operation_params.get(operation_name, {}))
-                child2_params[operation_name] = copy.deepcopy(parent2.operation_params.get(operation_name, {}))
-            else:
-                child1_params[operation_name] = copy.deepcopy(parent2.operation_params.get(operation_name, {}))
-                child2_params[operation_name] = copy.deepcopy(parent1.operation_params.get(operation_name, {}))
-        
-        # Lazy evaluation
-        child1 = Individual(child1_params, base_query, lazy_eval=True)
-        child2 = Individual(child2_params, base_query, lazy_eval=True)
-        
-        return child1, child2
-    
-    def _mutate(
-        self,
-        individual: Individual,
-        base_query: ParsedQuery,
-        rule_analysis: dict[str, dict[int, Any]]
-    ) -> Individual:
-        """
-        Mutasi individu. Optimized: hanya copy yang dimutate.
-        """
-        import copy
-        
-        # Shallow copy dulu (fast)
-        mutated_params = {k: v.copy() for k, v in individual.operation_params.items()}
-        
-        if mutated_params:
-            manager = get_rule_params_manager()
-            operation_name = random.choice(list(mutated_params.keys()))
-            node_params = mutated_params[operation_name]
-            
-            if node_params:
-                node_id = random.choice(list(node_params.keys()))
-                # Deep copy hanya operation yang dimutate
-                mutated_params[operation_name] = copy.deepcopy(mutated_params[operation_name])
-                # Use operation-specific mutation
-                mutated_params[operation_name][node_id] = manager.mutate_params(
-                    operation_name,
-                    mutated_params[operation_name][node_id]
-                )
-        
-        # Lazy evaluation
-        return Individual(mutated_params, base_query, lazy_eval=True)
-    
-    def get_ga_statistics(self) -> dict:
-        """Dapatkan statistik optimasi."""
-        return {
-            'best_fitness': self.best_fitness,
-            'best_params': self.best_individual.operation_params if self.best_individual else None,
-            'generations': len(self.history),
-            'history': self.history
-        }
-    
-    def print_progress(self):
-        """Tampilkan progress optimasi."""
-        if not self.history:
-            print("No optimization run yet.")
-            return
-        
-        print("\n=== Genetic Algorithm Optimization Results ===")
-        print(f"Generations: {len(self.history)}")
-        print(f"Population Size: {self.population_size}")
-        print(f"Best Fitness: {self.best_fitness:.2f}")
-        
-        if self.best_individual:
-            print("\nBest Operation Parameters:")
-            for operation_name, node_params in self.best_individual.operation_params.items():
-                print(f"\n  {operation_name}:")
-                for node_id, order in node_params.items():
-                    print(f"    Node {node_id}: {order}")
-                    # Special formatting for filter_params (unified order format)
-                    if operation_name == 'filter_params' and isinstance(order, list):
-                        # Show the unified order explanation
-                        explanations = []
-                        for item in order:
-                            if isinstance(item, list):
-                                explanations.append(f"({', '.join(map(str, item))} dalam AND)")
-                            else:
-                                explanations.append(f"{item} single")
-                        if explanations:
-                            print(f"      → Order: {' -> '.join(explanations)}")
-                    # Special formatting for join_params (condition selection)
-                    elif operation_name == 'join_params' and isinstance(order, list):
-                        if order:
-                            print(f"      → Merge conditions: {order}")
-                        else:
-                            print("      → Keep separate (no merge)")
-        
-        print("\nProgress:")
-        print("Gen | Best    | Average | Worst")
-        print("----|---------|---------|--------")
-        
-        for i, record in enumerate(self.history):
-            if i % max(1, len(self.history) // 10) == 0 or i == len(self.history) - 1:
-                print(f"{record['generation']:3d} | "
-                      f"{record['best_fitness']:7.2f} | "
-                      f"{record['avg_fitness']:7.2f} | "
-                      f"{record['worst_fitness']:7.2f}")
+                    c1_params[op][k] = val2
+                    c2_params[op][k] = val1
+                    
+        return Individual(c1_params, base_query, lazy_eval=True), Individual(c2_params, base_query, lazy_eval=True)
 
-
-def optimize_query_genetic(
-    query: ParsedQuery,
-    population_size: int = 50,
-    generations: int = 100,
-    mutation_rate: float = 0.1,
-    fitness_func: Callable[[ParsedQuery], float] | None = None
-) -> tuple[ParsedQuery, dict]:
-    """Optimasi query menggunakan GA (convenience function)."""
-    ga = GeneticOptimizer(
-        population_size=population_size,
-        generations=generations,
-        mutation_rate=mutation_rate,
-        fitness_func=fitness_func
-    )
-    
-    optimized_query = ga.optimize(query)
-    stats = ga.get_ga_statistics()
-    
-    ga.print_progress()
-    
-    return optimized_query, stats
+    def _mutate(self, ind):
+        new_params = {op: {k: v for k,v in data.items()} for op, data in ind.operation_params.items()}
+        mgr = get_rule_params_manager()
+        
+        if not new_params: return ind
+        
+        # Pick operation
+        op = random.choice(list(new_params.keys()))
+        data = new_params[op]
+        
+        if data:
+            # Pick node (Key bisa int atau frozenset, tidak masalah)
+            key = random.choice(list(data.keys()))
+            data[key] = mgr.mutate_params(op, data[key])
+            
+        return Individual(new_params, ind.base_query, lazy_eval=True)
