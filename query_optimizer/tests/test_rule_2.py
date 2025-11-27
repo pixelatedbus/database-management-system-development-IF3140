@@ -20,7 +20,8 @@ OPERATOR("AND")
 import unittest
 from query_optimizer.query_tree import QueryTree
 from query_optimizer.optimization_engine import ParsedQuery
-from query_optimizer.rule_2 import (
+from query_optimizer.query_check import check_query
+from query_optimizer.rule.rule_2 import (
     analyze_and_operators_for_reorder,
     generate_random_rule_2_params,
     copy_rule_2_params,
@@ -30,6 +31,28 @@ from query_optimizer.rule_2 import (
     validate_rule_2_params,
     clone_tree
 )
+
+
+def make_comparison(operator=">", left_val="x", right_val=10):
+    """Helper to create valid COMPARISON node"""
+    comp = QueryTree("COMPARISON", operator)
+    
+    # Left side: COLUMN_REF
+    left = QueryTree("COLUMN_REF", "")
+    left_name = QueryTree("COLUMN_NAME", "")
+    left_id = QueryTree("IDENTIFIER", left_val)
+    left_name.add_child(left_id)
+    left.add_child(left_name)
+    
+    # Right side: LITERAL
+    if isinstance(right_val, str):
+        right = QueryTree("LITERAL_STRING", right_val)
+    else:
+        right = QueryTree("LITERAL_NUMBER", right_val)
+    
+    comp.add_child(left)
+    comp.add_child(right)
+    return comp
 
 
 class TestHelperFunctions(unittest.TestCase):
@@ -204,17 +227,9 @@ class TestReorderAndConditions(unittest.TestCase):
     def test_reorder_simple(self):
         """Test simple reordering of 3 conditions"""
         # Build OPERATOR(AND) with 3 conditions
-        comp1 = QueryTree("COMPARISON", ">")
-        comp1.add_child(QueryTree("COLUMN_REF"))
-        comp1.add_child(QueryTree("LITERAL_NUMBER", 10))
-        
-        comp2 = QueryTree("COMPARISON", "=")
-        comp2.add_child(QueryTree("COLUMN_REF"))
-        comp2.add_child(QueryTree("LITERAL_STRING", "active"))
-        
-        comp3 = QueryTree("COMPARISON", "<")
-        comp3.add_child(QueryTree("COLUMN_REF"))
-        comp3.add_child(QueryTree("LITERAL_NUMBER", 100))
+        comp1 = make_comparison(">", "age", 10)
+        comp2 = make_comparison("=", "status", "active")
+        comp3 = make_comparison("<", "score", 100)
         
         and_op = QueryTree("OPERATOR", "AND")
         and_op.add_child(comp1)
@@ -226,6 +241,9 @@ class TestReorderAndConditions(unittest.TestCase):
         # Reorder to [2, 0, 1]
         operator_orders = {and_op.id: [2, 0, 1]}
         result = reorder_and_conditions(query, operator_orders)
+        
+        # Validate result
+        check_query(result.query_tree)
         
         # Verify structure
         result_and = result.query_tree
@@ -241,17 +259,8 @@ class TestReorderAndConditions(unittest.TestCase):
     def test_reorder_preserves_structure(self):
         """Test that reordering preserves child structure"""
         # Build conditions with nested structure
-        comp1 = QueryTree("COMPARISON", ">")
-        col_ref = QueryTree("COLUMN_REF")
-        col_name = QueryTree("COLUMN_NAME")
-        col_name.add_child(QueryTree("IDENTIFIER", "age"))
-        col_ref.add_child(col_name)
-        comp1.add_child(col_ref)
-        comp1.add_child(QueryTree("LITERAL_NUMBER", 25))
-        
-        comp2 = QueryTree("COMPARISON", "=")
-        comp2.add_child(QueryTree("COLUMN_REF"))
-        comp2.add_child(QueryTree("LITERAL_STRING", "test"))
+        comp1 = make_comparison(">", "age", 25)
+        comp2 = make_comparison("=", "status", "test")
         
         and_op = QueryTree("OPERATOR", "AND")
         and_op.add_child(comp1)
@@ -262,6 +271,9 @@ class TestReorderAndConditions(unittest.TestCase):
         # Reorder to [1, 0]
         operator_orders = {and_op.id: [1, 0]}
         result = reorder_and_conditions(query, operator_orders)
+        
+        # Validate result
+        check_query(result.query_tree)
         
         # Verify first child (was comp2) is now COMPARISON(=)
         self.assertEqual(result.query_tree.childs[0].val, "=")
@@ -276,14 +288,14 @@ class TestReorderAndConditions(unittest.TestCase):
         """Test reordering multiple OPERATOR(AND) nodes"""
         # Inner AND
         inner_and = QueryTree("OPERATOR", "AND")
-        inner_and.add_child(QueryTree("COMPARISON", ">"))
-        inner_and.add_child(QueryTree("COMPARISON", "="))
+        inner_and.add_child(make_comparison(">", "age", 18))
+        inner_and.add_child(make_comparison("=", "status", "active"))
         
         # Outer AND
         outer_and = QueryTree("OPERATOR", "AND")
         outer_and.add_child(inner_and)
-        outer_and.add_child(QueryTree("COMPARISON", "<"))
-        outer_and.add_child(QueryTree("IN_EXPR"))
+        outer_and.add_child(make_comparison("<", "score", 100))
+        outer_and.add_child(make_comparison("!=", "type", "banned"))
         
         query = ParsedQuery(outer_and, "test")
         
@@ -294,8 +306,14 @@ class TestReorderAndConditions(unittest.TestCase):
         }
         result = reorder_and_conditions(query, operator_orders)
         
-        # Verify outer order
-        self.assertEqual(result.query_tree.childs[0].type, "IN_EXPR")
+        # Validate result
+        check_query(result.query_tree)
+        
+        # Verify outer order (after reorder [2, 0, 1])
+        # Child 0 should be index 2 (third COMPARISON)
+        # Child 1 should be index 0 (inner AND)
+        # Child 2 should be index 1 (second COMPARISON)
+        self.assertEqual(result.query_tree.childs[0].type, "COMPARISON")
         self.assertEqual(result.query_tree.childs[1].type, "OPERATOR")
         self.assertEqual(result.query_tree.childs[2].type, "COMPARISON")
         
@@ -306,8 +324,8 @@ class TestReorderAndConditions(unittest.TestCase):
     
     def test_reorder_no_operator_orders(self):
         """Test that no reordering happens when operator_orders is None"""
-        comp1 = QueryTree("COMPARISON", ">")
-        comp2 = QueryTree("COMPARISON", "=")
+        comp1 = make_comparison(">", "age", 18)
+        comp2 = make_comparison("=", "status", "active")
         
         and_op = QueryTree("OPERATOR", "AND")
         and_op.add_child(comp1)
@@ -315,6 +333,9 @@ class TestReorderAndConditions(unittest.TestCase):
         
         query = ParsedQuery(and_op, "test")
         result = reorder_and_conditions(query, None)
+        
+        # Validate result
+        check_query(result.query_tree)
         
         # Should remain unchanged
         self.assertEqual(result.query_tree.childs[0].val, ">")

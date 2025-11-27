@@ -1,17 +1,23 @@
 """
-Integration tests untuk Rule 1 dan Rule 2
-Testing kombinasi dan interaksi antar rules
+Integration tests untuk Rule yang masuk Genetic Algorithm (Rule 1 dan Rule 2)
+
+Rule ini bersifat heuristik dan memerlukan parameter space exploration dengan GA:
+- Rule 1: Selection Cascade (cascade/group filters)
+- Rule 2: Selection Reorder (reorder AND conditions)
+
+Kedua rule ini diintegrasikan dalam unified filter_params untuk GA.
+Testing kombinasi dan interaksi antar rules dalam parameter space.
 """
 
 import unittest
 from query_optimizer.query_tree import QueryTree
 from query_optimizer.optimization_engine import ParsedQuery
-from query_optimizer.rule_1 import (
+from query_optimizer.rule.rule_1 import (
     seleksi_konjungtif,
     cascade_filters,
     analyze_and_operators
 )
-from query_optimizer.rule_2 import (
+from query_optimizer.rule.rule_2 import (
     reorder_and_conditions,
     analyze_and_operators_for_reorder
 )

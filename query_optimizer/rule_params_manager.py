@@ -3,28 +3,48 @@ Rule Parameters Manager
 
 Centralized management untuk semua operation parameters dalam Genetic Algorithm.
 Menggunakan parameter umum berdasarkan tipe operasi:
-- filter_params: Parameter untuk filter operations (AND operators)
-- join_params: Parameter untuk join operations (kosong untuk saat ini)
+- filter_params: Parameter untuk filter operations (Rule 1 + 2 - AND operators)
+- join_params: Parameter untuk join operations (Rule 4 - Push selection into joins)
 
-Struktur params menggunakan format UNIFIED ORDER:
+Struktur params menggunakan format:
 {
     'filter_params': {
-        node_id: [2, [0, 1]]  # Mixed order: int (single) | list (grouped dalam AND)
-                              # [2, [0,1]] = cond2 single, lalu (cond0 AND cond1) grouped
-                              # [1, 0, 2]  = semua single (reorder tanpa cascade)
+        operator_id: [2, [0, 1]]  # UNIFIED ORDER: mixed single/grouped conditions
+                                   # int (single) | list[int] (grouped dalam AND)
+                                   # [2, [0,1]] = cond2 single, lalu (cond0 AND cond1) grouped
+                                   # [1, 0, 2]  = semua single (reorder tanpa cascade)
     },
-    'join_params': {}  # Untuk future implementation
+    'join_params': {
+        join_node_id: [10, 15]  # CONDITION SELECTION: kondisi mana yang masuk ke JOIN
+                                # [10, 15] = merge conditions dengan ID 10 dan 15 ke JOIN
+                                # [] = tidak ada kondisi yang di-merge (keep FILTER separate)
+    }
 }
 
-Format order ini menggabungkan:
+Format filter_params menggabungkan:
 - Seleksi Komutatif (reordering): mengatur urutan kondisi
 - Seleksi Konjunktif (cascading): menentukan grouping dalam AND
 
-Contoh:
+Contoh filter_params:
 - [0, 1, 2]     → Semua single, order original (no reorder, full cascade)
 - [2, 1, 0]     → Semua single, reversed (reorder, full cascade)
 - [2, [0, 1]]   → cond2 single cascade, cond0&1 tetap grouped
 - [[0, 1, 2]]   → Semua dalam satu AND (reorder dulu, tapi no cascade)
+
+Format join_params mengontrol WHICH conditions masuk ke JOIN:
+- [10, 15]: Merge conditions dengan ID 10 dan 15 dari FILTER ke JOIN
+- []: Tidak merge kondisi apapun (keep FILTER separate)
+- [10, 15, 20]: Merge 3 conditions ke JOIN
+
+Note: Rule 4 HANYA mengatur WHICH conditions masuk ke JOIN.
+TIDAK mengatur:
+- Urutan conditions (order) - semua conditions di JOIN digabung dengan AND tanpa ordering
+- Cascade - semua conditions di JOIN digabung dalam satu OPERATOR(AND)
+
+Contoh join_params:
+- {42: [10, 15]}  → Merge conditions 10 dan 15 ke JOIN dengan ID 42
+- {57: []}        → Keep FILTER separate untuk JOIN dengan ID 57
+- {88: [5, 8, 12]} → Merge conditions 5, 8, dan 12 ke JOIN dengan ID 88
 """
 
 from typing import Any, Literal
@@ -107,13 +127,12 @@ class RuleParamsManager:
     def _register_default_operations(self):
         """Register default operations."""
         # Filter operations (Rule 1 + Rule 2)
-        from query_optimizer.rule_1 import (
+        from query_optimizer.rule.rule_1 import (
             analyze_and_operators,
             copy_rule_1_params,
             mutate_rule_1_params,
         )
-        from query_optimizer.rule_2 import (
-            generate_random_rule_2_params,
+        from query_optimizer.rule.rule_2 import (
             mutate_rule_2_params,
         )
         
@@ -225,31 +244,54 @@ class RuleParamsManager:
             validate_func=validate_filter_params
         )
         
-        # Join operations (placeholder for future)
+        # Join operations (Rule 4: Push selection into joins)
+        from query_optimizer.rule import rule_4
+        
         def analyze_joins(query: ParsedQuery) -> dict[int, Any]:
-            """Placeholder: Analyze join operations."""
-            # TODO: Implement when join optimization rules are added
-            return {}
+            """Analyze FILTER-JOIN patterns for rule 4.
+            
+            Returns:
+                Dict[join_id, metadata]
+                metadata = {
+                    'filter_conditions': [condition_ids],
+                    'existing_conditions': [condition_ids]
+                }
+            """
+            return rule_4.find_patterns(query)
         
-        def generate_join_params(metadata: Any) -> dict:
-            """Placeholder: Generate join params."""
-            return {}
+        def generate_join_params(metadata: dict) -> list[int]:
+            """Generate selection of conditions to merge into JOIN.
+            
+            Args:
+                metadata: {
+                    'filter_conditions': [condition_ids],
+                    'existing_conditions': [condition_ids]
+                }
+            
+            Returns:
+                list[int]: List of condition IDs to merge into JOIN
+            """
+            return rule_4.generate_params(metadata)
         
-        def copy_join_params(params: dict) -> dict:
-            """Placeholder: Copy join params."""
-            import copy
-            return copy.deepcopy(params)
+        def copy_join_params(params: list[int]) -> list[int]:
+            """Deep copy join params."""
+            return rule_4.copy_params(params)
         
-        def mutate_join_params(params: dict) -> dict:
-            """Placeholder: Mutate join params."""
-            return params
+        def mutate_join_params(params: list[int]) -> list[int]:
+            """Mutate join params by adding/removing conditions."""
+            return rule_4.mutate_params(params)
+        
+        def validate_join_params(params: list[int]) -> bool:
+            """Validate join params structure."""
+            return rule_4.validate_params(params)
         
         self.register_operation(
             operation_name='join_params',
             analyze_func=analyze_joins,
             generate_func=generate_join_params,
             copy_func=copy_join_params,
-            mutate_func=mutate_join_params
+            mutate_func=mutate_join_params,
+            validate_func=validate_join_params
         )
 
 

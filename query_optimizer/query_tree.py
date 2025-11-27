@@ -150,14 +150,6 @@ class QueryTree:
         """
         return self.childs.copy()
     
-    def get_child(self, index: int) -> QueryTree | None:
-        """
-        Mengembalikan child pada index tertentu
-        """
-        if 0 <= index < len(self.childs):
-            return self.childs[index]
-        return None
-    
     def insert_between_child(self, child: QueryTree, new_node: QueryTree) -> bool:
         """
         Insert new_node antara parent dan child
@@ -193,17 +185,6 @@ class QueryTree:
         return True
     
     ### Node checking ###
-    def is_node_type(self, type: str) -> bool:
-        """
-        Cek apakah tipe node adalah type
-        """
-        return self.type == type
-
-    def is_node_value(self, value: str) -> bool:
-        """
-        Cek apakah node memiliki value tertentu
-        """
-        return self.val == value
     
     def find_node_by_id(self, node_id: int) -> QueryTree | None:
         """

@@ -229,7 +229,7 @@ class TestGeneticRule2Integration(unittest.TestCase):
         )
         
         ga.optimize(self.query)
-        stats = ga.get_statistics()
+        stats = ga.get_ga_statistics()
         
         # Should have best_params with filter_params
         self.assertIn('best_params', stats)

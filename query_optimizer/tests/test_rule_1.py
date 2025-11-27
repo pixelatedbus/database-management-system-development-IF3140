@@ -33,7 +33,8 @@ FILTER (condition2 single)
 import unittest
 from query_optimizer.query_tree import QueryTree
 from query_optimizer.optimization_engine import ParsedQuery
-from query_optimizer.rule_1 import (
+from query_optimizer.query_check import check_query
+from query_optimizer.rule.rule_1 import (
     analyze_and_operators,
     generate_random_rule_1_params,
     copy_rule_1_params,
@@ -41,12 +42,29 @@ from query_optimizer.rule_1 import (
     mutate_rule_1_params,
     seleksi_konjungtif,
     cascade_filters,
-    cascade_and_mixed,
     uncascade_filters,
     is_conjunctive_filter,
-    can_transform,
     clone_tree
 )
+
+
+def make_comparison(operator=">", left_val="x", right_val=10):
+    """Helper to create valid COMPARISON node"""
+    comp = QueryTree("COMPARISON", operator)
+    
+    # Left side: COLUMN_REF
+    left = QueryTree("COLUMN_REF", "")
+    left_name = QueryTree("COLUMN_NAME", "")
+    left_id = QueryTree("IDENTIFIER", left_val)
+    left_name.add_child(left_id)
+    left.add_child(left_name)
+    
+    # Right side: LITERAL
+    right = QueryTree("LITERAL_NUMBER", right_val)
+    
+    comp.add_child(left)
+    comp.add_child(right)
+    return comp
 
 
 class TestHelperFunctions(unittest.TestCase):
@@ -293,8 +311,8 @@ class TestSeleksiKonjunktif(unittest.TestCase):
     def test_simple_two_conditions(self):
         """Test basic transformation with 2 conditions"""
         relation = QueryTree("RELATION", "users")
-        comp1 = QueryTree("COMPARISON", ">")
-        comp2 = QueryTree("COMPARISON", "=")
+        comp1 = make_comparison(">", "age", 18)
+        comp2 = make_comparison("=", "status", "active")
         
         and_op = QueryTree("OPERATOR", "AND")
         and_op.add_child(comp1)
@@ -306,6 +324,9 @@ class TestSeleksiKonjunktif(unittest.TestCase):
         
         query = ParsedQuery(filter_node, "test")
         result = seleksi_konjungtif(query)
+        
+        # Validate result is structurally correct
+        check_query(result.query_tree)
         
         # Result should be cascaded: FILTER -> FILTER -> RELATION
         self.assertEqual(result.query_tree.type, "FILTER")
@@ -323,9 +344,9 @@ class TestSeleksiKonjunktif(unittest.TestCase):
     def test_three_conditions(self):
         """Test transformation with 3 conditions"""
         relation = QueryTree("RELATION", "users")
-        comp1 = QueryTree("COMPARISON", ">")
-        comp2 = QueryTree("COMPARISON", "=")
-        comp3 = QueryTree("COMPARISON", "<")
+        comp1 = make_comparison(">", "age", 18)
+        comp2 = make_comparison("=", "status", "active")
+        comp3 = make_comparison("<", "score", 100)
         
         and_op = QueryTree("OPERATOR", "AND")
         and_op.add_child(comp1)
@@ -338,6 +359,9 @@ class TestSeleksiKonjunktif(unittest.TestCase):
         
         query = ParsedQuery(filter_node, "test")
         result = seleksi_konjungtif(query)
+        
+        # Validate result
+        check_query(result.query_tree)
         
         # Count cascade depth
         depth = 0
@@ -357,8 +381,8 @@ class TestSeleksiKonjunktif(unittest.TestCase):
         
         # First AND
         and_op1 = QueryTree("OPERATOR", "AND")
-        and_op1.add_child(QueryTree("COMPARISON", ">"))
-        and_op1.add_child(QueryTree("COMPARISON", "="))
+        and_op1.add_child(make_comparison(">", "age", 18))
+        and_op1.add_child(make_comparison("=", "status", "active"))
         
         filter1 = QueryTree("FILTER")
         filter1.add_child(relation)
@@ -366,8 +390,9 @@ class TestSeleksiKonjunktif(unittest.TestCase):
         
         # Second AND
         and_op2 = QueryTree("OPERATOR", "AND")
-        and_op2.add_child(QueryTree("COMPARISON", "<"))
-        and_op2.add_child(QueryTree("IN_EXPR"))
+        and_op2.add_child(make_comparison("<", "score", 100))
+        # IN_EXPR also needs children, but let's use another COMPARISON
+        and_op2.add_child(make_comparison("!=", "type", "banned"))
         
         filter2 = QueryTree("FILTER")
         filter2.add_child(filter1)
@@ -377,6 +402,9 @@ class TestSeleksiKonjunktif(unittest.TestCase):
         
         # Transform only second AND
         result = seleksi_konjungtif(query, [and_op2.id])
+        
+        # Validate result
+        check_query(result.query_tree)
         
         # Top should be cascaded
         self.assertEqual(result.query_tree.type, "FILTER")
@@ -404,9 +432,9 @@ class TestCascadeFilters(unittest.TestCase):
     def test_cascade_all_single(self):
         """Test cascade with all single conditions"""
         relation = QueryTree("RELATION", "users")
-        comp1 = QueryTree("COMPARISON", ">")
-        comp2 = QueryTree("COMPARISON", "=")
-        comp3 = QueryTree("COMPARISON", "<")
+        comp1 = make_comparison(">", "age", 18)
+        comp2 = make_comparison("=", "status", "active")
+        comp3 = make_comparison("<", "score", 100)
         
         and_op = QueryTree("OPERATOR", "AND")
         and_op.add_child(comp1)
@@ -423,6 +451,9 @@ class TestCascadeFilters(unittest.TestCase):
         operator_orders = {and_op.id: [2, 1, 0]}
         result = cascade_filters(query, operator_orders)
         
+        # Validate result
+        check_query(result.query_tree)
+        
         # Should be fully cascaded
         depth = 0
         current = result.query_tree
@@ -438,9 +469,9 @@ class TestCascadeFilters(unittest.TestCase):
     def test_cascade_mixed_order(self):
         """Test cascade with mixed single/grouped conditions"""
         relation = QueryTree("RELATION", "users")
-        comp1 = QueryTree("COMPARISON", ">")
-        comp2 = QueryTree("COMPARISON", "=")
-        comp3 = QueryTree("COMPARISON", "<")
+        comp1 = make_comparison(">", "age", 18)
+        comp2 = make_comparison("=", "status", "active")
+        comp3 = make_comparison("<", "score", 100)
         
         and_op = QueryTree("OPERATOR", "AND")
         and_op.add_child(comp1)
@@ -456,6 +487,9 @@ class TestCascadeFilters(unittest.TestCase):
         # Order: [2, [0, 1]] - comp3 single, then comp1 AND comp2 grouped
         operator_orders = {and_op.id: [2, [0, 1]]}
         result = cascade_filters(query, operator_orders)
+        
+        # Validate result
+        check_query(result.query_tree)
         
         # Top should be FILTER with comp3
         self.assertEqual(result.query_tree.type, "FILTER")
@@ -473,9 +507,9 @@ class TestCascadeFilters(unittest.TestCase):
     def test_cascade_all_grouped(self):
         """Test cascade with all conditions in one group"""
         relation = QueryTree("RELATION", "users")
-        comp1 = QueryTree("COMPARISON", ">")
-        comp2 = QueryTree("COMPARISON", "=")
-        comp3 = QueryTree("COMPARISON", "<")
+        comp1 = make_comparison(">", "age", 18)
+        comp2 = make_comparison("=", "status", "active")
+        comp3 = make_comparison("<", "score", 100)
         
         and_op = QueryTree("OPERATOR", "AND")
         and_op.add_child(comp1)
@@ -491,6 +525,9 @@ class TestCascadeFilters(unittest.TestCase):
         # Order: [[0, 1, 2]] - all grouped
         operator_orders = {and_op.id: [[0, 1, 2]]}
         result = cascade_filters(query, operator_orders)
+        
+        # Validate result
+        check_query(result.query_tree)
         
         # Should have single FILTER with OPERATOR(AND)
         self.assertEqual(result.query_tree.type, "FILTER")
@@ -509,8 +546,8 @@ class TestUncascadeFilters(unittest.TestCase):
     def test_uncascade_simple(self):
         """Test uncascade of simple cascaded filters"""
         relation = QueryTree("RELATION", "users")
-        comp1 = QueryTree("COMPARISON", ">")
-        comp2 = QueryTree("COMPARISON", "=")
+        comp1 = make_comparison(">", "age", 18)
+        comp2 = make_comparison("=", "status", "active")
         
         # Create cascaded: FILTER(comp2) -> FILTER(comp1) -> RELATION
         filter1 = QueryTree("FILTER")
@@ -523,6 +560,9 @@ class TestUncascadeFilters(unittest.TestCase):
         
         query = ParsedQuery(filter2, "test")
         result = uncascade_filters(query)
+        
+        # Validate result
+        check_query(result.query_tree)
         
         # Should have FILTER with OPERATOR(AND)
         self.assertEqual(result.query_tree.type, "FILTER")
@@ -537,9 +577,9 @@ class TestUncascadeFilters(unittest.TestCase):
     def test_cascade_then_uncascade(self):
         """Test that cascade -> uncascade returns to AND structure"""
         relation = QueryTree("RELATION", "users")
-        comp1 = QueryTree("COMPARISON", ">")
-        comp2 = QueryTree("COMPARISON", "=")
-        comp3 = QueryTree("COMPARISON", "<")
+        comp1 = make_comparison(">", "age", 18)
+        comp2 = make_comparison("=", "status", "active")
+        comp3 = make_comparison("<", "score", 100)
         
         and_op = QueryTree("OPERATOR", "AND")
         and_op.add_child(comp1)
@@ -557,6 +597,9 @@ class TestUncascadeFilters(unittest.TestCase):
         
         # Uncascade
         uncascaded = uncascade_filters(cascaded)
+        
+        # Validate result
+        check_query(uncascaded.query_tree)
         
         # Should have FILTER with OPERATOR(AND)
         self.assertEqual(uncascaded.query_tree.type, "FILTER")

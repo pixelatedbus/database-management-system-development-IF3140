@@ -1,25 +1,43 @@
 from __future__ import annotations
 from query_optimizer.query_tree import QueryTree
+from storage_manager.storage_manager import StorageManager
 
 class QueryValidationError(Exception):
     """Exception raised when query tree validation fails"""
     pass
 
-# Dummy function
-def get_statistic():
+def get_metadata():
     """
-    Dummy function yang mengembalikan informasi tentang database.
-    Tolong returns dict dengan:
+    Returns dict dengan:
     - tables: list nama tabel yang ada
     - columns: dict mapping table_name -> list of column names
     """
+    sm = StorageManager()
+    metadata = sm.get_metadata()
+    
+    # Dummy tables untuk testing di comment jika sudah test integrasi
+    dummy_tables = {
+        "users": ["id", "name", "email"],
+        "profiles": ["id", "user_id", "bio"],
+        "orders": ["id", "user_id", "total"],
+        "products": ["id", "category", "price", "stock", "description", "discount"],
+        "employees": ["id", "name", "salary", "department", "bonus"],
+        "accounts": ["id", "balance"],
+        "logs": ["id", "message"],
+        "payroll": ["salary"]
+    }
+    
+    all_tables = set(metadata["tables"])
+    all_columns = metadata["columns"].copy()
+    
+    for table, columns in dummy_tables.items():
+        if table not in all_tables:
+            all_tables.add(table)
+            all_columns[table] = columns
+    
     return {
-        "tables": ["users", "profiles", "orders"],
-        "columns": {
-            "users": ["id", "name", "email"],
-            "profiles": ["id", "user_id", "bio"],
-            "orders": ["id", "user_id", "total"]
-        }
+        "tables": sorted(list(all_tables)),
+        "columns": all_columns
     }
 
 ATOMIC_NODES = {
@@ -146,12 +164,13 @@ def check_query(node: QueryTree) -> None:
                 raise QueryValidationError(f"<JOIN> harus punya 2-3 children, dapat {num_children}")
         
         elif node.type == "SORT":
-            # SORT has 2 children (column_ref to sort by, source)
+            # SORT has 2 children (order_expr, source)
+            # order_expr bisa berupa COLUMN_REF atau expression lain
             if num_children != 2:
-                raise QueryValidationError(f"<SORT> harus punya 2 children (column + source), dapat {num_children}")
-            # Child 0 must be COLUMN_REF
-            if node.childs[0].type != "COLUMN_REF":
-                raise QueryValidationError(f"<SORT> child 0 harus COLUMN_REF, dapat {node.childs[0].type}")
+                raise QueryValidationError(f"<SORT> harus punya 2 children (order_expr + source), dapat {num_children}")
+            # Child 0 harus expression (COLUMN_REF, ARITH_EXPR, dll)
+            if node.childs[0].type not in {"COLUMN_REF", "ARITH_EXPR", "FUNCTION_CALL", "LITERAL_NUMBER", "LITERAL_STRING"}:
+                raise QueryValidationError(f"<SORT> child 0 harus expression yang valid, dapat {node.childs[0].type}")
         
         elif node.type == "LIMIT":
             # LIMIT has 1 child (source)
@@ -236,7 +255,7 @@ def check_query(node: QueryTree) -> None:
     check_value(node)
 
 def check_value(node: QueryTree) -> None:
-    stats = get_statistic()
+    stats = get_metadata()
     
     if node.type == "IDENTIFIER":
         if not node.val:
@@ -247,7 +266,7 @@ def check_value(node: QueryTree) -> None:
             pass
         else:
             # Literals lain harus punya value
-            if not node.val and node.val != 0 and node.val != False:
+            if not node.val and node.val != 0:
                 raise QueryValidationError(f"<{node.type}> harus punya value")
     
     if node.type == "RELATION":
@@ -262,15 +281,17 @@ def check_value(node: QueryTree) -> None:
     
     if node.type == "JOIN":
         if not node.val:
-            raise QueryValidationError("<JOIN> harus punya join type (INNER/NATURAL)")
-        if node.val not in {"INNER", "NATURAL"}:
-            raise QueryValidationError(f"<JOIN> value harus 'INNER' atau 'NATURAL', dapat '{node.val}'")
+            raise QueryValidationError("<JOIN> harus punya join type (INNER/NATURAL/CROSS)")
+        if node.val not in {"INNER", "NATURAL", "CROSS"}:
+            raise QueryValidationError(f"<JOIN> value harus 'INNER', 'NATURAL', atau 'CROSS', dapat '{node.val}'")
         
         num_children = len(node.childs)
         if node.val == "NATURAL" and num_children != 2:
             raise QueryValidationError(f"NATURAL JOIN harus punya 2 children, dapat {num_children}")
         elif node.val == "INNER" and num_children != 3:
             raise QueryValidationError(f"INNER JOIN harus punya 3 children (2 relations + condition), dapat {num_children}")
+        elif node.val == "CROSS" and num_children != 2:
+            raise QueryValidationError(f"CROSS JOIN harus punya 2 children (2 relations), dapat {num_children}")
     
     if node.type == "COMPARISON":
         if not node.val:

@@ -9,10 +9,13 @@ Query Optimizer adalah modul yang bertanggung jawab untuk mengoptimalkan query S
 ### Fitur Utama
 
 - **SQL Parser**: Mengubah SQL string menjadi Query Tree representation
-- **Genetic Algorithm Optimizer**: Optimasi query menggunakan unified filter params
+- **Deterministic Rules**: Rule 3 (projection elimination), Rule 7 (filter pushdown), Rule 8 (projection over joins)
+- **Non-Deterministic Rules**: Rule 1 (filter cascading), Rule 2 (filter reordering), Rule 4 (push selection into joins)
+- **Genetic Algorithm Optimizer**: Optimasi query menggunakan unified filter params dan join params
 - **Query Tree Manipulation**: Transformasi dan manipulasi struktur query tree
 - **Cost Estimation**: Estimasi cost eksekusi query
 - **Unified Filter Params**: Format `list[int | list[int]]` menggabungkan reordering dan cascading
+- **Join Params**: Format `bool` untuk merge decision (FILTER ke JOIN)
 
 ### Komponen Utama
 
@@ -25,14 +28,25 @@ query_optimizer/
 ├── optimization_engine.py    # Main optimization engine
 ├── genetic_optimizer.py      # Genetic Algorithm with unified params
 ├── rule_params_manager.py    # Unified parameter management
-├── rule_1.py                 # Filter cascading transformation
-├── rules_registry.py         # Optimization rules registry
+├── rule_1.py                 # Filter cascading (non-deterministic)
+├── rule_2.py                 # Filter reordering (non-deterministic)
+├── rule_3.py                 # Projection elimination (deterministic)
+├── rule_4.py                 # Push selection into joins (non-deterministic)
+├── rule_7.py                 # Filter pushdown over join (deterministic)
+├── rule_8.py                 # Projection over join (deterministic)
 ├── demo.py                   # Demo program
 └── tests/                    # Unit tests
     ├── test_tokenizer.py
     ├── test_parser.py
+    ├── test_check.py
     ├── test_rule_1.py
+    ├── test_rule_2.py
+    ├── test_rule_4.py
+    ├── test_rule_7.py
+    ├── test_rule_8.py
+    ├── test_rule_deterministik.py
     ├── test_genetic.py
+    ├── test_integration_rules.py
     └── integration.py
 ```
 
@@ -53,16 +67,29 @@ cd database-management-system-development-IF3140
 
 ### 2.2 Running Demo
 
-Demo program menyediakan 2 mode:
+Demo program menyediakan 9 mode:
 
-**Demo 1-2: Basic Operations**
+**Demo 1: Basic Parsing**
 
 ```bash
-python -m query_optimizer.demo 1  # Basic parsing
-python -m query_optimizer.demo 2  # Basic optimization
+python -m query_optimizer.demo 1
 ```
 
-**Demo 3: Rule 3 - Projection Elimination**
+Output:
+- Parse multiple SQL queries
+- Display query tree structure
+
+**Demo 2: Basic Optimization Comparison**
+
+```bash
+python -m query_optimizer.demo 2
+```
+
+Output:
+- Compare optimization with/without GA
+- Show cost difference
+
+**Demo 3: Rule 3 - Projection Elimination (Deterministic)**
 
 ```bash
 python -m query_optimizer.demo 3
@@ -74,30 +101,91 @@ Output:
 - Explains Rule 3 is applied ONCE before GA
 - PROJECT count reduction
 
-**Demo 4: Rule 1 - Filter Cascading**
+**Demo 4: Rule 7 - Filter Pushdown over Join (Deterministic)**
 
 ```bash
 python -m query_optimizer.demo 4
 ```
 
 Output:
-- Filter cascading transformation
-- Mixed cascade orders (unified format)
-- Uncascade back to AND structure
+- Demonstrates FILTER → JOIN pattern detection
+- Shows filter pushdown to left/right/both sides
+- Explains benefit: reduced data before join
+- FILTER count increase (closer to source)
 
-**Demo 5: Genetic Algorithm with Unified Params**
+**Demo 5: Rule 8 - Projection over Join (Deterministic)**
 
 ```bash
 python -m query_optimizer.demo 5
 ```
 
 Output:
-- Full genetic optimization (Rule 3 → GA)
+- Demonstrates PROJECT → JOIN pattern detection
+- Shows projection pushdown to join children
+- Explains benefit: reduced tuple width before join
+- PROJECT count increase (child projections added)
+- Each relation only projects needed columns
+
+**Demo 6: Rule 1 - Filter Cascading (Non-deterministic)**
+
+```bash
+python -m query_optimizer.demo 6
+```
+
+Output:
+- Filter cascading transformation
+- Mixed cascade orders (unified format)
+- Uncascade back to AND structure
+- Random order generation
+
+**Demo 7: Rule 4 - Push Selection into Joins (Non-deterministic)**
+
+```bash
+python -m query_optimizer.demo 7
+```
+
+Output:
+- FILTER-JOIN pattern detection
+- Compare merge vs separate decisions
+- Cost comparison for both options
+- GA finds optimal decision automatically
+- Shows interaction with Rule 1+2 optimization
+
+**Demo 8: Genetic Algorithm with All Rules (1, 2, 4)**
+
+```bash
+python -m query_optimizer.demo 8
+```
+
+Output:
+- Full genetic optimization (Rule 3 → Rule 7 → Rule 8 → GA)
+- Includes join_params (Rule 4) and filter_params (Rule 1+2)
 - Original query tree & cost
 - Optimized query tree & cost
 - Improvement statistics
-- Best solution (unified filter_params: reorder + cascade)
+- Best solution showing all parameter types
 - Evolution progress per generation
+
+**Demo 9: Rule 2 - Filter Reordering (Non-deterministic)**
+
+```bash
+python -m query_optimizer.demo 9
+```
+
+Output:
+- AND condition reordering
+- Multiple reorder strategies
+- Preserves tree structure
+
+**Demo 10: Run All Demos**
+
+```bash
+python -m query_optimizer.demo 10
+```
+
+Output:
+- Execute all demos sequentially (Rule 3 → Rule 7 → Rule 8 → Rule 1 → Rule 2 → GA)
+- Comprehensive showcase of all features
 
 ### 2.3 Programmatic Usage
 
@@ -130,7 +218,7 @@ engine = OptimizationEngine()
 query = engine.parse_query("SELECT * FROM users WHERE age > 25 AND status = 'active'")
 
 # Optimize dengan GA
-# Note: Rule 3 (projection elimination) otomatis dijalankan SEBELUM GA
+# Note: Deterministic rules (Rule 3, 7, 8) otomatis dijalankan SEBELUM GA
 optimized = engine.optimize_query(
     query,
     use_genetic=True,
@@ -161,7 +249,7 @@ engine = OptimizationEngine()
 query = engine.parse_query("SELECT * FROM users WHERE age > 25 AND status = 'active'")
 
 # Use custom fitness function
-# Rule 3 tetap dijalankan di awal, kemudian GA dengan custom fitness
+# Deterministic rules (3, 7, 8) tetap dijalankan di awal, kemudian GA dengan custom fitness
 optimized = engine.optimize_query(
     query,
     population_size=30,
@@ -182,9 +270,12 @@ python -m unittest discover query_optimizer/tests
 python -m unittest query_optimizer.tests.test_tokenizer
 python -m unittest query_optimizer.tests.test_parser
 python -m unittest query_optimizer.tests.test_rule_1
+python -m unittest query_optimizer.tests.test_rule_7
+python -m unittest query_optimizer.tests.test_rule_deterministik
 
 # Run with verbose output
-python -m unittest query_optimizer.tests.test_rule_1 -v
+python -m unittest query_optimizer.tests.test_rule_7 -v
+python -m unittest query_optimizer.tests.test_rule_deterministik -v
 ```
 
 ---
@@ -383,32 +474,52 @@ PROJECT("*")
 
 Lihat **[Parse_Query.md](doc/Parse_Query.md)** untuk detail lengkap grammar dan node types.
 
-### 3.3 Genetic Algorithm Implementation
+### 3.3 Optimization Pipeline
 
-Genetic Algorithm adalah metode optimasi yang terinspirasi dari evolusi biologis.
+Optimasi query dilakukan dalam 2 tahap:
 
-Rule yang sudah ada:
+#### Phase 1: Deterministic Rules (Always Applied)
 
-- Seleksi Konjungtif
+Rules yang selalu menghasilkan improvement dan diterapkan sekali:
 
-Rule yang belum ada:
+1. **Rule 3: Projection Elimination** - Eliminasi nested projection
+2. **Rule 7: Filter Pushdown over Join** - Push filter mendekati data source
+3. **Rule 8: Projection over Join** - Push projection ke join children
 
-- Seleksi komutatif
-- Proyeksi Terakhir
-- Gabungkan Seleksi dan Join
-- Join komutatif
-- Join asosiatif
-- Pushdown Seleksi
-- Pushdown Proyeksi
+```
+Original Query
+      ↓
+   Rule 3 (eliminasi projection)
+      ↓
+   Rule 7 (pushdown filter)
+      ↓
+   Rule 8 (pushdown projection)
+      ↓
+Phase 2: Genetic Algorithm
+```
+
+#### Phase 2: Genetic Algorithm (Parameter Space Exploration)
+
+Rules dengan parameter space yang dioptimasi oleh GA:
+
+- **Rule 1: Filter Cascading** - Order dan grouping dari filter conditions
+- **Rule 2: Filter Reordering** - Permutasi AND conditions  
+- **Rule 4: Push Selection into Joins** - Merge decision untuk FILTER-JOIN patterns
+
+### 3.4 Genetic Algorithm Implementation
+
+Genetic Algorithm adalah metode optimasi yang terinspirasi dari evolusi biologis untuk mengeksplorasi parameter space dari Rule 1 dan Rule 2.
 
 #### Core Concepts
 
 **Individual (Kromosom)**
 
+Setiap individual merepresentasikan kombinasi parameter untuk Rule 1 dan Rule 2:
+
 ```python
 class Individual:
     operation_params: dict[str, dict[int, Any]]  # Unified parameters
-    query: ParsedQuery                            # Query hasil
+    query: ParsedQuery                            # Query hasil (after Rule 3,7,8 + GA params)
     fitness: float                                # Cost (semakin rendah semakin baik)
 ```
 
@@ -445,6 +556,14 @@ Population (size=50):
 #### Genetic Algorithm Workflow
 
 ```
+┌─────────────────────────────────────────────────────────────┐
+│ 0. PREPROCESSING (Outside GA)                               │
+│    • Apply Rule 3 (projection elimination)                  │
+│    • Apply Rule 7 (filter pushdown)                         │
+│    • Apply Rule 8 (projection over join)                    │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ 1. INITIALIZATION                                           │
 │    • Analyze query for AND operators                        │
@@ -501,11 +620,11 @@ Population (size=50):
                  [Loop]  [Return Best]
 ```
 
-### 3.4 Optimization Rules
+### 3.5 Optimization Rules Detail
 
 Optimization rules mengimplementasikan equivalency rules untuk query transformation.
 
-#### Rule 3: Projection Elimination (Applied ONCE at Start)
+#### Rule 3: Projection Elimination (Deterministic)
 
 **Equivalency:**  
 `PROJECT_1(PROJECT_2(Source))` ≡ `PROJECT_1(Source)`
@@ -527,11 +646,89 @@ PROJECT(name, age)
 ```
 
 **Implementation:**
-- Dieksekusi di `optimize_query()` sebelum genetic algorithm
-- Tidak termasuk dalam parameter space GA
-- Bersifat deterministik (tidak ada variasi)
+- Executed in `optimize_query()` before genetic algorithm
+- Not included in GA parameter space
+- Deterministic (no variations)
 
-#### Unified Filter Params (Reordering + Cascading - IN Genetic Algorithm)
+#### Rule 7: Filter Pushdown over Join (Deterministic)
+
+**Equivalency:**  
+`FILTER(JOIN(R, S), cond)` → `JOIN(FILTER(R, cond_R), FILTER(S, cond_S))`
+
+**Timing:** Applied **ONCE** after Rule 3, before Rule 8.
+
+**Purpose:** Push filter conditions closer to data sources to reduce join size.
+
+**Transformation:**
+```
+Before:
+FILTER
+├── JOIN
+│   ├── RELATION(users)
+│   └── RELATION(profiles)
+└── AND
+    ├── users.age > 18
+    └── profiles.verified = true
+
+After:
+JOIN
+├── FILTER
+│   ├── RELATION(users)
+│   └── users.age > 18
+└── FILTER
+    ├── RELATION(profiles)
+    └── profiles.verified = true
+```
+
+**Benefits:**
+- Reduces data volume before expensive join operation
+- Each table filtered independently with relevant conditions
+- Can push to left, right, or both sides depending on condition references
+
+**Implementation:**
+- Pattern detection: finds FILTER → JOIN structures
+- Condition analysis: determines which filters reference which tables
+- Push strategy: left/right/both/none based on table references
+- Executed deterministically before GA
+
+#### Rule 8: Projection over Join (Deterministic)
+
+**Equivalency:**  
+`PROJECT(cols, JOIN(R, S))` → `PROJECT(cols', JOIN(PROJECT(R_cols), PROJECT(S_cols)))`
+
+**Timing:** Applied **ONCE** after Rule 7, before genetic algorithm.
+
+**Purpose:** Push projections to join children to reduce tuple size before join.
+
+**Transformation:**
+```
+Before:
+PROJECT(name, age)
+└── JOIN
+    ├── RELATION(users)
+    └── RELATION(profiles)
+
+After:
+PROJECT(name, age)
+└── JOIN
+    ├── PROJECT(id, name, age)  # Only needed columns
+    │   └── RELATION(users)
+    └── PROJECT(user_id)        # Only join key
+        └── RELATION(profiles)
+```
+
+**Benefits:**
+- Reduces tuple width before join
+- Less data to transfer and compare during join
+- Only required columns are projected from each relation
+
+**Implementation:**
+- Analyzes projected columns and join conditions
+- Determines minimal column set for each relation
+- Creates child projections under join
+- Executed deterministically before GA
+
+#### Rule 1 & 2: Unified Filter Params (Non-deterministic, Optimized by GA)
 
 **Equivalency:**  
 `σ(c1 ∧ c2 ∧ ... ∧ cn)(R)` ≡ `σ(cπ(1))(σ(cπ(2))(...(σ(cπ(n))(R))...))`
@@ -598,7 +795,62 @@ params = [[2, 1, 0]]  # All stay in AND (just reordered)
 
 Result: `FILTER(AND(c2, c1, c0)) → RELATION`
 
-### 3.5 Query Validation
+#### Rule 4: Push Selection into Joins (Non-deterministic, Optimized by GA)
+
+**Equivalency:**  
+`FILTER(JOIN(R, S), cond)` → `JOIN(R, S, cond)` (when beneficial)
+
+**Format:** `dict[int, bool]`
+- Key: FILTER node ID
+- Value: True = merge FILTER into JOIN, False = keep separate
+
+**Purpose:** Mengubah FILTER di atas JOIN menjadi JOIN dengan condition (INNER JOIN)
+
+**Transformation:**
+```
+Before (decision = False):
+FILTER
+├── JOIN (NATURAL)
+│   ├── RELATION(employees)
+│   └── RELATION(payroll)
+└── COMPARISON(=) [e.id = p.employee_id]
+
+After (decision = True):
+JOIN (INNER)
+├── RELATION(employees)
+├── RELATION(payroll)
+└── COMPARISON(=) [e.id = p.employee_id]
+```
+
+**Benefits:**
+- Converts NATURAL JOIN → INNER JOIN with explicit condition
+- Reduces intermediate result size
+- Better query plan with condition pushed to join
+- GA explores both merge and separate configurations
+
+**Parameter Examples:**
+```python
+# Example 1: Merge FILTER into JOIN
+join_params = {42: True}  # FILTER node 42 merged
+
+# Example 2: Keep FILTER separate
+join_params = {42: False}  # FILTER node 42 kept separate
+
+# Example 3: Multiple patterns
+join_params = {
+    42: True,   # Merge filter 42
+    57: False,  # Keep filter 57 separate
+}
+```
+
+**Implementation:**
+- Pattern detection: finds FILTER → JOIN structures
+- Decision parameter: boolean (True/False)
+- Merge: creates INNER JOIN with condition
+- Separate: keeps FILTER above JOIN
+- Optimized by GA: explores both options for best cost
+
+### 3.6 Query Validation
 
 Query validation memastikan query tree structure valid dan semantically correct.
 
@@ -674,13 +926,13 @@ Query validation memastikan query tree structure valid dan semantically correct.
 - Comparison and condition expressions are separate node types (COMPARISON, IN_EXPR, etc.)
 - Validation is performed recursively on the entire tree structure
 
-### 3.6 Cost Estimation
+### 3.7 Cost Estimation
 
 Cost estimation menghitung estimasi biaya eksekusi query.
 
 **TO DO**
 
-### 3.7 Extending the Optimizer
+### 3.8 Extending the Optimizer
 
 #### Adding New Parameter Type
 

@@ -5,19 +5,19 @@ Genetic Algorithm
 import random
 from typing import Callable, Any
 from query_optimizer.optimization_engine import ParsedQuery, OptimizationEngine
-from query_optimizer.rule_1 import (
+from query_optimizer.rule.rule_1 import (
     cascade_filters,
     uncascade_filters,
     clone_tree
 )
-from query_optimizer.rule_2 import reorder_and_conditions
+from query_optimizer.rule.rule_2 import reorder_and_conditions
+from query_optimizer.rule import rule_4
 from query_optimizer.rule_params_manager import get_rule_params_manager
 
 
 class Individual:
     """
-    Kromosom dalam populasi GA yang merepresentasikan satu solusi query.
-    
+    Kromosom
     Attributes:
         operation_params: Dict[operation_type, Dict[node_id, order]]
                          Example: {
@@ -25,20 +25,18 @@ class Individual:
                                  42: [2, [0, 1]],  # Unified order: cond2 single, [0,1] grouped
                                  57: [1, 0]        # All singles
                              },
-                             'join_params': {}
+                             'join_params': {
+                                 33: {
+                                    filtered_conditon: []  # Keep separate (no merge)
+                                    existing_condition: [5, 8]  # conditions merged in JOIN 33
+                                 }
+                                 42: {
+                                    filtered_conditon: [10, 15]  # conditions to merge into JOIN 42
+                                    existing_condition: []  # Keep separate (no merge)
+                                 }
+                             }
                          }
         fitness: Fitness value (lower is better)
-    
-    Unified Order Format:
-        - Type: list[int | list[int]]
-        - int: single condition (akan di-cascade)
-        - list[int]: grouped conditions (tetap dalam AND)
-        
-        Examples:
-        - [0, 1, 2]: All singles, full cascade
-        - [2, 0, 1]: Reordered, all singles
-        - [2, [0, 1]]: cond2 single, [0,1] grouped
-        - [[0, 1, 2]]: All grouped (no cascade)
     """
     
     def __init__(
@@ -65,15 +63,21 @@ class Individual:
     def _apply_transformations(self, base_query: ParsedQuery) -> ParsedQuery:
         """
         Terapkan transformations ke query berdasarkan operation params.
-        
-        Unified order format [2, [0,1]] sudah mengandung:
-        - Reordering (urutan): 2 dulu, lalu 0&1
-        - Cascading (grouping): 2 single, [0,1] grouped
         """
         cloned_tree = clone_tree(base_query.query_tree)
         current_query = ParsedQuery(cloned_tree, base_query.query)
         
-        # Apply filter operations dengan unified order format
+        # Step 1: Apply join operations (Rule 4: Push selection into joins)
+        # Harus dilakukan SEBELUM filter operations karena mengubah struktur FILTER-JOIN
+        if 'join_params' in self.operation_params and self.operation_params['join_params']:            
+            # join_params format: Dict[join_id, list[condition_ids]]
+            # Example: {42: [10, 15]} = merge conditions 10 and 15 into JOIN 42
+            join_params = self.operation_params['join_params']
+            
+            if join_params:
+                current_query = rule_4.apply_merge(current_query, join_params)
+        
+        # Step 2: Apply filter operations dengan unified order format
         if 'filter_params' in self.operation_params and self.operation_params['filter_params']:
             # Uncascade existing filters first
             query_and = uncascade_filters(current_query)
@@ -81,7 +85,7 @@ class Individual:
             # Extract unified orders
             unified_orders = self.operation_params['filter_params']
             
-            # Step 1: Apply reordering (flatten order untuk reorder_and_conditions)
+            # Step 2a: Apply reordering (flatten order untuk reorder_and_conditions)
             reorder_orders = {}
             for node_id, order in unified_orders.items():
                 # Flatten to get pure permutation
@@ -96,13 +100,11 @@ class Individual:
             if reorder_orders:
                 query_and = reorder_and_conditions(query_and, operator_orders=reorder_orders)
             
-            # Step 2: Apply cascading dengan grouping structure
+            # Step 2b: Apply cascading dengan grouping structure
             if unified_orders:
                 current_query = cascade_filters(query_and, operator_orders=unified_orders)
             else:
                 current_query = query_and
-        
-        # TODO: Apply join operations when implemented
         
         return current_query
     
@@ -324,7 +326,7 @@ class GeneticOptimizer:
         # Lazy evaluation
         return Individual(mutated_params, base_query, lazy_eval=True)
     
-    def get_statistics(self) -> dict:
+    def get_ga_statistics(self) -> dict:
         """Dapatkan statistik optimasi."""
         return {
             'best_fitness': self.best_fitness,
@@ -345,7 +347,7 @@ class GeneticOptimizer:
         print(f"Best Fitness: {self.best_fitness:.2f}")
         
         if self.best_individual:
-            print(f"\nBest Operation Parameters:")
+            print("\nBest Operation Parameters:")
             for operation_name, node_params in self.best_individual.operation_params.items():
                 print(f"\n  {operation_name}:")
                 for node_id, order in node_params.items():
@@ -361,6 +363,12 @@ class GeneticOptimizer:
                                 explanations.append(f"{item} single")
                         if explanations:
                             print(f"      → Order: {' -> '.join(explanations)}")
+                    # Special formatting for join_params (condition selection)
+                    elif operation_name == 'join_params' and isinstance(order, list):
+                        if order:
+                            print(f"      → Merge conditions: {order}")
+                        else:
+                            print("      → Keep separate (no merge)")
         
         print("\nProgress:")
         print("Gen | Best    | Average | Worst")
@@ -390,7 +398,7 @@ def optimize_query_genetic(
     )
     
     optimized_query = ga.optimize(query)
-    stats = ga.get_statistics()
+    stats = ga.get_ga_statistics()
     
     ga.print_progress()
     

@@ -219,6 +219,8 @@ class Statistic:
         l_r: Ukuran tuple dari r (dalam bytes)
         f_r: Blocking factor dari r (jumlah tuple yang muat dalam satu blok)
         V_a_r: Dictionary mapping kolom -> jumlah nilai distinct di kolom tersebut
+        indexes: Dictionary mapping kolom -> info index (type dan height untuk btree)
+                 Format: {"column_name": {"type": "hash"|"btree", "height": int (for btree only)}}
     
     Rumus:
         b_r = ceil(n_r / f_r)  jika tuple disimpan bersama secara fisik dalam satu file
@@ -228,3 +230,4 @@ class Statistic:
     l_r: int
     f_r: int
     V_a_r: Dict[str, int] = field(default_factory=dict)
+    indexes: Dict[str, Dict[str, Any]] = field(default_factory=dict)

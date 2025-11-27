@@ -58,10 +58,7 @@ class BPlusTreeIndex:
                     return results
 
             # next leaf via linked list
-            if len(node.children) > len(node.keys):
-                node = node.children[-1]
-            else:
-                break
+            node = node.next
 
         return results
 
@@ -78,10 +75,7 @@ class BPlusTreeIndex:
                     return results
 
             # next leaf
-            if len(node.children) > len(node.keys):
-                node = node.children[-1]
-            else:
-                break
+            node = node.next
 
         return results
 
@@ -102,10 +96,7 @@ class BPlusTreeIndex:
                     pass
 
             # next leaf
-            if len(node.children) > len(node.keys):
-                node = node.children[-1]
-            else:
-                break
+            node = node.next
 
         return results
 
@@ -120,10 +111,7 @@ class BPlusTreeIndex:
                     results.append(node.children[i])
 
             # next leaf
-            if len(node.children) > len(node.keys):
-                node = node.children[-1]
-            else:
-                break
+            node = node.next
 
         return results
 
@@ -133,6 +121,10 @@ class BPlusTreeIndex:
         while not node.leaf:
             node = node.children[0]
         return node
+
+    def get_height(self) -> int:
+        """Get tinggi B+ tree."""
+        return self.index.get_height()
 
     def save(self, filepath: str):
         # save index ke binary file pake pickle
@@ -157,6 +149,7 @@ class BPlusTreeNode:
         self.leaf = leaf
         self.keys = [] # List of keys
         self.children = [] # List of children nodes or values for leaf nodes
+        self.next = None # Pointer to next leaf (for leaf nodes only)
 
 class BPlusTree: 
     def __init__(self, order=5):
@@ -164,27 +157,50 @@ class BPlusTree:
         self.order = order # Maximum number of children per internal node
     
 
-    def search(self, key): # TODO: implement
+    def search(self, key): 
+        """Cari record_id berdasarkan key."""
         node = self._find_leaf(self.root, key)
         for i, k in enumerate(node.keys):
             if k == key:
                 return node.children[i]
         return None
 
-    def search_range(self, start_key, end_key): # TODO: implement
+    def search_range(self, start_key, end_key):
+        """Cari semua record_ids dalam range [start_key, end_key] menggunakan linked list."""
+        # cari node yang berisi start_key
         node = self._find_leaf(self.root, start_key)
         results = []
+        
+        # traverse leaf nodes menggunakan linked list
         while node:
             for i, key in enumerate(node.keys):
                 if start_key <= key <= end_key:
                     results.append(node.children[i])
                 elif key > end_key:
                     return results
-            if len(node.children) > len(node.keys):
-                node = node.children[-1]
-            else:
-                break
+            
+            # pindah ke next leaf
+            node = node.next
+            
         return results
+
+    def get_height(self) -> int:
+        """
+        Hitung tinggi B+ tree (jumlah level dari root ke leaf).
+        Tinggi 1 = cuma root (yang juga leaf).
+        """
+        if self.root is None:
+            return 0
+        
+        height = 1
+        node = self.root
+        
+        # traverse dari root ke leaf untuk hitung tinggi
+        while not node.leaf:
+            height += 1
+            node = node.children[0]  # ambil leftmost child
+        
+        return height
 
     def insert(self, key: str, value: int):
         """
@@ -204,12 +220,13 @@ class BPlusTree:
 
     def _find_leaf(self, node, key):
         """
-        Helper method to find the leaf node where a key should be located.
+        Helper method untuk cari leaf node dimana key seharusnya berada.
+        
         param:
         node: BPlusTreeNode - The current node being examined.
         key: str - The key to locate.
-        return: BPlusTreeNode - The46 leaf node where the key should be located.
-         """
+        return: BPlusTreeNode - The leaf node where the key should be located.
+        """
         if node.leaf:
             return node
         for i, item in enumerate(node.keys):
@@ -219,42 +236,62 @@ class BPlusTree:
         return self._find_leaf(node.children[-1], key)
     
     def _split_leaf(self, node):
+        """
+        Split leaf node yang udah penuh.
+        Bagi keys dan values jadi 2 bagian, setup linked list pointer.
+        """
         mid = len(node.keys) // 2
         new_leaf = BPlusTreeNode(self.order, leaf=True)
+        
+        # split keys and children (values)
         new_leaf.keys = node.keys[mid:]
         new_leaf.children = node.children[mid:]
-
+        
         node.keys = node.keys[:mid]
         node.children = node.children[:mid]
-
-        new_leaf.children.append(node.children[-1] if len(node.children) > len(node.keys) else None)
-        node.children[-1] = new_leaf
+        
+        # setup linked list pointer: node -> new_leaf -> node.next
+        new_leaf.next = node.next
+        node.next = new_leaf
 
         if node == self.root:
+            # Kalo root yang split, bikin root baru
             new_root = BPlusTreeNode(self.order)
             new_root.keys = [new_leaf.keys[0]]
             new_root.children = [node, new_leaf]
             self.root = new_root
         else:
+            # Push up smallest key dari new_leaf ke parent
             self._insert_into_parent(node, new_leaf.keys[0], new_leaf)
 
     def _insert_into_parent(self, node, key, new_node):
+        """
+        Insert key dan new_node ke parent dari node.
+        Kalo parent juga overflow, recursively split.
+        """
         parent = self._find_parent(self.root, node)
         if not parent:
+            # Node gaada parent, bikin root baru
             new_root = BPlusTreeNode(self.order)
             new_root.keys = [key]
             new_root.children = [node, new_node]
             self.root = new_root
             return
 
+        # Insert key dan new_node ke parent
         idx = parent.children.index(node)
         parent.keys.insert(idx, key)
         parent.children.insert(idx + 1, new_node)
 
-        if len(parent.keys) > self.order - 1: # Internal node overflow
+        if len(parent.keys) > self.order - 1: 
+            # Internal node overflow, perlu split
             self._split_internal(parent)
     
-    def _split_internal(self, node): 
+    def _split_internal(self, node):
+        """
+        Split internal node yang udah penuh.
+        Push up middle key ke parent (beda dari leaf yang copy up).
+        """
         mid = len(node.keys) // 2
         new_internal = BPlusTreeNode(self.order)
         new_internal.keys = node.keys[mid + 1:]
@@ -264,20 +301,33 @@ class BPlusTree:
         node.children = node.children[:mid + 1]
 
         if node == self.root:
+            # Root yang split, bikin root baru
             new_root = BPlusTreeNode(self.order)
             new_root.keys = [up_key]
             new_root.children = [node, new_internal]
             self.root = new_root
         else:
+            # Push up ke parent
             self._insert_into_parent(node, up_key, new_internal)
 
     def _find_parent(self, current, child):
-        if current.leaf or current.children[0].leaf:
+        """
+        Cari parent node dari child node.
+        Return None kalo child adalah root atau tidak ditemukan.
+        """
+        # Base case: root atau leaf tidak punya children
+        if current.leaf:
             return None
+        
+        # Check apakah child ada di children current node
+        if child in current.children:
+            return current
+        
+        # Recursively search di subtrees (cuma internal nodes)
         for c in current.children:
-            if c == child:
-                return current
-            res = self._find_parent(c, child)
-            if res:
-                return res
+            if not c.leaf:  # hanya search di internal nodes
+                res = self._find_parent(c, child)
+                if res:
+                    return res
+        
         return None
