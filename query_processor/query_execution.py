@@ -524,13 +524,15 @@ class QueryExecution:
             print(f"[UPDATE] STEP 3: Writing updated rows back to storage...")
             rows_affected = 0
             
-            all_columns = list(rows_to_update[0].keys())
+            # Get all columns from original matching rows (not updated rows)
+            all_columns = list(matching_rows[0].keys()) if matching_rows else []
             
-            for row in rows_to_update:
-                # Create unique condition for this specific row (using all columns as identifier)
+            for idx, row in enumerate(rows_to_update):
+                # Create unique condition for this specific row (using all original columns as identifier)
                 row_conditions = []
                 for col in all_columns:
-                    row_conditions.append(Condition(column=col, operation="=", operand=matching_rows[rows_affected][col]))
+                    if col in matching_rows[idx]:
+                        row_conditions.append(Condition(column=col, operation="=", operand=matching_rows[idx][col]))
                 
                 # Update this specific row using storage adapter
                 affected = self.storage_adapter.write_data(
