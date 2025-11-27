@@ -1,10 +1,10 @@
-@startuml 
+@startuml ConcurrencyControl Class Diagram
 skinparam linetype ortho 
 skinparam rankdir TB 
 skinparam nodesep 10 
 skinparam ranksep 15 
  
-title Concurrency Control Manager - Simplified
+title Concurrency Control Manager
 ' ========================================= 
 ' Base Enumerations (proper format) 
 ' ========================================= 
@@ -18,7 +18,18 @@ together {
     Aborted 
     Terminated 
   } 
- 
+  
+  enum MVCCVariant {
+    MVTO
+    MV2PL
+    SNAPSHOT_ISOLATION
+  }
+
+  enum IsolationPolicy {
+      FIRST_COMMITTER_WIN
+      FIRST_UPDATER_WIN
+  }
+
   enum ActionType { 
     READ 
     WRITE 
@@ -251,14 +262,16 @@ class ObjectTimestamp {
 ' ========================================= 
 ' MVCC Components
 ' ========================================= 
-class VersionStore {
-  - versions : Dict<string, List<RowVersion>>
-  - max_versions_per_object : int
-  --
-  + get_version(object_id: string, timestamp: datetime) : RowVersion
-  + create_version(object_id: string, data: Dict, timestamp: datetime, transaction_id: int) : RowVersion
-  + cleanup_old_versions(object_id: string, keep_count: int) : None
-  + get_latest_version(object_id: string) : RowVersion
+class TransactionInfo {
+  + transaction : Transaction
+  + timestamp : int
+  + transaction_type : TransactionType
+  + read_set : set
+  + write_set : set
+  + locks_held : Dict<string, string>
+  + has_exclusive_lock : bool
+  + buffered_writes : Dict<string, Any>
+  + rollback_count : int
 }
 
 class RowVersion {
@@ -298,8 +311,8 @@ Validator --> Transaction : validates >
 TimestampBasedAlgorithm "1" o-- "*" ObjectTimestamp : tracks >
 ObjectTimestamp --> Row : timestamps >
 
-MVCCAlgorithm "1" *-- "1" VersionStore
-VersionStore "1" o-- "*" RowVersion
-RowVersion --> Row : versions >
- 
+MVCCAlgorithm "1" o-- "*" DataVersion : maintains versions >
+MVCCAlgorithm "1" o-- "*" TransactionInfo : manages >
+TransactionInfo --> Transaction : wraps >
+
 @enduml
