@@ -34,7 +34,7 @@ def join_komutatif_rec(node: QueryTree, join_orders: dict[int, bool] = None) -> 
         if join_orders is None:
             node.childs[0], node.childs[1] = node.childs[1], node.childs[0]
         else:
-            should_swap = join_orders.get(id(node), False)
+            should_swap = join_orders.get(node.id, False)
             if should_swap:
                 node.childs[0], node.childs[1] = node.childs[1], node.childs[0]
         
@@ -45,7 +45,7 @@ def find_join_nodes(query: ParsedQuery) -> dict[int, Any]:
     Find all JOIN nodes in the query tree.
     
     Returns:
-        Dict[join_id, metadata]
+        Dict[node.id, metadata]
         metadata = {
             'left_child': node,
             'right_child': node,
@@ -62,7 +62,7 @@ def _find_join_nodes_rec(node: QueryTree, result: dict[int, Any]):
         return
     
     if node.is_node_type("JOIN"):
-        result[id(node)] = {
+        result[node.id] = {
             'left_child': node.childs[0] if len(node.childs) > 0 else None,
             'right_child': node.childs[1] if len(node.childs) > 1 else None,
             'join_type': node.val or 'INNER'

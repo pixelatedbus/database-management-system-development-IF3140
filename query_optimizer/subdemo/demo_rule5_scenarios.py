@@ -1,20 +1,14 @@
-"""
-Separate scenarios for Demo Rule 5 (Join Commutativity) to keep demo.py cleaner
-"""
-
 from query_optimizer.optimization_engine import OptimizationEngine
 from query_optimizer.rule import rule_5
 
 
 def print_separator(title):
-    """Print section separator"""
     print("\n" + "="*70)
     print(f"  {title}")
     print("="*70)
 
 
 def scenario_1_basic_swap():
-    """Scenario 5.1: Basic JOIN(A, B) → JOIN(B, A)"""
     print("\n")
     print_separator("SCENARIO 5.1: Basic JOIN Commutativity")
     
@@ -70,7 +64,6 @@ def scenario_1_basic_swap():
 
 
 def scenario_2_multiple_joins():
-    """Scenario 5.2: Multiple JOINs - Selective Swapping"""
     print("\n")
     print_separator("SCENARIO 5.2: Multiple JOINs - Selective Swapping")
     
@@ -90,7 +83,6 @@ def scenario_2_multiple_joins():
     cost_original = engine.get_cost(parsed)
     print(f"Cost: {cost_original:.2f}")
     
-    # Find JOIN nodes
     join_nodes = rule_5.find_join_nodes(parsed)
     print(f"\nFound {len(join_nodes)} JOIN node(s)")
     join_ids = list(join_nodes.keys())
@@ -142,7 +134,6 @@ def scenario_2_multiple_joins():
 
 
 def scenario_3_natural_join():
-    """Scenario 5.3: NATURAL JOIN Commutativity"""
     print("\n")
     print_separator("SCENARIO 5.3: NATURAL JOIN Commutativity")
     
@@ -178,7 +169,6 @@ def scenario_3_natural_join():
 
 
 def scenario_4_bidirectional():
-    """Scenario 5.4: Bidirectional Transformation"""
     print("\n")
     print_separator("SCENARIO 5.4: Bidirectional Transformation")
     
@@ -195,7 +185,6 @@ def scenario_4_bidirectional():
     cost_original = engine.get_cost(parsed)
     print(f"Cost: {cost_original:.2f}")
     
-    # Find JOIN nodes
     join_nodes = rule_5.find_join_nodes(parsed)
     join_orders_swap = {join_id: True for join_id in join_nodes.keys()}
     
@@ -221,7 +210,6 @@ def scenario_4_bidirectional():
 
 
 def scenario_5_ga_exploration():
-    """Scenario 5.5: Genetic Algorithm Exploration"""
     print("\n")
     print_separator("SCENARIO 5.5: GA Explores Join Orders")
     
@@ -265,7 +253,6 @@ def scenario_5_ga_exploration():
         improvement = ((cost_original - cost_optimized) / cost_original) * 100
         print(f"✓ Improved by {improvement:.1f}%")
     
-    # Show best parameters
     if ga.best_individual and 'join_child_params' in ga.best_individual.operation_params:
         print("\nBest JOIN child parameters:")
         for join_id, swap in ga.best_individual.operation_params['join_child_params'].items():
@@ -275,7 +262,6 @@ def scenario_5_ga_exploration():
 
 
 def run_all_scenarios():
-    """Run all Rule 5 scenarios"""
     print("\n" + "="*70)
     print("  DEMO: RULE 5 - JOIN COMMUTATIVITY")
     print("  JOIN(A, B) ≡ JOIN(B, A)")
@@ -290,12 +276,6 @@ def run_all_scenarios():
     print("\n" + "="*70)
     print("  DEMO COMPLETE")
     print("="*70)
-    print("\nKey Takeaways:")
-    print("1. JOIN operations are commutative: JOIN(A,B) ≡ JOIN(B,A)")
-    print("2. Different orders may have different costs (based on table sizes)")
-    print("3. GA can explore all possible join orders to find the optimal")
-    print("4. Works with INNER, NATURAL, and CROSS JOINs")
-    print("5. Can swap multiple JOINs independently for best performance")
 
 
 if __name__ == "__main__":

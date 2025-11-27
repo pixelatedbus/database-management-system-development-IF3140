@@ -1,5 +1,6 @@
 from query_optimizer.optimization_engine import ParsedQuery
 from query_optimizer.query_tree import QueryTree
+from query_optimizer import query_check
 
 
 def find_patterns(query: ParsedQuery) -> dict[int, dict]:
@@ -43,9 +44,7 @@ def apply_pushdown(query: ParsedQuery, plans: dict[int, dict] = None) -> ParsedQ
     def walk(node: QueryTree) -> QueryTree:
         if node is None:
             return None
-        for i in range(len(node.childs)):
-            node.childs[i] = walk(node.childs[i])
-
+        
         if is_pushable(node):
             plan = None
             if plans is not None:
@@ -53,7 +52,12 @@ def apply_pushdown(query: ParsedQuery, plans: dict[int, dict] = None) -> ParsedQ
             if plan is None:
                 plan = decide_pushdown(node)
             if plan['distribution'] != 'none':
-                return push_filter(node, plan)
+                pushed = push_filter(node, plan)
+                return walk(pushed)
+        
+        for i in range(len(node.childs)):
+            node.childs[i] = walk(node.childs[i])
+        
         return node
 
     new_tree = walk(clone(query.query_tree))
@@ -67,12 +71,14 @@ def decide_pushdown(filter_node: QueryTree) -> dict:
 
     left_tables = collect_tables(join.childs[0])
     right_tables = collect_tables(join.childs[1])
+    
+    available_tables = left_tables | right_tables
 
     left_idx = []
     right_idx = []
 
     for idx, c in enumerate(conditions):
-        c_tables = collect_tables(c)
+        c_tables = collect_tables_in_condition(c, available_tables)
         if c_tables and c_tables.issubset(left_tables) and not c_tables & right_tables:
             left_idx.append(idx)
         elif c_tables and c_tables.issubset(right_tables) and not c_tables & left_tables:
@@ -105,6 +111,55 @@ def collect_tables(node: QueryTree) -> set[str]:
             tables.add(n.val)
         if n.type == "TABLE_NAME" and n.childs and n.childs[0].type == "IDENTIFIER":
             tables.add(n.childs[0].val)
+        
+        for ch in n.childs:
+            walk(ch)
+
+    walk(node)
+    return tables
+
+def collect_tables_in_condition(node: QueryTree, available_tables: set[str]) -> set[str]:
+    tables = set()
+    metadata = None
+
+    def walk(n: QueryTree):
+        nonlocal metadata
+        if n is None:
+            return
+        
+        if n.type == "RELATION":
+            tables.add(n.val)
+        if n.type == "ALIAS":
+            tables.add(n.val)
+        if n.type == "TABLE_NAME" and n.childs and n.childs[0].type == "IDENTIFIER":
+            tables.add(n.childs[0].val)
+        if n.type == "COLUMN_REF" and n.childs:
+            has_table_name = any(ch.type == "TABLE_NAME" for ch in n.childs)
+            
+            if not has_table_name:
+                col_identifier = None
+                for ch in n.childs:
+                    if ch.type == "COLUMN_NAME" and ch.childs:
+                        for grandchild in ch.childs:
+                            if grandchild.type == "IDENTIFIER":
+                                col_identifier = grandchild.val
+                                break
+                    if col_identifier:
+                        break
+                
+                if col_identifier:
+                    if metadata is None:
+                        metadata = query_check.get_metadata()
+                    
+                    matching_tables = []
+                    for table_name in available_tables:
+                        if table_name in metadata["columns"]:
+                            if col_identifier in metadata["columns"][table_name]:
+                                matching_tables.append(table_name)
+                    
+                    if len(matching_tables) == 1:
+                        tables.add(matching_tables[0])
+        
         for ch in n.childs:
             walk(ch)
 

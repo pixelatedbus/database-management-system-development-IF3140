@@ -19,8 +19,8 @@ def get_metadata():
     dummy_tables = {
         "users": ["id", "name", "email"],
         "profiles": ["id", "user_id", "bio"],
-        "orders": ["id", "user_id", "total"],
-        "products": ["id", "category", "price", "stock", "description", "discount"],
+        "orders": ["id", "user_id", "amount", "total", "product_id"],
+        "products": ["id", "name", "category", "price", "stock", "description", "discount"],
         "employees": ["id", "name", "salary", "department", "bonus"],
         "accounts": ["id", "balance"],
         "logs": ["id", "message"],

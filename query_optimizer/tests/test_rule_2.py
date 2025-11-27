@@ -29,7 +29,6 @@ from query_optimizer.rule.rule_2 import (
     mutate_rule_2_params,
     reorder_and_conditions,
     validate_rule_2_params,
-    clone_tree
 )
 
 
@@ -340,38 +339,6 @@ class TestReorderAndConditions(unittest.TestCase):
         # Should remain unchanged
         self.assertEqual(result.query_tree.childs[0].val, ">")
         self.assertEqual(result.query_tree.childs[1].val, "=")
-
-
-class TestCloneTree(unittest.TestCase):
-    """Test cases untuk clone_tree"""
-    
-    def test_clone_simple(self):
-        """Test cloning simple tree"""
-        node = QueryTree("COMPARISON", ">")
-        cloned = clone_tree(node)
-        
-        self.assertIsNot(node, cloned)
-        self.assertEqual(node.type, cloned.type)
-        self.assertEqual(node.val, cloned.val)
-    
-    def test_clone_with_children(self):
-        """Test cloning tree with children"""
-        parent = QueryTree("OPERATOR", "AND")
-        child1 = QueryTree("COMPARISON", ">")
-        child2 = QueryTree("COMPARISON", "=")
-        
-        parent.add_child(child1)
-        parent.add_child(child2)
-        
-        cloned = clone_tree(parent)
-        
-        self.assertIsNot(parent, cloned)
-        self.assertIsNot(parent.childs[0], cloned.childs[0])
-        self.assertIsNot(parent.childs[1], cloned.childs[1])
-        
-        self.assertEqual(parent.type, cloned.type)
-        self.assertEqual(len(parent.childs), len(cloned.childs))
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -18,24 +18,6 @@ def print_separator(title=""):
         print(f"  {title}")
         print("="*70)
 
-
-def print_query_tree(query_tree, indent=0):
-    """Print query tree structure recursively"""
-    if query_tree is None:
-        return
-    
-    prefix = "  " * indent
-    node_info = f"{query_tree.type}"
-    
-    if query_tree.val:
-        node_info += f" [{query_tree.val}]"
-    
-    print(f"{prefix}{node_info}")
-    
-    for child in query_tree.childs:
-        print_query_tree(child, indent + 1)
-
-
 def print_help():
     """Print help message for demo usage"""
     print_separator("QUERY OPTIMIZER DEMO HELP")
@@ -84,7 +66,8 @@ def print_help():
     print("General demos:")
     print("  9    - Parse: Parse SQL queries and show query trees")
     print("  10   - Optimize: Compare with/without Genetic Algorithm")
-    print("  11   - Genetic Algorithm: Full demo with all rules")
+    print("  11   - Genetic Algorithm: Two-phase optimization (Deterministic + GA)")
+    print("         Complex query with multiple JOINs, filters, and projections")
     print("  12   - All: Run all demos sequentially")
     print_separator()
 
@@ -412,77 +395,76 @@ def demo_optimized():
 # =============================================================================
 
 def demo_genetic_with_rules():
-    """Demo 11: Genetic Optimizer with Rule 1 + Rule 2 + Rule 4 Integration"""
-    print_separator("DEMO 11: GENETIC ALGORITHM with Unified Rules (1, 2, 4)")
+    """Demo 11: Genetic Optimizer with All Rules Integration"""
+    print_separator("DEMO 11: GENETIC ALGORITHM (Deterministic + GA Optimization)")
     
     from query_optimizer.query_tree import QueryTree
-    from query_optimizer.optimization_engine import ParsedQuery
+    from query_optimizer.optimization_engine import ParsedQuery, OptimizationEngine
     from query_optimizer.genetic_optimizer import GeneticOptimizer
+    from query_optimizer.rule import rule_3, rule_7, rule_8
     
-    # Build query with multiple AND conditions
-    print("\nBuilding query with 4 conjunctive conditions...")
-    
-    relation = QueryTree("RELATION", "orders")
-    
-    comp1 = QueryTree("COMPARISON", ">")   # amount > 1000
-    comp2 = QueryTree("COMPARISON", "=")   # status = 'pending'
-    comp3 = QueryTree("COMPARISON", "<")   # date < '2024-01-01'
-    comp4 = QueryTree("COMPARISON", "!=")  # customer_id != null
-    
-    and_operator = QueryTree("OPERATOR", "AND")
-    and_operator.add_child(comp1)
-    and_operator.add_child(comp2)
-    and_operator.add_child(comp3)
-    and_operator.add_child(comp4)
-    
-    filter_node = QueryTree("FILTER")
-    filter_node.add_child(relation)
-    filter_node.add_child(and_operator)
-    
-    query = ParsedQuery(
-        filter_node,
-        "SELECT * FROM orders WHERE amount > 1000 AND status = 'pending' AND date < '2024-01-01' AND customer_id != null"
-    )
+    sql = "SELECT users.name, orders.amount, products.name FROM users JOIN orders ON users.id = orders.user_id JOIN products ON orders.product_id = products.id WHERE (amount > 100 OR amount < 10) AND price > 10"
+
+    engine = OptimizationEngine()
+    query = engine.parse_query(sql)
     
     print("\nOriginal Query Tree:")
-    print_query_tree(query.query_tree)
+    print(query.query_tree.tree())
     
-    print_separator("Running Genetic Optimizer...")
-    print("Population Size: 20")
-    print("Generations: 10")
-    print("Mutation Rate: 0.2")
-    print("Using Unified Filter Parameters (combines reordering and cascading)")
+    engine = OptimizationEngine()
+    original_cost = engine.get_cost(query)
+    print(f"\nOriginal Cost: {original_cost:.2f}")
+    
+    deterministic_query = rule_3.seleksi_proyeksi(query)
+    
+    deterministic_query = rule_7.apply_pushdown(deterministic_query)
+    
+    deterministic_query = rule_8.push_projection_over_joins(deterministic_query)
+    
+    print("\nQuery Tree after Deterministic Rules:")
+    print(deterministic_query.query_tree.tree())
+    
+    deterministic_cost = engine.get_cost(deterministic_query)
+    print(f"\nCost after Deterministic Rules: {deterministic_cost:.2f}")
+    print(f"Improvement: {original_cost - deterministic_cost:.2f} ({((original_cost - deterministic_cost) / original_cost * 100):.1f}%)")
     
     ga = GeneticOptimizer(
-        population_size=20,
-        generations=10,
+        population_size=30,
+        generations=15,
         mutation_rate=0.2,
         crossover_rate=0.8,
-        elitism=2,
+        elitism=3,
     )
     
-    optimized_query = ga.optimize(query)
+    optimized_query = ga.optimize(deterministic_query)
     
     print_separator("Optimization Results")
     
     print("\nOptimized Query Tree:")
-    print_query_tree(optimized_query.query_tree)
+    print(optimized_query.query_tree.tree())
     
     print_separator("Statistics")
     
     stats = ga.get_ga_statistics()
-    print(f"\nBest Fitness: {stats['best_fitness']:.2f}")
+    print(f"\nBest Fitness (GA): {stats['best_fitness']:.2f}")
     print(f"Total Generations: {stats['generations']}")
     
+    print("\n" + "="*70)
+    print("Cost Progression:")
+    print(f"  Original Query:           {original_cost:.2f}")
+    print(f"  After Deterministic:      {deterministic_cost:.2f} ({((original_cost - deterministic_cost) / original_cost * 100):+.1f}%)")
+    print(f"  After GA:                 {stats['best_fitness']:.2f} ({((deterministic_cost - stats['best_fitness']) / deterministic_cost * 100):+.1f}%)")
+    print(f"  Total Improvement:        {original_cost - stats['best_fitness']:.2f} ({((original_cost - stats['best_fitness']) / original_cost * 100):.1f}%)")
+    print("="*70)
+    
     if stats['best_params']:
-        print("\nBest Parameters Found:")
+        print("\nBest GA Parameters Found:")
         for param_type, node_params in stats['best_params'].items():
             if node_params:
                 print(f"\n  {param_type}:")
                 for node_id, params in node_params.items():
                     print(f"    Node {node_id}: {params}")
                     if param_type == 'filter_params' and isinstance(params, list):
-                        # Unified format: explains both reorder and cascade
                         explanations = []
                         for item in params:
                             if isinstance(item, list):
@@ -491,7 +473,14 @@ def demo_genetic_with_rules():
                                 explanations.append(f"{item} single")
                         if explanations:
                             print(f"      → {' -> '.join(explanations)}")
-                            print("      → Unified format combines reordering and cascading")
+                    elif param_type == 'join_params' and isinstance(params, dict):
+                        for key, cond_list in params.items():
+                            if cond_list:
+                                print(f"      → {key}: merge conditions")
+                            else:
+                                print(f"      → {key}: keep separate")
+                    elif param_type == 'join_child_params' and isinstance(params, bool):
+                        print(f"      → {'SWAP children' if params else 'KEEP original order'}")
     
     print_separator("Fitness Progress")
     print("\nGen | Best    | Average | Worst")
@@ -513,12 +502,6 @@ def demo_genetic_with_rules():
                   f"{last['worst_fitness']:7.2f}")
     
     print_separator("DEMO 11 COMPLETED")
-    print("\nKey Insights:")
-    print("- Genetic Algorithm explores large search space efficiently")
-    print("- Unified filter_params format combines reordering and cascading")
-    print("- Finds near-optimal solutions without exhaustive search")
-    print("- Scalable to complex queries with many optimization choices")
-    
     return optimized_query
 
 
