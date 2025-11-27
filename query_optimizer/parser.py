@@ -66,7 +66,11 @@ class Parser:
         if self.match(TokenType.KEYWORD_DELETE):
             return self.parse_delete()
         if self.match(TokenType.KEYWORD_BEGIN_TRANSACTION):
-            return self.parse_transaction()
+            return self.parse_begin_transaction()
+        if self.match(TokenType.KEYWORD_COMMIT):
+            return self.parse_commit()
+        if self.match(TokenType.KEYWORD_ABORT):
+            return self.parse_abort()
         if self.match(TokenType.KEYWORD_CREATE):
             return self.parse_create_table()
         if self.match(TokenType.KEYWORD_DROP):
@@ -429,23 +433,38 @@ class Parser:
         self.consume_if(TokenType.DELIMITER_SEMICOLON)
         return drop_node
 
-    def parse_transaction(self) -> QueryTree:
+    def parse_begin_transaction(self) -> QueryTree:
         self.expect(TokenType.KEYWORD_BEGIN_TRANSACTION)
         self.consume_if(TokenType.DELIMITER_SEMICOLON)
+        return QueryTree("BEGIN_TRANSACTION", "")
 
-        transaction_node = QueryTree("BEGIN_TRANSACTION", "")
-
-        while not self.match(TokenType.KEYWORD_COMMIT):
-            if self.current_token is None or self.match(TokenType.EOF):
-                raise ParserError("Expected COMMIT to close transaction")
-            statement = self.parse_statement()
-            transaction_node.add_child(statement)
-
+    def parse_commit(self) -> QueryTree:
         self.expect(TokenType.KEYWORD_COMMIT)
-        commit_node = QueryTree("COMMIT", "")
-        transaction_node.add_child(commit_node)
         self.consume_if(TokenType.DELIMITER_SEMICOLON)
-        return transaction_node
+        return QueryTree("COMMIT", "")
+
+    def parse_abort(self) -> QueryTree:
+        self.expect(TokenType.KEYWORD_ABORT)
+        self.consume_if(TokenType.DELIMITER_SEMICOLON)
+        return QueryTree("ABORT", "")
+
+    # def parse_transaction(self) -> QueryTree:
+    #     self.expect(TokenType.KEYWORD_BEGIN_TRANSACTION)
+    #     self.consume_if(TokenType.DELIMITER_SEMICOLON)
+    #
+    #     transaction_node = QueryTree("BEGIN_TRANSACTION", "")
+    #
+    #     while not self.match(TokenType.KEYWORD_COMMIT):
+    #         if self.current_token is None or self.match(TokenType.EOF):
+    #             raise ParserError("Expected COMMIT to close transaction")
+    #         statement = self.parse_statement()
+    #         transaction_node.add_child(statement)
+    #
+    #     self.expect(TokenType.KEYWORD_COMMIT)
+    #     commit_node = QueryTree("COMMIT", "")
+    #     transaction_node.add_child(commit_node)
+    #     self.consume_if(TokenType.DELIMITER_SEMICOLON)
+    #     return transaction_node
 
     def parse_boolean_expr(self) -> QueryTree:
         return self.parse_or_expr()

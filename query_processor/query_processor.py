@@ -40,7 +40,8 @@ class QueryProcessor:
 
     def execute_query(self, query: str, client_id: int):
         try:
-            query_tree = self._get_query_tree(query)
+            parsed_result = self._get_query_tree(query)
+            query_tree = parsed_result.query_tree
             query_type = query_tree.type
         except Exception as e:
             return ExecutionResult(f"Error parsing/validating query: {e}", success=False, query=query)
@@ -75,11 +76,12 @@ class QueryProcessor:
                 query=query
             )
 
-        else:
-            if not t_id:
-                return ExecutionResult("Query requires an active transaction. Use BEGIN_TRANSACTION.", success=False, query=query)
-            
+        else:            
             # TODO: Implementasi Optimisasi Query di sini
+            if not t_id:
+                # Jika tidak ada transaksi aktif, buat transaksi baru untuk eksekusi query
+                t_id = self.adapter_ccm.begin_transaction()
+                self.active_transactions[client_id] = t_id
             
             try:
                 result_rows = self.query_execution_engine.execute_node(query_tree, t_id)

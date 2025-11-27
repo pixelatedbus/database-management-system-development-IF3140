@@ -3,7 +3,11 @@ import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from concurrency_control_manager.src import *
+from concurrency_control_manager.src.cc_manager import CCManager
+from concurrency_control_manager.src.enums import AlgorithmType, ActionType
+from concurrency_control_manager.src.action import Action
+from concurrency_control_manager.src.response import Response
+from concurrency_control_manager.src.row import Row
 
 class AdapterCCM:
     

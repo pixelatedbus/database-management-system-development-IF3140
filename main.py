@@ -33,14 +33,14 @@ def main():
     processor = QueryProcessor()
     
     scenario_1 = [
-        "BEGIN_TRANSACTION",
-        "SELECT id, name FROM users WHERE name='mifune';",
+        "BEGIN TRANSACTION",
+        "SELECT * FROM test_users WHERE id < 5",
         "COMMIT"
     ]
     
     scenario_2 = [
-        "BEGIN_TRANSACTION",
-        "UPDATE users SET name='Zelda' WHERE id=2;",
+        "BEGIN TRANSACTION",
+        "SELECT * FROM test_products WHERE category = 'Electronics'",
         "COMMIT"
     ]
     

@@ -6,24 +6,11 @@ from query_optimizer.optimization_engine import OptimizationEngine, ParsedQuery
 from query_optimizer.query_tree import QueryTree
 
 class AdapterOptimizer:
-    """
-    Adapter for Query Optimizer operations.
-    Provides optimization decisions and query analysis.
-    """
-    
+
     def __init__(self):
         self.optimization_engine = OptimizationEngine()
     
     def parse_optimized_query(self, query: str) -> ParsedQuery:
-        """
-        Parse and optimize a SQL query.
-        
-        Args:
-            query: SQL query string
-            
-        Returns:
-            ParsedQuery object with optimized query tree
-        """
         parsed_query = self.optimization_engine.parse_query(query)
         optimized_query = self.optimization_engine.optimize_query(parsed_query)
         return optimized_query
