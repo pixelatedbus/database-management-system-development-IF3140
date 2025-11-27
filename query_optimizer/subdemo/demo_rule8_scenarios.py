@@ -1,21 +1,15 @@
-"""
-Demo scenarios for Rule 8 - Projection over Join
-"""
-
 from query_optimizer.query_tree import QueryTree
 from query_optimizer.optimization_engine import OptimizationEngine
 from query_optimizer.rule.rule_8 import push_projection_over_joins
 
 
 def print_separator(title):
-    """Print section separator"""
     print("\n" + "="*70)
     print(f"  {title}")
     print("="*70)
 
 
 def make_column_ref(col_name, table_name=None):
-    """Helper to create COLUMN_REF node"""
     col_ref = QueryTree("COLUMN_REF", "")
     col_name_node = QueryTree("COLUMN_NAME", "")
     identifier = QueryTree("IDENTIFIER", col_name)
@@ -32,7 +26,6 @@ def make_column_ref(col_name, table_name=None):
 
 
 def count_projects(node):
-    """Count PROJECT nodes in tree"""
     if node is None:
         return 0
     count = 1 if node.type == "PROJECT" else 0
@@ -42,7 +35,6 @@ def count_projects(node):
 
 
 def scenario_1_basic_pushdown():
-    """Scenario 8.1: Basic projection pushdown"""
     print("\n")
     print_separator("SCENARIO 8.1: Basic Projection Pushdown")
     
@@ -73,7 +65,6 @@ def scenario_1_basic_pushdown():
 
 
 def scenario_2_selective_projection():
-    """Scenario 8.2: Selective projection with many columns"""
     print("\n")
     print_separator("SCENARIO 8.2: Selective Projection")
     
