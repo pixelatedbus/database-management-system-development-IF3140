@@ -36,6 +36,9 @@ class FailureRecovery:
         self.wal_size: int = wal_size
         self.undo_list: List[int] = []
 
+        self.current_transaction_id: int = 0
+        self.current_table_name: str = ""
+
         # singleton class attr
         self._initialized = True
     
@@ -52,6 +55,10 @@ class FailureRecovery:
         
         - if a commit is to occur, write from mem_wal to .log file via logFile
         '''
+
+        # Maybe set the current transaction id here?
+        self.current_transaction_id = info.transaction_id
+        self.current_table_name = info.table_name
 
         try:
             with self.lock:
@@ -77,6 +84,21 @@ class FailureRecovery:
         pass
 
     def _save_checkpoint(self):
+
+        checkpoint_log = log(
+            transaction_id=self.current_transaction_id, 
+            action=actiontype.checkpoint,
+            timestamp=datetime.now(),
+            old_data=self.undo_list,
+            new_data=None,
+            table_name=self.current_table_name
+        )
+
+        # Dalam method ini, semua entri dalam write-ahead log sejak checkpoint terakhir akan digunakan untuk memperbarui data di physical storage, agar data tetap sinkron.
+        # Assume this is the part where we renew the .dat file
+
+        self.logFile.write_log(checkpoint_log)
+
         pass
 
     def _recover_transaction(self, transaction_id: int) -> None:

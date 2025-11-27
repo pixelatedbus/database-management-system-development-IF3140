@@ -7,6 +7,7 @@ class actiontype(enumerate):
     write = 1
     commit = 2
     abort = 3
+    checkpoint = 4
 
 class log:
     def __init__(
