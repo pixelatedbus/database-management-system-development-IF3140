@@ -9,7 +9,7 @@ from .base import ConcurrencyAlgorithm
 from ..transaction import Transaction
 from ..row import Row
 from ..enums import ActionType, LockType, TransactionStatus, LockResultStatus
-from ..response import Response
+from ..response import AlgorithmResponse
 
 
 class LockEntry:
@@ -317,7 +317,7 @@ class LockBasedAlgorithm(ConcurrencyAlgorithm):
         self.lock_manager: LockManager = LockManager()
     
     def check_permission(self, t: Transaction, obj: Row, 
-                        action: ActionType) -> Response:
+                        action: ActionType) -> AlgorithmResponse:
         """Check permission using locks with Wait-Die logic"""
         required_lock_type = (
             LockType.READ_LOCK if action == ActionType.READ 
@@ -330,13 +330,13 @@ class LockBasedAlgorithm(ConcurrencyAlgorithm):
         )
         
         if lock_status == LockResultStatus.GRANTED:
-            return Response(
+            return AlgorithmResponse(
                 allowed=True, 
                 message=f"Lock {required_lock_type.name} for obj {obj.object_id} granted."
             )
         
         elif lock_status == LockResultStatus.WAITING:
-            return Response(
+            return AlgorithmResponse(
                 allowed=False, 
                 message=f"Transaction {t.transaction_id} (Older) must wait for lock on {obj.object_id}."
             )
@@ -344,7 +344,7 @@ class LockBasedAlgorithm(ConcurrencyAlgorithm):
         elif lock_status == LockResultStatus.ABORTED:
             # Transaksi Muda bertemu Tua -> die
             self.abort_transaction(t)
-            return Response(
+            return AlgorithmResponse(
                 allowed=False, 
                 message=f"Transaction {t.transaction_id} (Younger) died (aborted) to prevent deadlock."
             )
@@ -357,17 +357,17 @@ class LockBasedAlgorithm(ConcurrencyAlgorithm):
         #         
         #         if victim_id == trans_id:
         #             self.abort_transaction(t) 
-        #             return AlgorithmResponse(
+        #             return AlgorithmAlgorithmResponse(
         #                 allowed=False, 
         #                 message=f"Transaction {trans_id} aborted due to deadlock."
         #             )
         #         else:
-        #             return AlgorithmResponse(
+        #             return AlgorithmAlgorithmResponse(
         #                 allowed=False, 
         #                 message=f"Transaction {trans_id} must wait (deadlock detected, victim is {victim_id})."
         #             )
         #     else:
-        #         return AlgorithmResponse(
+        #         return AlgorithmAlgorithmResponse(
         #             allowed=False, 
         #             message=f"Transaction {trans_id} must wait for lock on {obj_id}."
         #         )
