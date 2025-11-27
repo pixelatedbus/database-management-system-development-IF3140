@@ -127,7 +127,7 @@ class RuleParamsManager:
     def _register_default_operations(self):
         """Register default operations."""
         # Filter operations (Rule 1 + Rule 2)
-        from query_optimizer.rule.rule_1 import (
+        from query_optimizer.rule.rule_1_2 import (
             analyze_and_operators,
             generate_random_rule_1_params,
             copy_rule_1_params,

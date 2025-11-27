@@ -5,13 +5,7 @@ Genetic Algorithm
 import random
 from typing import Callable, Any
 from query_optimizer.optimization_engine import ParsedQuery, OptimizationEngine
-from query_optimizer.rule.rule_1 import (
-    cascade_filters,
-    uncascade_filters
-)
-from query_optimizer.rule.rule_2 import reorder_and_conditions
 from query_optimizer.rule import rule_4
-from query_optimizer.rule import rule_5
 from query_optimizer.rule_params_manager import get_rule_params_manager
 
 
@@ -73,7 +67,7 @@ class Individual:
         
         # Step 1: Apply Rule 1&2 (filter operations)
         if filter_params:
-            from query_optimizer.rule.rule_1 import apply_rule1_rule2
+            from query_optimizer.rule.rule_1_2 import apply_rule1_rule2
             current_query, filter_params = apply_rule1_rule2(current_query, filter_params)
         
         # Step 2: Apply Rule 5 (join child order)

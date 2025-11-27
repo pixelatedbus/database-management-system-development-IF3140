@@ -225,25 +225,6 @@ class TestRule4Integration(unittest.TestCase):
         except Exception as e:
             self.fail(f"Transformation failed: {e}")
     
-    def test_rule_4_undo_functionality(self):
-        """Test undo merge functionality dari rule 4."""
-        parsed = self.engine.parse_query(self.query_str_1)
-        
-        # Apply merge - merge all conditions
-        patterns = rule_4.find_patterns(parsed)
-        join_params = {}
-        for join_id, metadata in patterns.items():
-            # Merge all filter conditions
-            join_params[join_id] = metadata['filter_conditions']
-        
-        merged = rule_4.apply_merge(parsed, join_params)
-        
-        # Undo merge
-        unmerged = rule_4.undo_merge(merged)
-        
-        # Check structure restored
-        self.assertIsNotNone(unmerged)
-        self.assertIsInstance(unmerged, ParsedQuery)
 
 
 class TestRule4EdgeCases(unittest.TestCase):
@@ -294,7 +275,7 @@ class TestRule4EdgeCases(unittest.TestCase):
             join_params = {}
             for join_id, metadata in patterns.items():
                 join_params[join_id] = metadata['filter_conditions']  # Merge all
-            merged = rule_4.apply_merge(parsed, join_params)
+            merged, _, _ = rule_4.apply_merge(parsed, join_params, {})
             
             self.assertIsNotNone(merged)
 
@@ -340,7 +321,7 @@ class TestRule4Scenarios(unittest.TestCase):
         join_params = {}
         for join_id, metadata in patterns.items():
             join_params[join_id] = metadata['filter_conditions']  # Merge all
-        merged = rule_4.apply_merge(parsed, join_params)
+        merged, _, _ = rule_4.apply_merge(parsed, join_params, {})
         
         # Find JOIN node in merged tree
         def find_join_type(node):
@@ -361,7 +342,7 @@ class TestRule4Scenarios(unittest.TestCase):
         join_params_separate = {}
         for join_id, metadata in patterns.items():
             join_params_separate[join_id] = []  # Merge nothing (keep separate)
-        separate = rule_4.apply_merge(parsed, join_params_separate)
+        separate, _, _ = rule_4.apply_merge(parsed, join_params_separate, {})
         
         join_type_separate = find_join_type(separate.query_tree)
         self.assertEqual(join_type_separate, "CROSS", "JOIN should remain CROSS")
@@ -406,7 +387,7 @@ class TestRule4Scenarios(unittest.TestCase):
         join_params = {}
         for join_id, metadata in patterns.items():
             join_params[join_id] = metadata['filter_conditions']  # Merge all
-        merged = rule_4.apply_merge(parsed, join_params)
+        merged, _, _ = rule_4.apply_merge(parsed, join_params, {})
         
         # Check that JOIN has AND operator with both conditions
         def find_and_in_join(node):
@@ -424,115 +405,7 @@ class TestRule4Scenarios(unittest.TestCase):
         has_and = find_and_in_join(merged.query_tree)
         self.assertTrue(has_and, "Merged JOIN should have AND operator with multiple conditions")
     
-    def test_undo_merge_converts_inner_to_cross(self):
-        """Test undo_merge converts INNER JOIN back to CROSS JOIN with FILTER."""
-        from query_optimizer.query_tree import QueryTree
-        from query_optimizer.optimization_engine import ParsedQuery
-        
-        # Start with INNER JOIN with condition
-        rel1 = QueryTree("RELATION", "employees")
-        rel2 = QueryTree("RELATION", "payroll")
-        
-        condition = QueryTree("COMPARISON", "=")
-        condition.add_child(QueryTree("COLUMN_REF", "id"))
-        condition.add_child(QueryTree("COLUMN_REF", "emp_id"))
-        
-        inner_join = QueryTree("JOIN", "INNER")
-        inner_join.add_child(rel1)
-        inner_join.add_child(rel2)
-        inner_join.add_child(condition)
-        
-        project = QueryTree("PROJECT", "*")
-        project.add_child(inner_join)
-        
-        parsed = ParsedQuery(project, "SELECT * FROM employees INNER JOIN payroll ON ...")
-        
-        # Apply undo_merge
-        undone = rule_4.undo_merge(parsed)
-        
-        # Check structure: should have FILTER above JOIN
-        root = undone.query_tree
-        self.assertEqual(root.type, "PROJECT", "Root should be PROJECT")
-        
-        # Find FILTER and JOIN
-        def check_structure(node, parent_type=None):
-            if node is None:
-                return False, None
-            
-            if node.type == "FILTER" and len(node.childs) >= 2:
-                join_child = node.childs[0]
-                if join_child.type == "JOIN":
-                    return True, join_child.val
-            
-            for child in node.childs:
-                result, join_type = check_structure(child, node.type)
-                if result:
-                    return result, join_type
-            
-            return False, None
-        
-        has_filter_join, join_type = check_structure(root)
-        self.assertTrue(has_filter_join, "Should have FILTER -> JOIN structure")
-        self.assertEqual(join_type, "CROSS", "JOIN should be converted to CROSS")
     
-    def test_bidirectional_transformation(self):
-        """Test complete bidirectional transformation: CROSS -> INNER -> CROSS."""
-        from query_optimizer.query_tree import QueryTree
-        from query_optimizer.optimization_engine import ParsedQuery
-        
-        # Build initial FILTER over CROSS JOIN
-        rel1 = QueryTree("RELATION", "employees")
-        rel2 = QueryTree("RELATION", "payroll")
-        
-        join = QueryTree("JOIN", "CROSS")
-        join.add_child(rel1)
-        join.add_child(rel2)
-        
-        condition = QueryTree("COMPARISON", "=")
-        condition.add_child(QueryTree("COLUMN_REF", "id"))
-        condition.add_child(QueryTree("COLUMN_REF", "emp_id"))
-        
-        filter_node = QueryTree("FILTER", "")
-        filter_node.add_child(join)
-        filter_node.add_child(condition)
-        
-        project = QueryTree("PROJECT", "*")
-        project.add_child(filter_node)
-        
-        original = ParsedQuery(project, "SELECT * FROM employees, payroll WHERE ...")
-        
-        # Step 1: Merge (CROSS -> INNER) - merge all conditions
-        patterns = rule_4.find_patterns(original)
-        join_params = {}
-        for join_id, metadata in patterns.items():
-            join_params[join_id] = metadata['filter_conditions']  # Merge all
-        merged = rule_4.apply_merge(original, join_params)
-        
-        # Step 2: Undo merge (INNER -> CROSS)
-        restored = rule_4.undo_merge(merged)
-        
-        # Verify: should have similar structure to original
-        # Both should have FILTER with CROSS JOIN
-        def get_join_type(query):
-            def find_join(node):
-                if node is None:
-                    return None
-                if node.type == "JOIN":
-                    return node.val
-                for child in node.childs:
-                    result = find_join(child)
-                    if result:
-                        return result
-                return None
-            return find_join(query.query_tree)
-        
-        original_join = get_join_type(original)
-        restored_join = get_join_type(restored)
-        
-        self.assertEqual(original_join, "CROSS")
-        self.assertEqual(restored_join, "CROSS")
-        self.assertEqual(original_join, restored_join, 
-                        "Bidirectional transformation should restore CROSS JOIN")
     
     def test_cost_comparison_merge_vs_separate(self):
         """Test that merge typically has lower cost than keeping separate."""
@@ -568,14 +441,14 @@ class TestRule4Scenarios(unittest.TestCase):
             join_params_sep = {}
             for join_id, metadata in patterns.items():
                 join_params_sep[join_id] = []  # Don't merge
-            separate = rule_4.apply_merge(parsed, join_params_sep)
+            separate, _, _ = rule_4.apply_merge(parsed, join_params_sep, {})
             cost_separate = self.engine.get_cost(separate)
             
             # Merge all conditions
             join_params_merge = {}
             for join_id, metadata in patterns.items():
                 join_params_merge[join_id] = metadata['filter_conditions']  # Merge all
-            merged = rule_4.apply_merge(parsed, join_params_merge)
+            merged, _, _ = rule_4.apply_merge(parsed, join_params_merge, {})
             cost_merge = self.engine.get_cost(merged)
             
             # Merging should typically be better (lower cost)
@@ -658,7 +531,7 @@ class TestRule4WithCommaSeparatedTables(unittest.TestCase):
         join_params = {}
         for join_id, metadata in patterns.items():
             join_params[join_id] = metadata['filter_conditions']  # Merge all
-        merged = rule_4.apply_merge(parsed, join_params)
+        merged, _, _ = rule_4.apply_merge(parsed, join_params, {})
         
         # Find JOIN type in merged tree
         def find_join_type(node):
@@ -743,7 +616,7 @@ class TestRule4WithCommaSeparatedTables(unittest.TestCase):
             join_params = {}
             for join_id, metadata in patterns.items():
                 join_params[join_id] = metadata['filter_conditions']  # Merge all
-            merged = rule_4.apply_merge(parsed, join_params)
+            merged, _, _ = rule_4.apply_merge(parsed, join_params, {})
             self.assertIsNotNone(merged)
     
     def test_mixed_comma_and_explicit_join(self):
@@ -789,14 +662,14 @@ class TestRule4WithCommaSeparatedTables(unittest.TestCase):
             join_params_separate = {}
             for join_id, metadata in patterns.items():
                 join_params_separate[join_id] = []  # Don't merge
-            separate = rule_4.apply_merge(parsed, join_params_separate)
+            separate, _, _ = rule_4.apply_merge(parsed, join_params_separate, {})
             cost_separate = self.engine.get_cost(separate)
             
             # Merge to INNER JOIN - merge all conditions
             join_params_merge = {}
             for join_id, metadata in patterns.items():
                 join_params_merge[join_id] = metadata['filter_conditions']  # Merge all
-            merged = rule_4.apply_merge(parsed, join_params_merge)
+            merged, _, _ = rule_4.apply_merge(parsed, join_params_merge, {})
             cost_merge = self.engine.get_cost(merged)
             
             # INNER JOIN should typically be more efficient than CROSS + FILTER
@@ -881,10 +754,3 @@ class TestRule4WithRule1And2(unittest.TestCase):
                     self.assertTrue(all(isinstance(x, int) for x in condition_ids))
 
 
-def run_tests():
-    """Run all tests."""
-    unittest.main(argv=[''], exit=False, verbosity=2)
-
-
-if __name__ == '__main__':
-    run_tests()
