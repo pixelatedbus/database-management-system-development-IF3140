@@ -1060,6 +1060,23 @@ class StorageManager:
             l_r = 0
             f_r = 0
             V_a_r: Dict[str, int] = {}
+            indexes: Dict[str, Dict[str, Any]] = {}
+
+            # collect index info untuk tabel ini
+            table_indexes = self.get_indexes(table_name)
+            for tbl, col in table_indexes:
+                index = self.indexes[(tbl, col)]
+                if isinstance(index, BPlusTreeIndex):
+                    # btree index: include type dan height
+                    indexes[col] = {
+                        "type": "btree",
+                        "height": index.get_height()
+                    }
+                elif isinstance(index, HashIndex):
+                    # hash index: cuma include type
+                    indexes[col] = {
+                        "type": "hash"
+                    }
 
             if not os.path.exists(table_file):
                 stats[table_name] = Statistic(
@@ -1067,7 +1084,8 @@ class StorageManager:
                     b_r=b_r,
                     l_r=l_r,
                     f_r=f_r,
-                    V_a_r=V_a_r
+                    V_a_r=V_a_r,
+                    indexes=indexes
                 )
                 continue
 
@@ -1120,7 +1138,8 @@ class StorageManager:
                     b_r=b_r,
                     l_r=l_r,
                     f_r=f_r,
-                    V_a_r=V_a_r
+                    V_a_r=V_a_r,
+                    indexes=indexes
                 )
 
             except Exception as e:
@@ -1130,8 +1149,26 @@ class StorageManager:
                     b_r=0,
                     l_r=0,
                     f_r=0,
-                    V_a_r={}
+                    V_a_r={},
+                    indexes={}
                 )
 
         self.stats = stats
         return stats
+
+    def get_metadata(self) -> Dict[str, Any]:
+        # ambil metadata database: list tabel dan kolom tiap tabel
+        # format output sama kayak get_statistic() di query_check.py
+        # returns: {"tables": [...], "columns": {table_name: [col1, col2, ...]}}
+
+        tables = list(self.tables.keys())
+        columns = {}
+
+        for table_name in tables:
+            # ambil list nama kolom dari schema tabel
+            columns[table_name] = [col["name"] for col in self.tables[table_name]["columns"]]
+
+        return {
+            "tables": tables,
+            "columns": columns
+        }

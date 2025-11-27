@@ -1,0 +1,318 @@
+@startuml ConcurrencyControl Class Diagram
+skinparam linetype ortho 
+skinparam rankdir TB 
+skinparam nodesep 10 
+skinparam ranksep 15 
+ 
+title Concurrency Control Manager
+' ========================================= 
+' Base Enumerations (proper format) 
+' ========================================= 
+top to bottom direction 
+together { 
+  enum TransactionStatus { 
+    Active 
+    PartiallyCommitted 
+    Failed 
+    Committed 
+    Aborted 
+    Terminated 
+  } 
+  
+  enum MVCCVariant {
+    MVTO
+    MV2PL
+    SNAPSHOT_ISOLATION
+  }
+
+  enum IsolationPolicy {
+      FIRST_COMMITTER_WIN
+      FIRST_UPDATER_WIN
+  }
+
+  enum ActionType { 
+    READ 
+    WRITE 
+  } 
+ 
+  enum ActionStatus { 
+    Pending 
+    Executed 
+    Denied 
+    Blocked
+  } 
+ 
+  enum LockType { 
+    READ_LOCK 
+    WRITE_LOCK 
+  } 
+ 
+  enum AlgorithmType { 
+    LockBased 
+    TimestampBased 
+    ValidationBased 
+    MVCC 
+  } 
+ 
+  interface Response { 
+    + allowed : bool 
+    + message : string
+  } 
+} 
+ 
+TransactionStatus -[hidden]-> ActionType 
+ActionType -[hidden]-> ActionStatus 
+ActionStatus -[hidden]-> LockType 
+LockType -[hidden]-> AlgorithmType 
+AlgorithmType -[hidden]-> Response 
+ 
+' ========================================= 
+' General Purpose Components 
+' ========================================= 
+class CCManager { 
+  - algorithm : AlgorithmType 
+  - transactions : Dict<int, Transaction> 
+  - log_handler : LogHandler 
+  - concurrency_algorithm : ConcurrencyAlgorithm 
+  - next_transaction_id : int
+  -- 
+  + begin_transaction() : int 
+  + log_object(object: Row, transaction_id: int) : None 
+  + validate_object(object: Row, transaction_id: int, action: ActionType) : Response 
+  + end_transaction(transaction_id: int) : None 
+  + set_algorithm(algorithm: AlgorithmType) : None 
+  - get_transaction(transaction_id: int) : Transaction
+  - create_transaction() : Transaction
+} 
+ 
+class Transaction { 
+  - transaction_id : int 
+  - status : TransactionStatus 
+  - start_timestamp : datetime 
+  - validation_timestamp : datetime 
+  - finish_timestamp : datetime 
+  - actions : List<Action> 
+  - wait_time : float
+  -- 
+  + add_action(action: Action) : None 
+  + set_status(status: TransactionStatus) : None 
+  + get_status() : TransactionStatus
+  + get_age() : float
+  + get_action_count() : int
+} 
+ 
+class Action { 
+  - action_id : int 
+  - transaction_id : int 
+  - object_id : string 
+  - type : ActionType 
+  - timestamp : datetime 
+  - status : ActionStatus 
+  - retry_count : int
+  - blocked_timestamp : datetime
+  -- 
+  + mark_executed() : None 
+  + mark_denied() : None
+  + mark_blocked() : None
+  + increment_retry() : None
+  + get_wait_time() : float
+  + should_abort() : bool
+} 
+ 
+class LogHandler { 
+  - log_entries : List<LogEntry> 
+  - log_file : string
+  -- 
+  + log_access(transaction_id: int, object_id: string, action: ActionType, status: string) : None 
+  + log_transaction_event(transaction_id: int, event: string) : None
+  + flush() : None
+  + get_logs_for_transaction(transaction_id: int) : List<LogEntry>
+} 
+ 
+class LogEntry { 
+  - transaction_id : int 
+  - object_id : string 
+  - action : ActionType 
+  - timestamp : datetime 
+  - status : string
+  - event_type : string
+} 
+ 
+class Row { 
+  - object_id : string 
+  - table_name : string 
+  - data : Dict<string, any>
+} 
+ 
+' ========================================= 
+' Concurrency Control Algorithms
+' ========================================= 
+abstract class ConcurrencyAlgorithm { 
+  + {abstract} check_permission(t: Transaction, obj: Row, action: ActionType) : Response 
+  + {abstract} commit_transaction(t: Transaction) : None 
+  + {abstract} abort_transaction(t: Transaction) : None 
+} 
+ 
+class LockBasedAlgorithm extends ConcurrencyAlgorithm { 
+  - lock_manager : LockManager 
+  --
+  + check_permission(t: Transaction, obj: Row, action: ActionType) : Response 
+  + commit_transaction(t: Transaction) : None
+  + abort_transaction(t: Transaction) : None
+} 
+ 
+class TimestampBasedAlgorithm extends ConcurrencyAlgorithm { 
+  - object_timestamps : Dict<string, ObjectTimestamp>
+  --
+  + check_permission(t: Transaction, obj: Row, action: ActionType) : Response
+  + commit_transaction(t: Transaction) : None
+  + abort_transaction(t: Transaction) : None
+  - compare_timestamps(t1_timestamp: datetime, t2_timestamp: datetime) : int
+  - get_read_timestamp(object_id: string) : datetime
+  - get_write_timestamp(object_id: string) : datetime
+  - update_timestamps(object_id: string, t: Transaction, action: ActionType) : None
+} 
+ 
+class ValidationBasedAlgorithm extends ConcurrencyAlgorithm { 
+  - validator : Validator 
+  --
+  + check_permission(t: Transaction, obj: Row, action: ActionType) : Response
+  + commit_transaction(t: Transaction) : None
+  + abort_transaction(t: Transaction) : None
+  + validation_phase(t: Transaction) : bool 
+} 
+ 
+class MVCCAlgorithm extends ConcurrencyAlgorithm { 
+  - version_store : VersionStore
+  --
+  + check_permission(t: Transaction, obj: Row, action: ActionType) : Response
+  + commit_transaction(t: Transaction) : None
+  + abort_transaction(t: Transaction) : None
+  + read_version(t: Transaction, obj: Row) : Row 
+  + write_version(t: Transaction, obj: Row, new_data: Dict) : None 
+} 
+
+' Force vertical stack for algorithm subclasses 
+LockBasedAlgorithm -[hidden]-> TimestampBasedAlgorithm 
+TimestampBasedAlgorithm -[hidden]-> ValidationBasedAlgorithm 
+ValidationBasedAlgorithm -[hidden]-> MVCCAlgorithm 
+
+' ========================================= 
+' Lock-Based Components
+' ========================================= 
+class LockManager { 
+  - lock_table : Dict<string, List<LockEntry>> 
+  - wait_for_graph : Dict<int, Set<int>>
+  - timeout_seconds : float
+  -- 
+  + acquire_lock(object_id: string, transaction_id: int, lock_type: LockType) : bool 
+  + release_locks(transaction_id: int) : List<string>
+  + release_lock(object_id: string, transaction_id: int) : bool
+  + check_conflict(object_id: string, transaction_id: int, lock_type: LockType) : bool
+  + detect_deadlock() : bool
+  + get_deadlock_victim() : int
+  + upgrade_lock(object_id: string, transaction_id: int) : bool
+  - build_wait_for_graph() : None
+  - has_cycle() : bool
+  - is_compatible(lock_type1: LockType, lock_type2: LockType) : bool
+} 
+ 
+class LockEntry { 
+  - object_id : string 
+  - transaction_id : int 
+  - lock_type : LockType 
+  - granted : bool 
+  - timestamp : datetime
+  - wait_start : datetime
+  --
+  + is_expired(timeout: float) : bool
+} 
+
+' ========================================= 
+' Validation-Based Components
+' ========================================= 
+class Validator { 
+  - active_transactions : Set<int>
+  - read_sets : Dict<int, Set<string>>
+  - write_sets : Dict<int, Set<string>>
+  -- 
+  + validate_transaction(transaction: Transaction) : bool
+  + record_read(transaction_id: int, object_id: string) : None
+  + record_write(transaction_id: int, object_id: string) : None
+  + detect_conflict(transaction_id: int, other_id: int) : bool
+  + has_read_write_conflict(t1: int, t2: int) : bool
+  + has_write_write_conflict(t1: int, t2: int) : bool
+  + clear_transaction(transaction_id: int) : None
+} 
+
+' ========================================= 
+' Timestamp-Based Components
+' ========================================= 
+class ObjectTimestamp {
+  - object_id : string
+  - read_timestamp : datetime
+  - write_timestamp : datetime
+  --
+  + update_read_timestamp(timestamp: datetime) : None
+  + update_write_timestamp(timestamp: datetime) : None
+  + is_read_valid(transaction_timestamp: datetime) : bool
+  + is_write_valid(transaction_timestamp: datetime) : bool
+}
+
+' ========================================= 
+' MVCC Components
+' ========================================= 
+class TransactionInfo {
+  + transaction : Transaction
+  + timestamp : int
+  + transaction_type : TransactionType
+  + read_set : set
+  + write_set : set
+  + locks_held : Dict<string, string>
+  + has_exclusive_lock : bool
+  + buffered_writes : Dict<string, Any>
+  + rollback_count : int
+}
+
+class RowVersion {
+  - version_id : int
+  - object_id : string
+  - data : Dict<string, any>
+  - created_timestamp : datetime
+  - deleted_timestamp : datetime
+  - created_by : int
+  - is_committed : bool
+  --
+  + is_visible(transaction_timestamp: datetime) : bool
+  + mark_deleted(timestamp: datetime) : None
+  + mark_committed() : None
+}
+
+' ========================================= 
+' Relationships 
+' ========================================= 
+CCManager "1" *-- "1" LogHandler 
+CCManager "1" o-- "*" Transaction 
+CCManager "1" --> "1" ConcurrencyAlgorithm : uses >
+ 
+Transaction "1" o-- "*" Action 
+Action --> Row : acts on > 
+LogHandler "1" o-- "*" LogEntry 
+
+
+' Algorithm-specific compositions 
+LockBasedAlgorithm "1" *-- "1" LockManager 
+LockManager "1" o-- "*" LockEntry 
+LockEntry --> Row : locks > 
+ 
+ValidationBasedAlgorithm "1" *-- "1" Validator 
+Validator --> Transaction : validates > 
+
+TimestampBasedAlgorithm "1" o-- "*" ObjectTimestamp : tracks >
+ObjectTimestamp --> Row : timestamps >
+
+MVCCAlgorithm "1" o-- "*" DataVersion : maintains versions >
+MVCCAlgorithm "1" o-- "*" TransactionInfo : manages >
+TransactionInfo --> Transaction : wraps >
+
+@enduml
