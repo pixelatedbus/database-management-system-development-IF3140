@@ -30,12 +30,14 @@ class ClientThread(threading.Thread):
 
 def populate_test_users(processor):
     print("\n=== Populating test_users ===")
+    processor.execute_query("BEGIN TRANSACTION", client_id=0)
     processor.execute_query("DROP TABLE test_users", client_id=0)
     processor.execute_query("CREATE TABLE test_users (id INTEGER, name VARCHAR(50), age INTEGER)", client_id=0)
     processor.execute_query("INSERT INTO test_users (id, name, age) VALUES (1, 'mifune', 25)", client_id=0)
     processor.execute_query("INSERT INTO test_users (id, name, age) VALUES (2, 'link', 30)", client_id=0)
     processor.execute_query("INSERT INTO test_users (id, name, age) VALUES (3, 'samus', 28)", client_id=0)
     processor.execute_query("INSERT INTO test_users (id, name, age) VALUES (4, 'mario', 35)", client_id=0)
+    processor.execute_query("COMMIT", client_id=0)
     print("=== test_users ready ===\n")
 
 def main():
@@ -59,6 +61,7 @@ def main():
     client_b = ClientThread(2, processor, scenario_2)
 
     client_a.start()
+    time.sleep(0.5)  # Let client_a acquire lock first
     client_b.start()
 
     client_a.join()

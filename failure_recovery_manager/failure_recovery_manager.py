@@ -1,12 +1,12 @@
-from buffer import buffer, table
-from log import actiontype, log
-from recovery_criteria import RecoveryCriteria
-from logFile import logFile
+from .buffer import buffer, table
+from .log import actiontype, log
+from .recovery_criteria import RecoveryCriteria
+from .logFile import logFile
 import threading
 from typing import List
 
 # replace with the correct one later
-from fake_exec_result import ExecutionResult 
+from .fake_exec_result import ExecutionResult 
 
 # TODO: MAKE THIS SINGLETON BRUH
 class FailureRecovery:
@@ -52,12 +52,12 @@ class FailureRecovery:
 
                 if "commit" in info.query.lower() or info.action.lower() == "commit":
                     for infos in self.mem_wal:
-                        logFile.write_log_execRes(infos)
+                        self.logFile.write_log_execRes(infos)
                 
                 # handles if mem_wal is over the determined log size
                 elif len(self.mem_wal) > self.wal_size:
                     for infos in self.mem_wal:
-                        logFile.write_log_execRes(infos)
+                        self.logFile.write_log_execRes(infos)
                 
                 # to be more efficient, we can also insert the transaction ID into the undo list
                 if "commit" not in info.query.lower() or info.action.lower() != "commit":

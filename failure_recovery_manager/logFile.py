@@ -1,4 +1,4 @@
-from log import log
+from .log import log
 from pathlib import Path, PosixPath
 from datetime import datetime
 import os
@@ -6,7 +6,7 @@ from typing import List, Optional
 import re
 from ast import literal_eval
 import hashlib
-from fake_exec_result import ExecutionResult
+from .fake_exec_result import ExecutionResult
 
 class logFile:
 

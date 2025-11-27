@@ -331,16 +331,18 @@ class LockBasedAlgorithm(ConcurrencyAlgorithm):
     
     def commit_transaction(self, t: Transaction) -> None:
         """Commit transaction and release locks"""
-        if t.status == TransactionStatus.Active:
+        if t.status in [TransactionStatus.Active, TransactionStatus.PartiallyCommitted]:
             print(f"COMMITTING Transaction {t.transaction_id}: Releasing locks.")
+            released_objects = self.lock_manager.release_locks(t.transaction_id)
+            print(f"  Released {len(released_objects)} lock(s): {released_objects}")
             t.status = TransactionStatus.Committed
             t.finish_timestamp = datetime.now()
-            self.lock_manager.release_locks(t.transaction_id)
     
     def abort_transaction(self, t: Transaction) -> None:
         """Abort transaction and release locks"""
-        if t.status == TransactionStatus.Active:
+        if t.status in [TransactionStatus.Active, TransactionStatus.PartiallyCommitted, TransactionStatus.Failed]:
             print(f"ABORTING Transaction {t.transaction_id}: Releasing locks.")
+            released_objects = self.lock_manager.release_locks(t.transaction_id)
+            print(f"  Released {len(released_objects)} lock(s): {released_objects}")
             t.status = TransactionStatus.Aborted
             t.finish_timestamp = datetime.now()
-            self.lock_manager.release_locks(t.transaction_id)

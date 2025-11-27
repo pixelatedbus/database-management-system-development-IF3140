@@ -8,6 +8,7 @@ from storage_manager import Rows
 from .adapter_ccm import AdapterCCM, AlgorithmType
 from .adapter_storage import AdapterStorage
 from .adapter_optimizer import AdapterOptimizer
+from .adapter_frm import AdapterFRM
 from .query_execution import QueryExecution
 
 class ExecutionResult:
@@ -28,10 +29,11 @@ class QueryProcessor:
         return cls._instance
 
     def __init__(self):
-        # TODO: Inisialisasi Failure Recovery Manager (FRM) di sini
+        # Initialize Failure Recovery Manager
+        self.adapter_frm = AdapterFRM(wal_size=50)
         self.adapter_ccm = AdapterCCM(algorithm=AlgorithmType.LockBased)
         self.adapter_storage = AdapterStorage()
-        self.query_execution_engine = QueryExecution(self.adapter_storage, self.adapter_ccm)
+        self.query_execution_engine = QueryExecution(self.adapter_storage, self.adapter_ccm, frm_adapter=self.adapter_frm)
 
         self.adapter_optimizer = AdapterOptimizer() 
         
@@ -53,6 +55,13 @@ class QueryProcessor:
                 return ExecutionResult("Transaction already active for this client.", success=False, transaction_id=t_id, query=query)
             new_t_id = self.adapter_ccm.begin_transaction()
             self.active_transactions[client_id] = new_t_id
+            
+            # Initialize transaction buffer
+            self.query_execution_engine.transaction_buffer.start_transaction(new_t_id)
+            
+            # Log transaction start to FRM
+            self.adapter_frm.log_begin(new_t_id)
+            
             return ExecutionResult(
                 message=f"Transaction started. ID={new_t_id}", 
                 transaction_id=new_t_id,
@@ -64,12 +73,67 @@ class QueryProcessor:
                 return ExecutionResult("No active transaction to commit/abort.", success=False, query=query)
             
             if query_type == "COMMIT":
+                # Flush buffered operations to storage
+                print(f"\n[COMMIT] Flushing buffered operations for transaction {t_id}...")
+                buffered_ops = self.query_execution_engine.transaction_buffer.get_buffered_operations(t_id)
+                print(f"[COMMIT] Found {len(buffered_ops)} buffered operation(s)")
+                
+                for op in buffered_ops:
+                    if op.operation_type == "INSERT":
+                        # Execute buffered INSERT
+                        columns = list(op.data.keys())
+                        values = [op.data[col] for col in columns]
+                        self.adapter_storage.write_data(
+                            table_name=op.table_name,
+                            columns=columns,
+                            values=values,
+                            conditions=[],
+                            transaction_id=t_id
+                        )
+                        print(f"[COMMIT]   Executed INSERT into '{op.table_name}'")
+                    
+                    elif op.operation_type == "UPDATE":
+                        # Execute buffered UPDATE
+                        columns = list(op.data.keys())
+                        values = [op.data[col] for col in columns]
+                        self.adapter_storage.write_data(
+                            table_name=op.table_name,
+                            columns=columns,
+                            values=values,
+                            conditions=op.conditions,
+                            transaction_id=t_id
+                        )
+                        print(f"[COMMIT]   Executed UPDATE on '{op.table_name}'")
+                    
+                    elif op.operation_type == "DELETE":
+                        # Execute buffered DELETE
+                        self.adapter_storage.delete_data(
+                            table_name=op.table_name,
+                            conditions=op.conditions,
+                            transaction_id=t_id
+                        )
+                        print(f"[COMMIT]   Executed DELETE from '{op.table_name}'")
+                
+                # Clear buffer for this transaction
+                self.query_execution_engine.transaction_buffer.clear_transaction(t_id)
+                
+                # Log commit to FRM (flushes WAL to disk)
+                self.adapter_frm.log_commit(t_id)
                 self.adapter_ccm.commit_transaction(t_id)
             else:
+                # ABORT - discard buffered operations
+                print(f"\n[ABORT] Discarding buffered operations for transaction {t_id}...")
+                buffered_ops = self.query_execution_engine.transaction_buffer.get_buffered_operations(t_id)
+                print(f"[ABORT] Discarded {len(buffered_ops)} buffered operation(s)")
+                
+                # Clear buffer for this transaction
+                self.query_execution_engine.transaction_buffer.clear_transaction(t_id)
+                
+                # Log abort to FRM
+                self.adapter_frm.log_abort(t_id)
                 self.adapter_ccm.abort_transaction(t_id)
                 
             del self.active_transactions[client_id]
-            # TODO: Interaksi dengan Failure Recovery Manager (FRM) harus dilakukan di sini
             return ExecutionResult(
                 message=f"Transaction {t_id} {query_type}ed successfully.",
                 transaction_id=t_id,
