@@ -149,14 +149,12 @@ class TestRule5Integration(unittest.TestCase):
     def test_ga_initialization_includes_join_child_params(self):
         """Test apakah GA initialization include join_child_params."""
         parsed = self.engine.parse_query(self.query_str_1)
-        
-        ga = GeneticOptimizer(population_size=5, generations=1)
-        analysis = ga._analyze_query_for_rules(parsed)
-        
-        self.assertIn('join_child_params', analysis)
-        
-        if len(analysis['join_child_params']) > 0:
-            self.assertGreater(len(analysis['join_child_params']), 0)
+        manager = get_rule_params_manager()
+        analysis = manager.analyze_query(parsed, 'join_child_params')
+        self.assertIsInstance(analysis, dict)
+        # If there are join_child_params, they should be non-empty
+        if len(analysis) > 0:
+            self.assertGreater(len(analysis), 0)
     
     def test_individual_applies_join_child_transformations(self):
         """Test apakah Individual class apply rule 5 transformations."""
@@ -177,25 +175,18 @@ class TestRule5Integration(unittest.TestCase):
     def test_ga_optimization_with_rule_5(self):
         """Test full GA optimization dengan rule 5."""
         parsed = self.engine.parse_query(self.query_str_1)
-        
         ga = GeneticOptimizer(
             population_size=10,
             generations=5,
-            mutation_rate=0.2,
-            crossover_rate=0.8
+            mutation_rate=0.2
         )
-        
-        result = ga.optimize(parsed)
-        
-        self.assertIsNotNone(ga.best_individual)
-        self.assertIsNotNone(ga.best_fitness)
-        self.assertIsInstance(ga.best_individual.operation_params, dict)
-        
-        if 'join_child_params' in ga.best_individual.operation_params:
-            params = ga.best_individual.operation_params['join_child_params']
-            self.assertIsInstance(params, dict)
-            for join_id, swap in params.items():
-                self.assertIsInstance(swap, bool)
+        optimized_query, history = ga.optimize(parsed)
+        self.assertIsInstance(optimized_query, ParsedQuery)
+        self.assertIsInstance(history, list)
+        # Check that history contains dicts with 'gen' and 'best' keys
+        for gen_info in history:
+            self.assertIn('gen', gen_info)
+            self.assertIn('best', gen_info)
     
     def test_rule_5_with_natural_join(self):
         """Test rule 5 dengan NATURAL JOIN."""

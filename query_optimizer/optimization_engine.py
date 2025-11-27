@@ -4,10 +4,12 @@ Main class for query optimization
 
 from __future__ import annotations
 from typing import Optional, Callable
+from storage_manager.storage_manager import StorageManager
 from .tokenizer import Tokenizer
 from .parser import Parser
 from .query_tree import QueryTree
 from .query_check import check_query
+from .cost import CostCalculator
 
 class OptimizationError(Exception):
     """Exception raised for errors in the optimization process."""
@@ -36,6 +38,9 @@ class OptimizationEngine:
         self.query_tree: QueryTree = None
         self.optimized_tree: QueryTree = None
         self.original_sql: str = ""
+        self.storage = StorageManager()
+        self.statistics = self.storage.get_stats()
+        self.cost_calculator = CostCalculator(self.statistics)
     
     def parse_query(self, sql: str) -> ParsedQuery:
         """
@@ -142,43 +147,8 @@ class OptimizationEngine:
         return float(self.get_cost(query))
     
     def get_cost(self, query_tree:ParsedQuery) -> int:
-        """
-        Only simulation until proper implementation.
-        """
-        # Dummy implementation with random cost
-        # Base cost on tree structure
-        node_count = 0
-        filter_count = 0
-        operator_count = 0
-        join_count = 0
-        
-        def count_nodes(node):
-            nonlocal node_count, filter_count, operator_count, join_count
-            if node is None:
-                return
-            
-            node_count += 1
-            if node.type == "FILTER":
-                filter_count += 1
-            elif node.type in {"OPERATOR", "OPERATOR_S"}:
-                operator_count += 1
-            elif node.type == "JOIN":
-                join_count += 1
-            
-            for child in node.childs:
-                count_nodes(child)
-        
-        count_nodes(query_tree.query_tree)
-        
-        # Random cost with some structure dependency
-        base_cost = 100
-        filter_cost = filter_count * 40
-        operator_cost = operator_count * 30  # Logical operators slightly cheaper
-        join_cost = join_count * 150
-        
-        cost = base_cost + filter_cost + operator_cost + join_cost
-        
-        return cost
+
+        return self.cost_calculator.get_cost(query_tree.query_tree)
     
     def reset(self) -> None:
         """
