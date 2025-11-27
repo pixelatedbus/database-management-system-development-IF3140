@@ -142,10 +142,16 @@ class QueryProcessor:
 
         else:            
             # TODO: Implementasi Optimisasi Query di sini
-            if not t_id:
-                # Jika tidak ada transaksi aktif, buat transaksi baru untuk eksekusi query
+            
+            # Check if we're in an explicit transaction or auto-commit mode
+            in_explicit_transaction = t_id is not None
+            
+            if not in_explicit_transaction:
+                # AUTO-COMMIT MODE: Create transaction just for this query
                 t_id = self.adapter_ccm.begin_transaction()
-                self.active_transactions[client_id] = t_id
+                self.query_execution_engine.transaction_buffer.start_transaction(t_id)
+                self.adapter_frm.log_begin(t_id)
+                print(f"\n[AUTO-COMMIT] Created transaction {t_id} for single query")
             
             try:
                 result_rows = self.query_execution_engine.execute_node(query_tree, t_id)
@@ -157,6 +163,53 @@ class QueryProcessor:
                     result_data = Rows(result_rows)
                 else:
                     result_data = result_rows or Rows([])
+                
+                # AUTO-COMMIT: Immediately commit single-query transaction
+                if not in_explicit_transaction:
+                    print(f"\n[AUTO-COMMIT] Committing transaction {t_id}...")
+                    
+                    # Flush buffered operations to storage
+                    buffered_ops = self.query_execution_engine.transaction_buffer.get_buffered_operations(t_id)
+                    print(f"[AUTO-COMMIT] Found {len(buffered_ops)} buffered operation(s)")
+                    
+                    for op in buffered_ops:
+                        if op.operation_type == "INSERT":
+                            columns = list(op.data.keys())
+                            values = [op.data[col] for col in columns]
+                            self.adapter_storage.write_data(
+                                table_name=op.table_name,
+                                columns=columns,
+                                values=values,
+                                conditions=[],
+                                transaction_id=t_id
+                            )
+                            print(f"[AUTO-COMMIT]   Executed INSERT into '{op.table_name}'")
+                        
+                        elif op.operation_type == "UPDATE":
+                            columns = list(op.data.keys())
+                            values = [op.data[col] for col in columns]
+                            self.adapter_storage.write_data(
+                                table_name=op.table_name,
+                                columns=columns,
+                                values=values,
+                                conditions=op.conditions,
+                                transaction_id=t_id
+                            )
+                            print(f"[AUTO-COMMIT]   Executed UPDATE on '{op.table_name}'")
+                        
+                        elif op.operation_type == "DELETE":
+                            self.adapter_storage.delete_data(
+                                table_name=op.table_name,
+                                conditions=op.conditions,
+                                transaction_id=t_id
+                            )
+                            print(f"[AUTO-COMMIT]   Executed DELETE from '{op.table_name}'")
+                    
+                    # Clear buffer and commit
+                    self.query_execution_engine.transaction_buffer.clear_transaction(t_id)
+                    self.adapter_frm.log_commit(t_id)
+                    self.adapter_ccm.commit_transaction(t_id)
+                    print(f"[AUTO-COMMIT] Transaction {t_id} committed successfully")
                 
                 return ExecutionResult(
                     message="Query executed successfully.", 
@@ -174,8 +227,8 @@ class QueryProcessor:
                 # Log abort to FRM
                 self.adapter_frm.log_abort(t_id)
                 
-                # Remove from active transactions
-                if client_id in self.active_transactions:
+                # Remove from active transactions if it was explicit
+                if in_explicit_transaction and client_id in self.active_transactions:
                     del self.active_transactions[client_id]
                 
                 return ExecutionResult(
@@ -192,7 +245,8 @@ class QueryProcessor:
                 # Clear buffer
                 self.query_execution_engine.transaction_buffer.clear_transaction(t_id)
                 
-                if client_id in self.active_transactions:
+                # Remove from active transactions if it was explicit
+                if in_explicit_transaction and client_id in self.active_transactions:
                     del self.active_transactions[client_id]
                 
                 return ExecutionResult(
