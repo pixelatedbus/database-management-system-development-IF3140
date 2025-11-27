@@ -90,6 +90,9 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
         )
     
     def validate_read(self, transaction: Transaction, row: Row) -> AlgorithmResponse:
+        if transaction.transaction_id not in self.transaction_info:
+            self.begin_transaction(transaction)
+        
         action = Action(
             action_id=self._generate_action_id(),
             transaction_id=transaction.transaction_id,
@@ -129,6 +132,9 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
         return AlgorithmResponse(allowed=success, message=message, value=value)
     
     def validate_write(self, transaction: Transaction, row: Row) -> AlgorithmResponse:
+        if transaction.transaction_id not in self.transaction_info:
+            self.begin_transaction(transaction)
+        
         action = Action(
             action_id=self._generate_action_id(),
             transaction_id=transaction.transaction_id,
