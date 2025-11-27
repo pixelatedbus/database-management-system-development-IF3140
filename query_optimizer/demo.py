@@ -108,41 +108,6 @@ def demo_rule_1():
     print("- More selective conditions should be evaluated first")
     print("- Genetic Algorithm can find optimal configuration (see Demo 11)")
 
-
-# =============================================================================
-# RULE 2: REORDER AND CONDITIONS
-# =============================================================================
-
-def demo_rule_2():
-    """Demo 2: Rule 2 - Reorder AND Conditions (all scenarios)"""
-    print_separator("DEMO 2: Rule 2 - Reorder AND Conditions (Seleksi Komutatif)")
-    
-    print("\nThis demo has multiple scenarios:")
-    print("  2.1 - Original order baseline")
-    print("  2.2 - Reversed order")
-    print("  2.3 - Finding optimal order")
-    
-    print("\nRunning all scenarios...")
-    
-    from query_optimizer.subdemo.demo_rule2_scenarios import (
-        scenario_1_original_order,
-        scenario_2_reversed_order,
-        scenario_3_optimal_order
-    )
-    
-    scenario_1_original_order()
-    scenario_2_reversed_order()
-    scenario_3_optimal_order()
-    
-    print_separator("DEMO 2 COMPLETED")
-    print("\nKey Insights:")
-    print("- Rule 2 reorders AND conditions without changing structure")
-    print("- All conditions remain in single AND operator")
-    print("- Different orders can have different costs")
-    print("- Best order evaluates most selective conditions first")
-    print("- Genetic Algorithm can find optimal order (see Demo 11)")
-
-
 # =============================================================================
 # RULE 3: PROJECTION ELIMINATION
 # =============================================================================
@@ -515,7 +480,6 @@ def demo_all():
     
     # Rules
     demo_rule_1()
-    demo_rule_2()
     demo_rule_3()
     demo_rule_4()
     demo_rule_5()
@@ -596,31 +560,7 @@ def main():
                     return
                 
                 print_separator("DEMO COMPLETED")
-        
-        # Rule 2: Reorder AND Conditions
-        elif demo_num == 2:
-            if scenario_num is None:
-                demo_rule_2()
-            else:
-                from query_optimizer.subdemo.demo_rule2_scenarios import (
-                    scenario_1_original_order,
-                    scenario_2_reversed_order,
-                    scenario_3_optimal_order
-                )
-                
-                if scenario_num == 1:
-                    scenario_1_original_order()
-                elif scenario_num == 2:
-                    scenario_2_reversed_order()
-                elif scenario_num == 3:
-                    scenario_3_optimal_order()
-                else:
-                    print(f"\n Error: Invalid scenario number {scenario_num}")
-                    print("Valid scenarios: 2.1, 2.2, 2.3")
-                    return
-                
-                print_separator("DEMO COMPLETED")
-        
+               
         # Rule 3: Projection Elimination
         elif demo_num == 3:
             if scenario_num is None:
