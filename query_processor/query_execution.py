@@ -121,8 +121,9 @@ class QueryExecution:
                 response = self.ccm_adapter.validate_action(transaction_id, table_name, 'read')
                 if not response.allowed:
                     logger.info(f"[PROJECT] CCM denied READ access: {response.message}")
-                    # Check if transaction was aborted (deadlock)
-                    if "aborted" in response.message.lower():
+                    # Check if transaction was aborted (deadlock prevention: Wait-Die)
+                    msg_lower = response.message.lower()
+                    if "aborted" in msg_lower or "died" in msg_lower:
                         raise TransactionAbortedException(transaction_id, response.message)
                     return []
                 # Log the object access
@@ -265,8 +266,9 @@ class QueryExecution:
                 response = self.ccm_adapter.validate_action(transaction_id, table_name, 'read')
                 if not response.allowed:
                     logger.info(f"[FILTER] CCM denied READ access: {response.message}")
-                    # Check if transaction was aborted (deadlock)
-                    if "aborted" in response.message.lower():
+                    # Check if transaction was aborted (deadlock prevention: Wait-Die)
+                    msg_lower = response.message.lower()
+                    if "aborted" in msg_lower or "died" in msg_lower:
                         raise TransactionAbortedException(transaction_id, response.message)
                     return []
                 # Log the object access
@@ -381,8 +383,9 @@ class QueryExecution:
             response = self.ccm_adapter.validate_action(transaction_id, table_name, 'read')
             if not response.allowed:
                 logger.info(f"[RELATION] CCM denied READ access: {response.message}")
-                # Check if transaction was aborted (deadlock)
-                if "aborted" in response.message.lower():
+                # Check if transaction was aborted (deadlock prevention: Wait-Die)
+                msg_lower = response.message.lower()
+                if "aborted" in msg_lower or "died" in msg_lower:
                     raise TransactionAbortedException(transaction_id, response.message)
                 return []
             # Log the object access
@@ -596,8 +599,9 @@ class QueryExecution:
             response = self.ccm_adapter.validate_action(transaction_id, table_name, 'write')
             if not response.allowed:
                 logger.info(f"[UPDATE] CCM denied WRITE access: {response.message}")
-                # Check if transaction was aborted (deadlock)
-                if "aborted" in response.message.lower():
+                # Check if transaction was aborted (deadlock prevention: Wait-Die)
+                msg_lower = response.message.lower()
+                if "aborted" in msg_lower or "died" in msg_lower:
                     raise TransactionAbortedException(transaction_id, response.message)
                 return 0
             # Log the object access
@@ -724,8 +728,9 @@ class QueryExecution:
             response = self.ccm_adapter.validate_action(transaction_id, table_name, 'write')
             if not response.allowed:
                 logger.info(f"[INSERT] CCM denied WRITE access: {response.message}")
-                # Check if transaction was aborted (deadlock)
-                if "aborted" in response.message.lower():
+                # Check if transaction was aborted (deadlock prevention: Wait-Die)
+                msg_lower = response.message.lower()
+                if "aborted" in msg_lower or "died" in msg_lower:
                     raise TransactionAbortedException(transaction_id, response.message)
                 return 0
             # Log the object access
@@ -801,8 +806,9 @@ class QueryExecution:
             response = self.ccm_adapter.validate_action(transaction_id, table_name, 'write')
             if not response.allowed:
                 logger.info(f"[DELETE] CCM denied WRITE access: {response.message}")
-                # Check if transaction was aborted (deadlock)
-                if "aborted" in response.message.lower():
+                # Check if transaction was aborted (deadlock prevention: Wait-Die)
+                msg_lower = response.message.lower()
+                if "aborted" in msg_lower or "died" in msg_lower:
                     raise TransactionAbortedException(transaction_id, response.message)
                 return 0
             # Log the object access
