@@ -13,6 +13,10 @@ class BPlusTreeIndex:
         # key bisa any type (int, float, str) biar comparison work correctly
         self.index.insert(key, record_id)
 
+    def delete(self, key, record_id: int):
+        # delete key-value pair dari index
+        self.index.delete(key, record_id)
+
     def search(self, key):
         # cari record_id yang match dengan key (untuk '=')
         # return list buat konsistensi dengan HashIndex
@@ -281,3 +285,84 @@ class BPlusTree:
             if res:
                 return res
         return None
+
+    # ========== B+ Tree Deletion Operations ==========
+    def delete(self, key):
+        """
+        Step by step:
+        1. Find the leaf node containing the key.
+        2. Remove the key and its associated data pointer from the leaf node.
+        3. If the leaf node has enough keys, we're done.
+        4. If the leaf node has too few keys, try to borrow a key from a sibling node.
+        5. If borrowing is not possible, merge with a sibling node.
+        """
+        leaf = self._find_leaf_node(self.root, key)
+        if not self._delete_from_leaf(leaf, key):
+            return  # Key not found; nothing to delete
+        if len(leaf.keys) < (self.order - 1) // 2:
+            self._handle_underflow(leaf)
+
+    # ========== B+ Tree Delete Helper ==========
+    def _delete_from_leaf(self, leaf, key):
+        if key in leaf.keys:
+            index = leaf.keys.index(key)
+            leaf.keys.pop(index)
+            leaf.children.pop(index)
+            return True
+        return False
+    
+    def _find_sibling(self, parent, node):
+        for i, child in enumerate(parent.children):
+            if child == node:
+                left_sibling = parent.children[i - 1] if i > 0 else None
+                right_sibling = parent.children[i + 1] if i < len(parent.children) - 1 else None
+                return left_sibling, right_sibling
+        return None, None
+    
+    def _borrow_from_sibling(self, parent, node, sibling, is_left_sibling):
+        if is_left_sibling:
+            borrowed_key = sibling.keys.pop(-1)
+            borrowed_child = sibling.children.pop(-1)
+            node.keys.insert(0, borrowed_key)
+            node.children.insert(0, borrowed_child)
+            parent_key_index = parent.children.index(node) - 1
+            parent.keys[parent_key_index] = node.keys[0]
+        else:
+            borrowed_key = sibling.keys.pop(0)
+            borrowed_child = sibling.children.pop(0)
+            node.keys.append(borrowed_key)
+            node.children.append(borrowed_child)
+            parent_key_index = parent.children.index(node)
+            parent.keys[parent_key_index] = sibling.keys[0]
+
+    def _merge_with_sibling(self, parent, node, sibling, is_left_sibling):
+        if is_left_sibling:
+            sibling.keys.extend(node.keys)
+            sibling.children.extend(node.children)
+            parent_key_index = parent.children.index(node) - 1
+            parent.keys.pop(parent_key_index)
+            parent.children.remove(node)
+        else:
+            node.keys.extend(sibling.keys)
+            node.children.extend(sibling.children)
+            parent_key_index = parent.children.index(sibling)
+            parent.keys.pop(parent_key_index - 1)
+            parent.children.remove(sibling)
+
+    def _handle_underflow(self, node):
+        parent = self._find_parent(self.root, node)
+        if not parent:
+            if len(node.keys) == 0 and not node.is_leaf:
+                self.root = node.children[0]
+            return
+        left_sibling, right_sibling = self._find_sibling(parent, node)
+        if left_sibling and len(left_sibling.keys) > (self.order - 1) // 2:
+            self._borrow_from_sibling(parent, node, left_sibling, True)
+        elif right_sibling and len(right_sibling.keys) > (self.order - 1) // 2:
+            self._borrow_from_sibling(parent, node, right_sibling, False)
+        else:
+            if left_sibling:
+                self._merge_with_sibling(parent, node, left_sibling, True)
+            elif right_sibling:
+                self._merge_with_sibling(parent, node, right_sibling, False)
+        
