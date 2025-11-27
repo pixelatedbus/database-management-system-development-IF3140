@@ -1,123 +1,148 @@
-# gw asumsiin disini manggil make data2 yang diperluin ama class(es) storage yak
-from storage_manager import *
+from storage_manager.storage_manager import StorageManager
+from storage_manager.models import Condition, DataRetrieval, DataWrite, DataDeletion
 
 class AdapterStorage:
-    def __init__(self):
-        self.sm = StorageManager()
-
-    def storage_select(self, table_name, conditions=None, projections=None):
-        print("\n[STORAGE IFACE] CALLING SELECT")
-        print(f"[STORAGE IFACE] Table       : {table_name}")
-        print(f"[STORAGE IFACE] Projections : {projections}")
-        print(f"[STORAGE IFACE] Conditions  : {conditions}")
-
-        cond_objs = []
-        if conditions:
-            for col, op, val in conditions:
-                print(f"[STORAGE IFACE]  -> Building Condition({col} {op} {val})")
-                cond_objs.append(Condition(col, op, val))
-
-        dr = DataRetrieval(
+    """
+    Adapter for Storage Manager operations.
+    Provides a clean interface between query execution and storage layer.
+    """
+    
+    def __init__(self, storage_manager=None, data_dir=None):
+        """Initialize with either an existing storage manager or create a new one"""
+        if storage_manager:
+            self.sm = storage_manager
+        else:
+            self.sm = StorageManager(data_dir=data_dir) if data_dir else StorageManager()
+    
+    def read_data(self, table_name, columns=None, conditions=None, transaction_id=None):
+        """
+        Read data from storage with optional projection and filtering.
+        
+        Args:
+            table_name: Name of the table to read from
+            columns: List of column names to project (empty = all columns)
+            conditions: List of Condition objects for filtering
+            transaction_id: Optional transaction ID for concurrency control
+            
+        Returns:
+            List of dictionaries representing rows
+        """
+        data_retrieval = DataRetrieval(
             table=table_name,
-            column=projections or [],
-            conditions=cond_objs
+            column=columns or [],
+            conditions=conditions or []
         )
-
-        print(f"[STORAGE IFACE] DataRetrieval Object:")
-        print(f"    table      = {dr.table}")
-        print(f"    column     = {dr.column}")
-        print(f"    conditions = {[ (c.column, c.operation, c.operand) for c in dr.conditions ]}")
-
-        result = self.sm.read_block(dr)
-
-        print(f"[STORAGE IFACE] SELECT RESULT ({len(result)} rows):")
-        for row in result:
-            print("   ", row)
-
-        return result
+        
+        # Try to pass transaction_id if supported, otherwise call without it
+        try:
+            return self.sm.read_block(data_retrieval, transaction_id=transaction_id)
+        except TypeError:
+            # Fallback for storage managers that don't support transaction_id parameter
+            return self.sm.read_block(data_retrieval)
+    
+    def write_data(self, table_name, columns, values, conditions=None, transaction_id=None):
+        """
+        Write data to storage (INSERT if conditions empty, UPDATE if conditions present).
+        
+        Args:
+            table_name: Name of the table to write to
+            columns: List of column names
+            values: List of values corresponding to columns
+            conditions: List of Condition objects for UPDATE (empty = INSERT)
+            transaction_id: Optional transaction ID for concurrency control
+            
+        Returns:
+            Number of rows affected
+        """
+        data_write = DataWrite(
+            table=table_name,
+            column=columns,
+            new_value=values,
+            conditions=conditions or []
+        )
+        
+        # Try to pass transaction_id if supported, otherwise call without it
+        try:
+            return self.sm.write_block(data_write, transaction_id=transaction_id)
+        except TypeError:
+            # Fallback for storage managers that don't support transaction_id parameter
+            return self.sm.write_block(data_write)
+    
+    def delete_data(self, table_name, conditions=None, transaction_id=None):
+        """
+        Delete data from storage.
+        
+        Args:
+            table_name: Name of the table to delete from
+            conditions: List of Condition objects for filtering (empty = delete all)
+            transaction_id: Optional transaction ID for concurrency control
+            
+        Returns:
+            List of deleted rows
+        """
+        data_deletion = DataDeletion(
+            table=table_name,
+            conditions=conditions or []
+        )
+        
+        # Try to pass transaction_id if supported, otherwise call without it
+        try:
+            return self.sm.delete_block(data_deletion, transaction_id=transaction_id)
+        except TypeError:
+            # Fallback for storage managers that don't support transaction_id parameter
+            return self.sm.delete_block(data_deletion)
+    
+    def create_table(self, table_name, columns, primary_keys=None, foreign_keys=None):
+        """
+        Create a new table in storage.
+        
+        Args:
+            table_name: Name of the table to create
+            columns: List of ColumnDefinition objects
+            primary_keys: List of primary key column names
+            foreign_keys: List of ForeignKey objects
+        """
+        return self.sm.create_table(
+            table_name=table_name,
+            columns=columns,
+            primary_keys=primary_keys,
+            foreign_keys=foreign_keys
+        )
+    
+    def drop_table(self, table_name):
+        """
+        Drop a table from storage.
+        
+        Args:
+            table_name: Name of the table to drop
+        """
+        return self.sm.drop_table(table_name)
+    
+    # Legacy methods for backward compatibility
+    def storage_select(self, table_name, conds=None, projections=None):
+        """Legacy method - use read_data instead"""
+        return self.read_data(table_name, projections, conds)
 
     def storage_insert(self, table_name, row_dict):
-        print("\n[STORAGE IFACE] CALLING INSERT")
-        print(f"[STORAGE IFACE] Table : {table_name}")
-        print(f"[STORAGE IFACE] Row   : {row_dict}")
-
+        """Legacy method - use write_data instead"""
         cols = list(row_dict.keys())
         vals = list(row_dict.values())
-
-        print(f"[STORAGE IFACE] Columns = {cols}")
-        print(f"[STORAGE IFACE] Values  = {vals}")
-
-        dw = DataWrite(
-            table=table_name,
-            column=cols,
-            new_value=vals,
-            conditions=[]
-        )
-
-        print(f"[STORAGE IFACE] DataWrite Object:")
-        print(f"    table   = {dw.table}")
-        print(f"    columns = {dw.column}")
-        print(f"    values  = {dw.new_value}")
-        print(f"    mode    = INSERT")
-
-        out = self.sm.write_block(dw)
-
-        print(f"[STORAGE IFACE] INSERT RESULT : {out} rows inserted")
-
-        return out
+        return self.write_data(table_name, cols, vals, conditions=[])
 
     def storage_update(self, table_name, set_dict, condition_tuple):
-        print("\n[STORAGE IFACE] CALLING UPDATE")
-        print(f"[STORAGE IFACE] Table     : {table_name}")
-        print(f"[STORAGE IFACE] Set Dict  : {set_dict}")
-        print(f"[STORAGE IFACE] Condition : {condition_tuple}")
-
+        """Legacy method - use write_data instead"""
         col, op, val = condition_tuple
         cond = Condition(col, op, val)
-
-        print(f"[STORAGE IFACE]  -> Built Condition({col} {op} {val})")
-
-        dw = DataWrite(
-            table=table_name,
-            column=list(set_dict.keys()),
-            new_value=list(set_dict.values()),
+        return self.write_data(
+            table_name,
+            list(set_dict.keys()),
+            list(set_dict.values()),
             conditions=[cond]
         )
-
-        print(f"[STORAGE IFACE] DataWrite Object:")
-        print(f"    table      = {dw.table}")
-        print(f"    columns    = {dw.column}")
-        print(f"    new_value  = {dw.new_value}")
-        print(f"    conditions = {[(cond.column, cond.operation, cond.operand) for cond in dw.conditions]}")
-        print(f"    mode       = UPDATE")
-
-        affected = self.sm.write_block(dw)
-        print(f"[STORAGE IFACE] UPDATE RESULT : {affected} rows updated")
-
-        return affected
 
     def storage_delete(self, table_name, condition_tuple):
-        print("\n[STORAGE IFACE] CALLING DELETE")
-        print(f"[STORAGE IFACE] Table     : {table_name}")
-        print(f"[STORAGE IFACE] Condition : {condition_tuple}")
-
+        """Legacy method - use delete_data instead"""
         col, op, val = condition_tuple
         cond = Condition(col, op, val)
-
-        print(f"[STORAGE IFACE]  -> Built Condition({col} {op} {val})")
-
-        dd = DataDeletion(
-            table=table_name,
-            conditions=[cond]
-        )
-
-        print(f"[STORAGE IFACE] DataDeletion Object:")
-        print(f"    table      = {dd.table}")
-        print(f"    conditions = {[(cond.column, cond.operation, cond.operand) for cond in dd.conditions]}")
-
-        deleted = self.sm.delete_block(dd)
-
-        print(f"[STORAGE IFACE] DELETE RESULT : {deleted} rows deleted")
-
-        return deleted
+        return self.delete_data(table_name, conditions=[cond])
 

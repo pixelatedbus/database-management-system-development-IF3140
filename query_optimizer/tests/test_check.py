@@ -10,51 +10,282 @@ from query_optimizer.query_check import QueryTree, check_query, QueryValidationE
 class TestQueryValidator(unittest.TestCase):
     
     # ====================================================================
+    # ATOMIC NODE TESTS
+    # ====================================================================
+    
+    def test_valid_identifier(self):
+        # IDENTIFIER is a leaf node with value
+        identifier = QueryTree("IDENTIFIER", "users")
+        check_query(identifier)
+    
+    def test_invalid_identifier_no_value(self):
+        # IDENTIFIER must have value
+        identifier = QueryTree("IDENTIFIER", "")
+        with self.assertRaises(QueryValidationError):
+            check_query(identifier)
+    
+    def test_valid_literal_number(self):
+        # LITERAL_NUMBER is a leaf node with numeric value
+        literal = QueryTree("LITERAL_NUMBER", 25)
+        check_query(literal)
+    
+    def test_valid_literal_string(self):
+        # LITERAL_STRING is a leaf node with string value
+        literal = QueryTree("LITERAL_STRING", "active")
+        check_query(literal)
+    
+    def test_valid_literal_boolean(self):
+        # LITERAL_BOOLEAN is a leaf node with boolean value
+        literal = QueryTree("LITERAL_BOOLEAN", True)
+        check_query(literal)
+    
+    def test_valid_literal_null(self):
+        # LITERAL_NULL is a leaf node (no value needed)
+        literal = QueryTree("LITERAL_NULL")
+        check_query(literal)
+    
+    def test_invalid_atomic_with_child(self):
+        # Atomic nodes cannot have children
+        identifier = QueryTree("IDENTIFIER", "users")
+        child = QueryTree("IDENTIFIER", "id")
+        identifier.add_child(child)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(identifier)
+    
+    # ====================================================================
+    # WRAPPER NODE TESTS
+    # ====================================================================
+    
+    def test_valid_column_name(self):
+        # COLUMN_NAME wraps IDENTIFIER
+        column_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "age")
+        column_name.add_child(identifier)
+        check_query(column_name)
+    
+    def test_valid_table_name(self):
+        # TABLE_NAME wraps IDENTIFIER
+        table_name = QueryTree("TABLE_NAME")
+        identifier = QueryTree("IDENTIFIER", "users")
+        table_name.add_child(identifier)
+        check_query(table_name)
+    
+    def test_invalid_wrapper_no_child(self):
+        # Wrapper nodes must have exactly 1 child
+        column_name = QueryTree("COLUMN_NAME")
+        with self.assertRaises(QueryValidationError):
+            check_query(column_name)
+    
+    def test_invalid_wrapper_wrong_child_type(self):
+        # Wrapper child must be IDENTIFIER
+        column_name = QueryTree("COLUMN_NAME")
+        literal = QueryTree("LITERAL_NUMBER", 5)
+        column_name.add_child(literal)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(column_name)
+    
+    # ====================================================================
+    # COLUMN_REF TESTS
+    # ====================================================================
+    
+    def test_valid_column_ref_simple(self):
+        # Simple column reference: COLUMN_REF -> COLUMN_NAME -> IDENTIFIER
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "age")
+        
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        
+        check_query(col_ref)
+    
+    def test_valid_column_ref_qualified(self):
+        # Qualified column reference: COLUMN_REF -> COLUMN_NAME, TABLE_NAME
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        col_id = QueryTree("IDENTIFIER", "age")
+        table_name = QueryTree("TABLE_NAME")
+        table_id = QueryTree("IDENTIFIER", "users")
+        
+        col_name.add_child(col_id)
+        table_name.add_child(table_id)
+        col_ref.add_child(col_name)
+        col_ref.add_child(table_name)
+        
+        check_query(col_ref)
+    
+    def test_invalid_column_ref_no_child(self):
+        # COLUMN_REF must have at least 1 child
+        col_ref = QueryTree("COLUMN_REF")
+        with self.assertRaises(QueryValidationError):
+            check_query(col_ref)
+    
+    def test_invalid_column_ref_wrong_first_child(self):
+        # First child must be COLUMN_NAME
+        col_ref = QueryTree("COLUMN_REF")
+        table_name = QueryTree("TABLE_NAME")
+        identifier = QueryTree("IDENTIFIER", "users")
+        table_name.add_child(identifier)
+        col_ref.add_child(table_name)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(col_ref)
+    
+    def test_invalid_column_ref_too_many_children(self):
+        # COLUMN_REF can have max 2 children
+        col_ref = QueryTree("COLUMN_REF")
+        col_name1 = QueryTree("COLUMN_NAME")
+        col_name2 = QueryTree("COLUMN_NAME")
+        col_name3 = QueryTree("COLUMN_NAME")
+        id1 = QueryTree("IDENTIFIER", "a")
+        id2 = QueryTree("IDENTIFIER", "b")
+        id3 = QueryTree("IDENTIFIER", "c")
+        
+        col_name1.add_child(id1)
+        col_name2.add_child(id2)
+        col_name3.add_child(id3)
+        col_ref.add_child(col_name1)
+        col_ref.add_child(col_name2)
+        col_ref.add_child(col_name3)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(col_ref)
+    
+    # ====================================================================
+    # RELATION TESTS
+    # ====================================================================
+    
+    def test_valid_relation(self):
+        # RELATION is a leaf node with table name
+        relation = QueryTree("RELATION", "users")
+        check_query(relation)
+    
+    def test_invalid_relation_no_value(self):
+        # RELATION must have table name
+        relation = QueryTree("RELATION", "")
+        with self.assertRaises(QueryValidationError):
+            check_query(relation)
+    
+    def test_invalid_relation_unknown_table(self):
+        # Table must exist in database
+        relation = QueryTree("RELATION", "nonexistent")
+        with self.assertRaises(QueryValidationError):
+            check_query(relation)
+    
+    def test_invalid_relation_with_child(self):
+        # RELATION is a leaf and cannot have children
+        relation = QueryTree("RELATION", "users")
+        child = QueryTree("IDENTIFIER", "id")
+        relation.add_child(child)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(relation)
+    
+    # ====================================================================
     # PROJECT TESTS
     # ====================================================================
     
-    def test_valid_project_with_filter(self):
-        # Structure: PROJECT -> FILTER -> RELATION
-        # Represents: SELECT id, name FROM users WHERE id = 1;
-        project = QueryTree("PROJECT", "id, name")
-        filter_node = QueryTree("FILTER", "WHERE id = 1")
+    def test_valid_project_select_all(self):
+        # PROJECT(*) -> RELATION
+        # Represents: SELECT * FROM users
+        project = QueryTree("PROJECT", "*")
         relation = QueryTree("RELATION", "users")
-        
-        project.add_child(filter_node)
-        filter_node.add_child(relation)
+        project.add_child(relation)
         
         check_query(project)
-
+    
+    def test_valid_project_with_columns(self):
+        # PROJECT -> COLUMN_REF, COLUMN_REF, RELATION
+        # Represents: SELECT age, name FROM users
+        project = QueryTree("PROJECT")
+        
+        col_ref1 = QueryTree("COLUMN_REF")
+        col_name1 = QueryTree("COLUMN_NAME")
+        id1 = QueryTree("IDENTIFIER", "age")
+        col_name1.add_child(id1)
+        col_ref1.add_child(col_name1)
+        
+        col_ref2 = QueryTree("COLUMN_REF")
+        col_name2 = QueryTree("COLUMN_NAME")
+        id2 = QueryTree("IDENTIFIER", "name")
+        col_name2.add_child(id2)
+        col_ref2.add_child(col_name2)
+        
+        relation = QueryTree("RELATION", "users")
+        
+        project.add_child(col_ref1)
+        project.add_child(col_ref2)
+        project.add_child(relation)
+        
+        check_query(project)
+    
     def test_invalid_project_no_child(self):
-        # Structure: PROJECT (no children)
-        # Represents: SELECT id, name;
-        # Invalid because PROJECT must have one child
-        project = QueryTree("PROJECT", "id, name")
+        # PROJECT must have at least 1 child (source)
+        project = QueryTree("PROJECT")
+        with self.assertRaises(QueryValidationError):
+            check_query(project)
+    
+    def test_invalid_project_star_with_columns(self):
+        # PROJECT with "*" should only have source (no COLUMN_REF)
+        project = QueryTree("PROJECT", "*")
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "age")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        relation = QueryTree("RELATION", "users")
+        
+        project.add_child(col_ref)
+        project.add_child(relation)
         
         with self.assertRaises(QueryValidationError):
             check_query(project)
     
     # ====================================================================
+    # FILTER TESTS
+    # ====================================================================
+    
+    def test_valid_filter_with_comparison(self):
+        # FILTER -> RELATION, COMPARISON
+        # Represents: SELECT * FROM users WHERE age > 25
+        filter_node = QueryTree("FILTER")
+        relation = QueryTree("RELATION", "users")
+        comparison = QueryTree("COMPARISON", ">")
+        
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "age")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        
+        literal = QueryTree("LITERAL_NUMBER", 25)
+        
+        comparison.add_child(col_ref)
+        comparison.add_child(literal)
+        
+        filter_node.add_child(relation)
+        filter_node.add_child(comparison)
+        
+        check_query(filter_node)
+    
+    def test_invalid_filter_wrong_child_count(self):
+        # FILTER must have exactly 2 children
+        filter_node = QueryTree("FILTER")
+        relation = QueryTree("RELATION", "users")
+        filter_node.add_child(relation)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(filter_node)
+    
+    # ====================================================================
     # JOIN TESTS
     # ====================================================================
     
-    def test_valid_join_with_on(self):
-        # Structure: PROJECT -> JOIN -> RELATION, RELATION
-        # Represents: SELECT * FROM users JOIN profiles ON users.id = profiles.user_id;
-        project = QueryTree("PROJECT", "*")
-        join = QueryTree("JOIN", "ON users.id = profiles.user_id")
-        relation1 = QueryTree("RELATION", "users")
-        relation2 = QueryTree("RELATION", "profiles")
-        
-        project.add_child(join)
-        join.add_child(relation1)
-        join.add_child(relation2)
-        
-        check_query(project)
-
     def test_valid_join_natural(self):
-        # Structure: JOIN -> RELATION, RELATION
-        # Represents: SELECT * FROM users NATURAL JOIN profiles;
+        # JOIN(NATURAL) -> RELATION, RELATION
+        # Represents: SELECT * FROM users NATURAL JOIN profiles
         join = QueryTree("JOIN", "NATURAL")
         relation1 = QueryTree("RELATION", "users")
         relation2 = QueryTree("RELATION", "profiles")
@@ -63,24 +294,81 @@ class TestQueryValidator(unittest.TestCase):
         join.add_child(relation2)
         
         check_query(join)
-
-    def test_invalid_join_not_enough_children(self):
-        # Structure: JOIN -> RELATION
-        # Represents: SELECT * FROM users JOIN profiles ON users.id = profiles.user_id;
-        # Invalid because JOIN must have two children
-        join = QueryTree("JOIN", "ON users.id = profiles.user_id")
+    
+    def test_valid_join_inner_with_condition(self):
+        # JOIN(INNER) -> RELATION, RELATION, COMPARISON
+        # Represents: SELECT * FROM users INNER JOIN profiles ON users.id = profiles.user_id
+        join = QueryTree("JOIN", "INNER")
         relation1 = QueryTree("RELATION", "users")
+        relation2 = QueryTree("RELATION", "profiles")
+        
+        comparison = QueryTree("COMPARISON", "=")
+        col_ref1 = QueryTree("COLUMN_REF")
+        col_name1 = QueryTree("COLUMN_NAME")
+        id1 = QueryTree("IDENTIFIER", "id")
+        table_name1 = QueryTree("TABLE_NAME")
+        tid1 = QueryTree("IDENTIFIER", "users")
+        col_name1.add_child(id1)
+        table_name1.add_child(tid1)
+        col_ref1.add_child(col_name1)
+        col_ref1.add_child(table_name1)
+        
+        col_ref2 = QueryTree("COLUMN_REF")
+        col_name2 = QueryTree("COLUMN_NAME")
+        id2 = QueryTree("IDENTIFIER", "user_id")
+        table_name2 = QueryTree("TABLE_NAME")
+        tid2 = QueryTree("IDENTIFIER", "profiles")
+        col_name2.add_child(id2)
+        table_name2.add_child(tid2)
+        col_ref2.add_child(col_name2)
+        col_ref2.add_child(table_name2)
+        
+        comparison.add_child(col_ref1)
+        comparison.add_child(col_ref2)
         
         join.add_child(relation1)
+        join.add_child(relation2)
+        join.add_child(comparison)
+        
+        check_query(join)
+    
+    def test_invalid_join_no_value(self):
+        # JOIN must have value (INNER or NATURAL)
+        join = QueryTree("JOIN", "")
+        relation1 = QueryTree("RELATION", "users")
+        relation2 = QueryTree("RELATION", "profiles")
+        
+        join.add_child(relation1)
+        join.add_child(relation2)
         
         with self.assertRaises(QueryValidationError):
             check_query(join)
     
     def test_invalid_join_type(self):
-        # Structure: JOIN -> RELATION, RELATION
-        # Represents: SELECT * FROM users LEFT JOIN profiles ON users.id = profiles.user_id;
-        # Invalid because JOIN type is not recognized
-        join = QueryTree("JOIN", "LEFT ON users.id = profiles.user_id")
+        # JOIN type must be INNER or NATURAL
+        join = QueryTree("JOIN", "LEFT")
+        relation1 = QueryTree("RELATION", "users")
+        relation2 = QueryTree("RELATION", "profiles")
+        
+        join.add_child(relation1)
+        join.add_child(relation2)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(join)
+    
+    def test_invalid_join_natural_wrong_children(self):
+        # NATURAL JOIN must have exactly 2 children
+        join = QueryTree("JOIN", "NATURAL")
+        relation1 = QueryTree("RELATION", "users")
+        
+        join.add_child(relation1)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(join)
+    
+    def test_invalid_join_inner_wrong_children(self):
+        # INNER JOIN must have exactly 3 children
+        join = QueryTree("JOIN", "INNER")
         relation1 = QueryTree("RELATION", "users")
         relation2 = QueryTree("RELATION", "profiles")
         
@@ -91,650 +379,617 @@ class TestQueryValidator(unittest.TestCase):
             check_query(join)
     
     # ====================================================================
-    # RELATION TESTS
+    # COMPARISON TESTS
     # ====================================================================
     
-    def test_valid_relation_leaf(self):
-        # Structure: RELATION
-        # Represents: FROM users;
-        # Should be valid, but not have any result
-        relation = QueryTree("RELATION", "users")
+    def test_valid_comparison(self):
+        # COMPARISON(=) -> COLUMN_REF, LITERAL_NUMBER
+        comparison = QueryTree("COMPARISON", "=")
         
-        check_query(relation)
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "age")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        
+        literal = QueryTree("LITERAL_NUMBER", 25)
+        
+        comparison.add_child(col_ref)
+        comparison.add_child(literal)
+        
+        check_query(comparison)
     
-    def test_invalid_relation_with_child(self):
-        # Structure: RELATION -> FILTER
-        # Represents: FROM users WHERE id = 1;
-        # Invalid because RELATION cannot have children, FILTER must be above RELATION
-        relation = QueryTree("RELATION", "users")
-        child = QueryTree("FILTER", "id = 1")
-        relation.add_child(child)
+    def test_invalid_comparison_no_value(self):
+        # COMPARISON must have operator value
+        comparison = QueryTree("COMPARISON", "")
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "age")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        literal = QueryTree("LITERAL_NUMBER", 25)
+        comparison.add_child(col_ref)
+        comparison.add_child(literal)
         
         with self.assertRaises(QueryValidationError):
-            check_query(relation)
+            check_query(comparison)
     
-    def test_invalid_relation_no_table_name(self):
-        # Structure: RELATION
-        # Represents: FROM ;
-        # Invalid because table name is missing
-        relation = QueryTree("RELATION", "")
+    def test_invalid_comparison_wrong_operator(self):
+        # COMPARISON operator must be valid
+        comparison = QueryTree("COMPARISON", "LIKE")
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "name")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        literal = QueryTree("LITERAL_STRING", "John")
+        comparison.add_child(col_ref)
+        comparison.add_child(literal)
         
         with self.assertRaises(QueryValidationError):
-            check_query(relation)
+            check_query(comparison)
     
-    def test_invalid_table_name(self):
-        # Structure: RELATION
-        # Represents: FROM nonexistent_table;
-        # Invalid because table name is not recognized
-        relation = QueryTree("RELATION", "nonexistent_table")
+    def test_invalid_comparison_wrong_children_count(self):
+        # COMPARISON must have exactly 2 children
+        comparison = QueryTree("COMPARISON", "=")
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "age")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        comparison.add_child(col_ref)
         
         with self.assertRaises(QueryValidationError):
-            check_query(relation)
+            check_query(comparison)
     
     # ====================================================================
-    # FILTER TESTS
+    # OPERATOR TESTS (Logical operators)
     # ====================================================================
     
-    def test_valid_filter_where_single_relation(self):
-        # Structure: FILTER -> RELATION
-        # Represents: SELECT * FROM users WHERE id = 1;
-        # FILTER with WHERE condition and single RELATION child
-        filter_node = QueryTree("FILTER", "WHERE id = 1")
-        relation = QueryTree("RELATION", "users")
-        
-        filter_node.add_child(relation)
-        
-        check_query(filter_node)
-    
-    def test_valid_filter_in_with_array(self):
-        # Structure: FILTER -> RELATION, ARRAY
-        # Represents: SELECT * FROM users WHERE id IN (1, 2, 3);
-        # FILTER with IN condition, RELATION and ARRAY as children
-        filter_node = QueryTree("FILTER", "IN id")
-        relation = QueryTree("RELATION", "users")
-        array = QueryTree("ARRAY", "(1, 2, 3)")
-        
-        filter_node.add_child(relation)
-        filter_node.add_child(array)
-        
-        check_query(filter_node)
-    
-    def test_valid_filter_exist(self):
-        # Structure: FILTER -> RELATION
-        # Represents: SELECT * FROM users WHERE EXISTS (SELECT 1 FROM profiles WHERE profiles.user_id = users.id);
-        # FILTER with EXIST (subquery check) and single RELATION child
-        filter_node = QueryTree("FILTER", "EXIST")
-        relation = QueryTree("RELATION", "users")
-        
-        filter_node.add_child(relation)
-        
-        check_query(filter_node)
-    
-    def test_valid_filter_where_complex(self):
-        # Structure: FILTER -> RELATION
-        # Represents: SELECT * FROM users WHERE name = 'John' AND age > 25;
-        # FILTER with complex WHERE condition
-        filter_node = QueryTree("FILTER", "WHERE name = 'John' AND age > 25")
-        relation = QueryTree("RELATION", "users")
-        
-        filter_node.add_child(relation)
-        
-        check_query(filter_node)
-    
-    def test_valid_filter_in_with_project(self):
-        # Structure: PROJECT -> FILTER -> RELATION, ARRAY
-        # Represents: SELECT name FROM users WHERE id IN (1, 2, 3);
-        # Complete query with FILTER using IN - anak ke-2 adalah value (ARRAY)
-        project = QueryTree("PROJECT", "name")
-        filter_node = QueryTree("FILTER", "IN id")
-        relation = QueryTree("RELATION", "users")
-        array = QueryTree("ARRAY", "(1, 2, 3)")
-        
-        project.add_child(filter_node)
-        filter_node.add_child(relation)
-        filter_node.add_child(array)
-        
-        check_query(project)
-    
-    def test_valid_filter_on_sort(self):
-        # Structure: PROJECT -> FILTER -> SORT -> RELATION
-        # Represents: SELECT * FROM users ORDER BY name WHERE id > 10;
-        # FILTER can accept SORT result as child
-        project = QueryTree("PROJECT", "*")
-        filter_node = QueryTree("FILTER", "WHERE id > 10")
-        sort = QueryTree("SORT", "name")
-        relation = QueryTree("RELATION", "users")
-        
-        project.add_child(filter_node)
-        filter_node.add_child(sort)
-        sort.add_child(relation)
-        
-        check_query(project)
-    
-    def test_valid_filter_on_project(self):
-        # Structure: FILTER -> PROJECT -> RELATION
-        # Represents: SELECT * FROM (SELECT id, name FROM users) WHERE id > 10;
-        # FILTER can accept PROJECT result (subquery-like)
-        filter_node = QueryTree("FILTER", "WHERE id > 10")
-        project = QueryTree("PROJECT", "id, name")
-        relation = QueryTree("RELATION", "users")
-        
-        filter_node.add_child(project)
-        project.add_child(relation)
-        
-        check_query(filter_node)
-    
-    def test_invalid_filter_no_children(self):
-        # Structure: FILTER (no children)
-        # VALID: FILTER dengan WHERE/IN bisa jadi condition leaf (0 children)
-        # Ini digunakan sebagai child dari AND/OR
-        filter_node = QueryTree("FILTER", "WHERE id = 1")
-        
-        # Should NOT raise error - condition leaf is valid
-        check_query(filter_node)
-    
-    def test_invalid_filter_wrong_second_child(self):
-        # Structure: FILTER -> RELATION, FILTER
-        # Invalid because second child must be ARRAY/RELATION/PROJECT for value
-        filter_node = QueryTree("FILTER", "IN id")
-        relation = QueryTree("RELATION", "users")
-        filter2 = QueryTree("FILTER", "WHERE id = 1")
-        
-        filter_node.add_child(relation)
-        filter_node.add_child(filter2)
-        
-        with self.assertRaises(QueryValidationError):
-            check_query(filter_node)
-    
-    def test_invalid_filter_wrong_keyword_single_word(self):
-        # Structure: FILTER -> RELATION
-        # Invalid because single-word FILTER value must be 'EXIST'
-        filter_node = QueryTree("FILTER", "INVALID")
-        relation = QueryTree("RELATION", "users")
-        
-        filter_node.add_child(relation)
-        
-        with self.assertRaises(QueryValidationError):
-            check_query(filter_node)
-    
-    def test_invalid_filter_wrong_keyword_multi_word(self):
-        # Structure: FILTER -> RELATION
-        # Invalid because multi-word FILTER value must start with 'WHERE' or 'IN'
-        filter_node = QueryTree("FILTER", "HAVING age > 25")
-        relation = QueryTree("RELATION", "users")
-        
-        filter_node.add_child(relation)
-        
-        with self.assertRaises(QueryValidationError):
-            check_query(filter_node)
-    
-    def test_invalid_filter_too_many_children(self):
-        # Structure: FILTER -> RELATION, ARRAY, ARRAY
-        # Invalid because FILTER can have maximum 2 children
-        filter_node = QueryTree("FILTER", "IN id")
-        relation = QueryTree("RELATION", "users")
-        array1 = QueryTree("ARRAY", "(1, 2, 3)")
-        array2 = QueryTree("ARRAY", "(4, 5, 6)")
-        
-        filter_node.add_child(relation)
-        filter_node.add_child(array1)
-        filter_node.add_child(array2)
-        
-        with self.assertRaises(QueryValidationError):
-            check_query(filter_node)
-    
-    # ====================================================================
-    # UPDATE TESTS
-    # ====================================================================
-    
-    def test_valid_update(self):
-        # Structure: UPDATE -> RELATION
-        # Represents: UPDATE users SET name = 'test', email = 'test@example.com';
-        update = QueryTree("UPDATE", "name = 'test', email = 'test@example.com'")
-        relation = QueryTree("RELATION", "users")
-        
-        update.add_child(relation)
-        
-        check_query(update)
-
-    def test_invalid_update_no_child(self):
-        # Structure: UPDATE (no children)
-        # Represents: UPDATE ?? SET name = 'test';
-        # Invalid because UPDATE must have one child
-        update = QueryTree("UPDATE", "name = 'test'")
-        
-        with self.assertRaises(QueryValidationError):
-            check_query(update)
-    
-    # ====================================================================
-    # INSERT TESTS
-    # ====================================================================
-    
-    def test_valid_insert(self):
-        # Structure: INSERT -> RELATION
-        # Represents: INSERT INTO users (name, email) VALUES ('John', 'john@example.com');
-        insert = QueryTree("INSERT", "name = 'John', email = 'john@example.com'")
-        relation = QueryTree("RELATION", "users")
-        
-        insert.add_child(relation)
-        
-        check_query(insert)
-    
-    def test_invalid_insert_no_child(self):
-        # Structure: INSERT (no children)
-        # Represents: INSERT INTO users (name, email) VALUES ('John', 'john@example.com');
-        # Invalid because INSERT must have exactly one child (relation)
-        insert = QueryTree("INSERT", "name = 'John', email = 'john@example.com'")
-        
-        with self.assertRaises(QueryValidationError):
-            check_query(insert)
-    
-    def test_invalid_insert_multiple_children(self):
-        # Structure: INSERT -> RELATION, RELATION
-        # Invalid because INSERT cannot have subquery (multiple children)
-        insert = QueryTree("INSERT", "name = 'John'")
-        relation1 = QueryTree("RELATION", "users")
-        relation2 = QueryTree("RELATION", "profiles")
-        
-        insert.add_child(relation1)
-        insert.add_child(relation2)
-        
-        with self.assertRaises(QueryValidationError):
-            check_query(insert)
-    
-    # ====================================================================
-    # DELETE TESTS
-    # ====================================================================
-    
-    def test_valid_delete(self):
-        # Structure: DELETE -> RELATION
-        # Represents: DELETE FROM users;
-        delete = QueryTree("DELETE")
-        relation = QueryTree("RELATION", "users")
-        
-        delete.add_child(relation)
-        
-        check_query(delete)
-    
-    def test_valid_delete_with_filter(self):
-        # Structure: DELETE -> FILTER -> RELATION
-        # Represents: DELETE FROM users WHERE id = 1;
-        delete = QueryTree("DELETE")
-        filter_node = QueryTree("FILTER", "WHERE id = 1")
-        relation = QueryTree("RELATION", "users")
-        
-        delete.add_child(filter_node)
-        filter_node.add_child(relation)
-        
-        check_query(delete)
-    
-    def test_invalid_delete_no_child(self):
-        # Structure: DELETE (no children)
-        # Represents: DELETE FROM ??;
-        # Invalid because DELETE must have one child
-        delete = QueryTree("DELETE")
-        
-        with self.assertRaises(QueryValidationError):
-            check_query(delete)
-    
-    def test_invalid_delete_multiple_children(self):
-        # Structure: DELETE -> RELATION, RELATION
-        # Invalid because DELETE must have exactly one child
-        delete = QueryTree("DELETE")
-        relation1 = QueryTree("RELATION", "users")
-        relation2 = QueryTree("RELATION", "profiles")
-        
-        delete.add_child(relation1)
-        delete.add_child(relation2)
-        
-        with self.assertRaises(QueryValidationError):
-            check_query(delete)
-    
-    # ====================================================================
-    # TRANSACTION TESTS
-    # ====================================================================
-    
-    def test_transaction_begin(self):
-        # Structure: BEGIN_TRANSACTION -> UPDATE -> RELATION, UPDATE -> RELATION
-        # Represents: BEGIN TRANSACTION; UPDATE users SET name = 'test'; UPDATE users SET email = 'test@example.com';
-        begin_trans = QueryTree("BEGIN_TRANSACTION")
-        update1 = QueryTree("UPDATE", "name = 'test'")
-        update2 = QueryTree("UPDATE", "email = 'test@example.com'")
-        relation1 = QueryTree("RELATION", "users")
-        relation2 = QueryTree("RELATION", "users")
-        
-        update1.add_child(relation1)
-        update2.add_child(relation2)
-        begin_trans.add_child(update1)
-        begin_trans.add_child(update2)
-        
-        check_query(begin_trans)
-    
-    def test_commit(self):
-        # Structure: COMMIT
-        # Represents: COMMIT;
-        commit = QueryTree("COMMIT")
-        check_query(commit)
-    
-    # ====================================================================
-    # COMPLEX QUERY TESTS
-    # ====================================================================
-    
-    def test_complex_query_with_filter_on_join(self):
-        # Structure: PROJECT -> FILTER -> JOIN -> RELATION, RELATION
-        # Represents: SELECT * FROM users JOIN profiles ON users.id = profiles.user_id WHERE users.id > 10;
-        # FILTER applied on JOIN result (filtering after join)
-        project = QueryTree("PROJECT", "*")
-        filter_node = QueryTree("FILTER", "WHERE users.id > 10")
-        join = QueryTree("JOIN", "ON users.id = profiles.user_id")
-        relation1 = QueryTree("RELATION", "users")
-        relation2 = QueryTree("RELATION", "profiles")
-        
-        project.add_child(filter_node)
-        filter_node.add_child(join)
-        join.add_child(relation1)
-        join.add_child(relation2)
-        
-        check_query(project)
-    
-    # ====================================================================
-    # OPERATOR TESTS (Logical operators: AND/OR/NOT)
-    # ====================================================================
-    
-    def test_valid_operator_and_nested(self):
-        # Structure: OPERATOR(AND) -> FILTER, FILTER
+    def test_valid_operator_and(self):
+        # OPERATOR(AND) -> COMPARISON, COMPARISON
         # Represents: (age > 18) AND (status = 'active')
-        # Nested AND without explicit source
-        operator_and = QueryTree("OPERATOR", "AND")
-        filter1 = QueryTree("FILTER", "WHERE age > 18")
-        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
+        operator = QueryTree("OPERATOR", "AND")
         
-        operator_and.add_child(filter1)
-        operator_and.add_child(filter2)
+        comp1 = QueryTree("COMPARISON", ">")
+        col_ref1 = QueryTree("COLUMN_REF")
+        col_name1 = QueryTree("COLUMN_NAME")
+        id1 = QueryTree("IDENTIFIER", "age")
+        col_name1.add_child(id1)
+        col_ref1.add_child(col_name1)
+        lit1 = QueryTree("LITERAL_NUMBER", 18)
+        comp1.add_child(col_ref1)
+        comp1.add_child(lit1)
         
-        check_query(operator_and)
+        comp2 = QueryTree("COMPARISON", "=")
+        col_ref2 = QueryTree("COLUMN_REF")
+        col_name2 = QueryTree("COLUMN_NAME")
+        id2 = QueryTree("IDENTIFIER", "status")
+        col_name2.add_child(id2)
+        col_ref2.add_child(col_name2)
+        lit2 = QueryTree("LITERAL_STRING", "active")
+        comp2.add_child(col_ref2)
+        comp2.add_child(lit2)
+        
+        operator.add_child(comp1)
+        operator.add_child(comp2)
+        
+        check_query(operator)
     
-    def test_valid_operator_or_nested(self):
-        # Structure: OPERATOR(OR) -> FILTER, FILTER, FILTER
-        # Represents: (city = 'Jakarta') OR (city = 'Bandung') OR (city = 'Surabaya')
-        operator_or = QueryTree("OPERATOR", "OR")
-        filter1 = QueryTree("FILTER", "WHERE city = 'Jakarta'")
-        filter2 = QueryTree("FILTER", "WHERE city = 'Bandung'")
-        filter3 = QueryTree("FILTER", "WHERE city = 'Surabaya'")
+    def test_valid_operator_or(self):
+        # OPERATOR(OR) -> COMPARISON, COMPARISON
+        operator = QueryTree("OPERATOR", "OR")
         
-        operator_or.add_child(filter1)
-        operator_or.add_child(filter2)
-        operator_or.add_child(filter3)
+        comp1 = QueryTree("COMPARISON", "=")
+        col_ref1 = QueryTree("COLUMN_REF")
+        col_name1 = QueryTree("COLUMN_NAME")
+        id1 = QueryTree("IDENTIFIER", "city")
+        col_name1.add_child(id1)
+        col_ref1.add_child(col_name1)
+        lit1 = QueryTree("LITERAL_STRING", "Jakarta")
+        comp1.add_child(col_ref1)
+        comp1.add_child(lit1)
         
-        check_query(operator_or)
+        comp2 = QueryTree("COMPARISON", "=")
+        col_ref2 = QueryTree("COLUMN_REF")
+        col_name2 = QueryTree("COLUMN_NAME")
+        id2 = QueryTree("IDENTIFIER", "city")
+        col_name2.add_child(id2)
+        col_ref2.add_child(col_name2)
+        lit2 = QueryTree("LITERAL_STRING", "Bandung")
+        comp2.add_child(col_ref2)
+        comp2.add_child(lit2)
+        
+        operator.add_child(comp1)
+        operator.add_child(comp2)
+        
+        check_query(operator)
     
     def test_valid_operator_not(self):
-        # Structure: OPERATOR(NOT) -> FILTER
-        # Represents: NOT (age < 18)
-        operator_not = QueryTree("OPERATOR", "NOT")
-        filter1 = QueryTree("FILTER", "WHERE age < 18")
+        # OPERATOR(NOT) -> COMPARISON
+        operator = QueryTree("OPERATOR", "NOT")
         
-        operator_not.add_child(filter1)
+        comp = QueryTree("COMPARISON", "<")
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "age")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        literal = QueryTree("LITERAL_NUMBER", 18)
+        comp.add_child(col_ref)
+        comp.add_child(literal)
         
-        check_query(operator_not)
-    
-    def test_valid_operator_not_with_operator_s(self):
-        # Structure: OPERATOR(NOT) -> OPERATOR_S(AND)
-        # Represents: NOT ((age > 18) AND (status = 'active'))
-        operator_not = QueryTree("OPERATOR", "NOT")
-        operator_and = QueryTree("OPERATOR_S", "AND")
-        relation = QueryTree("RELATION", "users")
-        filter1 = QueryTree("FILTER", "WHERE age > 18")
-        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
+        operator.add_child(comp)
         
-        operator_and.add_child(relation)
-        operator_and.add_child(filter1)
-        operator_and.add_child(filter2)
-        operator_not.add_child(operator_and)
-        
-        check_query(operator_not)
+        check_query(operator)
     
     def test_invalid_operator_no_value(self):
-        # Structure: OPERATOR -> FILTER, FILTER
-        # Invalid because OPERATOR must have value (AND/OR/NOT)
+        # OPERATOR must have value
         operator = QueryTree("OPERATOR", "")
-        filter1 = QueryTree("FILTER", "WHERE age > 18")
-        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
-        
-        operator.add_child(filter1)
-        operator.add_child(filter2)
+        comp = QueryTree("COMPARISON", "=")
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "age")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        literal = QueryTree("LITERAL_NUMBER", 18)
+        comp.add_child(col_ref)
+        comp.add_child(literal)
+        operator.add_child(comp)
         
         with self.assertRaises(QueryValidationError):
             check_query(operator)
     
     def test_invalid_operator_wrong_value(self):
-        # Structure: OPERATOR(INVALID) -> FILTER, FILTER
-        # Invalid because OPERATOR value must be AND/OR/NOT
-        operator = QueryTree("OPERATOR", "INVALID")
-        filter1 = QueryTree("FILTER", "WHERE age > 18")
-        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
-        
-        operator.add_child(filter1)
-        operator.add_child(filter2)
+        # OPERATOR value must be AND/OR/NOT
+        operator = QueryTree("OPERATOR", "XOR")
+        comp = QueryTree("COMPARISON", "=")
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "age")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        literal = QueryTree("LITERAL_NUMBER", 18)
+        comp.add_child(col_ref)
+        comp.add_child(literal)
+        operator.add_child(comp)
         
         with self.assertRaises(QueryValidationError):
             check_query(operator)
     
     def test_invalid_operator_and_one_child(self):
-        # Structure: OPERATOR(AND) -> FILTER
-        # Invalid because AND/OR need minimum 2 children
-        operator_and = QueryTree("OPERATOR", "AND")
-        filter1 = QueryTree("FILTER", "WHERE age > 18")
-        
-        operator_and.add_child(filter1)
+        # AND/OR need at least 2 children
+        operator = QueryTree("OPERATOR", "AND")
+        comp = QueryTree("COMPARISON", "=")
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "age")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        literal = QueryTree("LITERAL_NUMBER", 18)
+        comp.add_child(col_ref)
+        comp.add_child(literal)
+        operator.add_child(comp)
         
         with self.assertRaises(QueryValidationError):
-            check_query(operator_and)
+            check_query(operator)
     
-    def test_invalid_operator_not_multiple_children(self):
-        # Structure: OPERATOR(NOT) -> FILTER, FILTER
-        # Invalid because NOT must have exactly 1 child
-        operator_not = QueryTree("OPERATOR", "NOT")
-        filter1 = QueryTree("FILTER", "WHERE age > 18")
-        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
+    def test_invalid_operator_not_two_children(self):
+        # NOT must have exactly 1 child
+        operator = QueryTree("OPERATOR", "NOT")
         
-        operator_not.add_child(filter1)
-        operator_not.add_child(filter2)
+        comp1 = QueryTree("COMPARISON", ">")
+        col_ref1 = QueryTree("COLUMN_REF")
+        col_name1 = QueryTree("COLUMN_NAME")
+        id1 = QueryTree("IDENTIFIER", "age")
+        col_name1.add_child(id1)
+        col_ref1.add_child(col_name1)
+        lit1 = QueryTree("LITERAL_NUMBER", 18)
+        comp1.add_child(col_ref1)
+        comp1.add_child(lit1)
+        
+        comp2 = QueryTree("COMPARISON", "=")
+        col_ref2 = QueryTree("COLUMN_REF")
+        col_name2 = QueryTree("COLUMN_NAME")
+        id2 = QueryTree("IDENTIFIER", "status")
+        col_name2.add_child(id2)
+        col_ref2.add_child(col_name2)
+        lit2 = QueryTree("LITERAL_STRING", "active")
+        comp2.add_child(col_ref2)
+        comp2.add_child(lit2)
+        
+        operator.add_child(comp1)
+        operator.add_child(comp2)
         
         with self.assertRaises(QueryValidationError):
-            check_query(operator_not)
-    
-    def test_invalid_operator_non_filter_child(self):
-        # Structure: OPERATOR(AND) -> RELATION, FILTER
-        # Invalid because OPERATOR children must be FILTER/OPERATOR/OPERATOR_S
-        operator_and = QueryTree("OPERATOR", "AND")
-        relation = QueryTree("RELATION", "users")
-        filter1 = QueryTree("FILTER", "WHERE age > 18")
-        
-        operator_and.add_child(relation)
-        operator_and.add_child(filter1)
-        
-        with self.assertRaises(QueryValidationError):
-            check_query(operator_and)
+            check_query(operator)
     
     # ====================================================================
-    # OPERATOR_S TESTS (Logical operators with source)
+    # CONDITION EXPRESSION TESTS
     # ====================================================================
     
-    def test_valid_operator_s_and_with_relation(self):
-        # Structure: OPERATOR_S(AND) -> RELATION, FILTER, FILTER
-        # Represents: SELECT * FROM users WHERE (age > 18) AND (status = 'active')
-        operator_and = QueryTree("OPERATOR_S", "AND")
-        relation = QueryTree("RELATION", "users")
-        filter1 = QueryTree("FILTER", "WHERE age > 18")
-        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
+    def test_valid_in_expr(self):
+        # IN_EXPR -> COLUMN_REF, LIST
+        in_expr = QueryTree("IN_EXPR")
         
-        operator_and.add_child(relation)
-        operator_and.add_child(filter1)
-        operator_and.add_child(filter2)
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "category")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
         
-        check_query(operator_and)
+        list_node = QueryTree("LIST")
+        lit1 = QueryTree("LITERAL_STRING", "Electronics")
+        lit2 = QueryTree("LITERAL_STRING", "Books")
+        list_node.add_child(lit1)
+        list_node.add_child(lit2)
+        
+        in_expr.add_child(col_ref)
+        in_expr.add_child(list_node)
+        
+        check_query(in_expr)
     
-    def test_valid_operator_s_or_with_join(self):
-        # Structure: OPERATOR_S(OR) -> JOIN, FILTER, FILTER
-        # Represents: SELECT * FROM users JOIN profiles WHERE (age > 18) OR (status = 'active')
-        operator_or = QueryTree("OPERATOR_S", "OR")
-        join = QueryTree("JOIN", "NATURAL")
+    def test_valid_between_expr(self):
+        # BETWEEN_EXPR -> COLUMN_REF, LITERAL, LITERAL
+        between_expr = QueryTree("BETWEEN_EXPR")
+        
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "price")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        
+        lit1 = QueryTree("LITERAL_NUMBER", 100)
+        lit2 = QueryTree("LITERAL_NUMBER", 500)
+        
+        between_expr.add_child(col_ref)
+        between_expr.add_child(lit1)
+        between_expr.add_child(lit2)
+        
+        check_query(between_expr)
+    
+    def test_valid_is_null_expr(self):
+        # IS_NULL_EXPR -> COLUMN_REF
+        is_null = QueryTree("IS_NULL_EXPR")
+        
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "description")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        
+        is_null.add_child(col_ref)
+        
+        check_query(is_null)
+    
+    def test_valid_is_not_null_expr(self):
+        # IS_NOT_NULL_EXPR -> COLUMN_REF
+        is_not_null = QueryTree("IS_NOT_NULL_EXPR")
+        
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "description")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        
+        is_not_null.add_child(col_ref)
+        
+        check_query(is_not_null)
+    
+    def test_invalid_between_expr_wrong_children(self):
+        # BETWEEN_EXPR must have exactly 3 children
+        between_expr = QueryTree("BETWEEN_EXPR")
+        
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "price")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        
+        between_expr.add_child(col_ref)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(between_expr)
+    
+    # ====================================================================
+    # ARITH_EXPR TESTS
+    # ====================================================================
+    
+    def test_valid_arith_expr(self):
+        # ARITH_EXPR(*) -> COLUMN_REF, LITERAL
+        # Represents: salary * 1.1
+        arith = QueryTree("ARITH_EXPR", "*")
+        
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "salary")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        
+        literal = QueryTree("LITERAL_NUMBER", 1.1)
+        
+        arith.add_child(col_ref)
+        arith.add_child(literal)
+        
+        check_query(arith)
+    
+    def test_invalid_arith_expr_no_operator(self):
+        # ARITH_EXPR must have operator value
+        arith = QueryTree("ARITH_EXPR", "")
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "salary")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        literal = QueryTree("LITERAL_NUMBER", 1.1)
+        arith.add_child(col_ref)
+        arith.add_child(literal)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(arith)
+    
+    def test_invalid_arith_expr_wrong_operator(self):
+        # ARITH_EXPR operator must be valid
+        arith = QueryTree("ARITH_EXPR", "^")
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "salary")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        literal = QueryTree("LITERAL_NUMBER", 2)
+        arith.add_child(col_ref)
+        arith.add_child(literal)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(arith)
+    
+    # ====================================================================
+    # SORT TESTS
+    # ====================================================================
+    
+    def test_valid_sort(self):
+        # SORT(ASC) -> COLUMN_REF, RELATION
+        sort = QueryTree("SORT", "ASC")
+        
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "name")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        
+        relation = QueryTree("RELATION", "users")
+        
+        sort.add_child(col_ref)
+        sort.add_child(relation)
+        
+        check_query(sort)
+    
+    def test_valid_sort_desc(self):
+        # SORT(DESC) -> COLUMN_REF, RELATION
+        sort = QueryTree("SORT", "DESC")
+        
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "age")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        
+        relation = QueryTree("RELATION", "users")
+        
+        sort.add_child(col_ref)
+        sort.add_child(relation)
+        
+        check_query(sort)
+    
+    def test_invalid_sort_wrong_direction(self):
+        # SORT direction must be ASC or DESC
+        sort = QueryTree("SORT", "INVALID")
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        identifier = QueryTree("IDENTIFIER", "name")
+        col_name.add_child(identifier)
+        col_ref.add_child(col_name)
+        relation = QueryTree("RELATION", "users")
+        sort.add_child(col_ref)
+        sort.add_child(relation)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(sort)
+    
+    def test_invalid_sort_wrong_children(self):
+        # SORT must have exactly 2 children
+        sort = QueryTree("SORT", "ASC")
+        relation = QueryTree("RELATION", "users")
+        sort.add_child(relation)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(sort)
+    
+    def test_invalid_sort_first_child_not_column_ref(self):
+        # First child of SORT must be valid expression (not RELATION, etc)
+        sort = QueryTree("SORT", "ASC")
+        invalid_child = QueryTree("RELATION", "some_table")  # RELATION is not valid expression for ORDER BY
+        relation = QueryTree("RELATION", "users")
+        sort.add_child(invalid_child)
+        sort.add_child(relation)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(sort)
+    
+    # ====================================================================
+    # ALIAS TESTS
+    # ====================================================================
+    
+    def test_valid_alias(self):
+        # ALIAS -> RELATION
+        # Represents: users AS u
+        alias = QueryTree("ALIAS", "u")
+        relation = QueryTree("RELATION", "users")
+        alias.add_child(relation)
+        
+        check_query(alias)
+    
+    def test_invalid_alias_no_value(self):
+        # ALIAS must have alias name
+        alias = QueryTree("ALIAS", "")
+        relation = QueryTree("RELATION", "users")
+        alias.add_child(relation)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(alias)
+    
+    def test_invalid_alias_wrong_children(self):
+        # ALIAS must have exactly 1 child
+        alias = QueryTree("ALIAS", "u")
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(alias)
+    
+    # ====================================================================
+    # LIMIT TESTS
+    # ====================================================================
+    
+    def test_valid_limit(self):
+        # LIMIT -> RELATION
+        limit = QueryTree("LIMIT", 10)
+        relation = QueryTree("RELATION", "users")
+        limit.add_child(relation)
+        
+        check_query(limit)
+    
+    def test_invalid_limit_wrong_children(self):
+        # LIMIT must have exactly 1 child
+        limit = QueryTree("LIMIT", 10)
+        
+        with self.assertRaises(QueryValidationError):
+            check_query(limit)
+    
+    # ====================================================================
+    # COMPLEX QUERY TESTS
+    # ====================================================================
+    
+    def test_complete_query_simple_where(self):
+        # SELECT name FROM users WHERE age > 25
+        # PROJECT -> COLUMN_REF, FILTER -> RELATION, COMPARISON
+        project = QueryTree("PROJECT")
+        
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        id_name = QueryTree("IDENTIFIER", "name")
+        col_name.add_child(id_name)
+        col_ref.add_child(col_name)
+        
+        filter_node = QueryTree("FILTER")
+        relation = QueryTree("RELATION", "users")
+        
+        comparison = QueryTree("COMPARISON", ">")
+        col_ref_age = QueryTree("COLUMN_REF")
+        col_name_age = QueryTree("COLUMN_NAME")
+        id_age = QueryTree("IDENTIFIER", "age")
+        col_name_age.add_child(id_age)
+        col_ref_age.add_child(col_name_age)
+        literal = QueryTree("LITERAL_NUMBER", 25)
+        comparison.add_child(col_ref_age)
+        comparison.add_child(literal)
+        
+        filter_node.add_child(relation)
+        filter_node.add_child(comparison)
+        
+        project.add_child(col_ref)
+        project.add_child(filter_node)
+        
+        check_query(project)
+    
+    def test_complete_query_with_and(self):
+        # SELECT * FROM users WHERE age > 25 AND status = 'active'
+        # PROJECT(*) -> FILTER -> RELATION, OPERATOR(AND) -> COMPARISON, COMPARISON
+        project = QueryTree("PROJECT", "*")
+        filter_node = QueryTree("FILTER")
+        relation = QueryTree("RELATION", "users")
+        
+        operator_and = QueryTree("OPERATOR", "AND")
+        
+        comp1 = QueryTree("COMPARISON", ">")
+        col_ref1 = QueryTree("COLUMN_REF")
+        col_name1 = QueryTree("COLUMN_NAME")
+        id1 = QueryTree("IDENTIFIER", "age")
+        col_name1.add_child(id1)
+        col_ref1.add_child(col_name1)
+        lit1 = QueryTree("LITERAL_NUMBER", 25)
+        comp1.add_child(col_ref1)
+        comp1.add_child(lit1)
+        
+        comp2 = QueryTree("COMPARISON", "=")
+        col_ref2 = QueryTree("COLUMN_REF")
+        col_name2 = QueryTree("COLUMN_NAME")
+        id2 = QueryTree("IDENTIFIER", "status")
+        col_name2.add_child(id2)
+        col_ref2.add_child(col_name2)
+        lit2 = QueryTree("LITERAL_STRING", "active")
+        comp2.add_child(col_ref2)
+        comp2.add_child(lit2)
+        
+        operator_and.add_child(comp1)
+        operator_and.add_child(comp2)
+        
+        filter_node.add_child(relation)
+        filter_node.add_child(operator_and)
+        
+        project.add_child(filter_node)
+        
+        check_query(project)
+    
+    def test_complete_query_with_join(self):
+        # SELECT users.name FROM users INNER JOIN profiles ON users.id = profiles.user_id
+        # PROJECT -> COLUMN_REF, JOIN(INNER) -> RELATION, RELATION, COMPARISON
+        project = QueryTree("PROJECT")
+        
+        col_ref = QueryTree("COLUMN_REF")
+        col_name = QueryTree("COLUMN_NAME")
+        id_name = QueryTree("IDENTIFIER", "name")
+        table_name = QueryTree("TABLE_NAME")
+        id_table = QueryTree("IDENTIFIER", "users")
+        col_name.add_child(id_name)
+        table_name.add_child(id_table)
+        col_ref.add_child(col_name)
+        col_ref.add_child(table_name)
+        
+        join = QueryTree("JOIN", "INNER")
         relation1 = QueryTree("RELATION", "users")
         relation2 = QueryTree("RELATION", "profiles")
-        filter1 = QueryTree("FILTER", "WHERE age > 18")
-        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
+        
+        comparison = QueryTree("COMPARISON", "=")
+        col_ref1 = QueryTree("COLUMN_REF")
+        col_name1 = QueryTree("COLUMN_NAME")
+        id1 = QueryTree("IDENTIFIER", "id")
+        table_name1 = QueryTree("TABLE_NAME")
+        tid1 = QueryTree("IDENTIFIER", "users")
+        col_name1.add_child(id1)
+        table_name1.add_child(tid1)
+        col_ref1.add_child(col_name1)
+        col_ref1.add_child(table_name1)
+        
+        col_ref2 = QueryTree("COLUMN_REF")
+        col_name2 = QueryTree("COLUMN_NAME")
+        id2 = QueryTree("IDENTIFIER", "user_id")
+        table_name2 = QueryTree("TABLE_NAME")
+        tid2 = QueryTree("IDENTIFIER", "profiles")
+        col_name2.add_child(id2)
+        table_name2.add_child(tid2)
+        col_ref2.add_child(col_name2)
+        col_ref2.add_child(table_name2)
+        
+        comparison.add_child(col_ref1)
+        comparison.add_child(col_ref2)
         
         join.add_child(relation1)
         join.add_child(relation2)
-        operator_or.add_child(join)
-        operator_or.add_child(filter1)
-        operator_or.add_child(filter2)
+        join.add_child(comparison)
         
-        check_query(operator_or)
-    
-    def test_valid_operator_s_with_sort_source(self):
-        # Structure: OPERATOR_S(AND) -> SORT, FILTER, FILTER
-        # Represents: SELECT * FROM users ORDER BY name WHERE (age > 18) AND (status = 'active')
-        operator_and = QueryTree("OPERATOR_S", "AND")
-        sort = QueryTree("SORT", "name")
-        relation = QueryTree("RELATION", "users")
-        filter1 = QueryTree("FILTER", "WHERE age > 18")
-        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
+        project.add_child(col_ref)
+        project.add_child(join)
         
-        sort.add_child(relation)
-        operator_and.add_child(sort)
-        operator_and.add_child(filter1)
-        operator_and.add_child(filter2)
-        
-        check_query(operator_and)
-    
-    def test_valid_operator_s_with_operator_s_source(self):
-        # Structure: OPERATOR_S(OR) -> OPERATOR_S(AND), FILTER, FILTER
-        # Nested OPERATOR_S as source (OPERATOR_S produces data)
-        outer_or = QueryTree("OPERATOR_S", "OR")
-        inner_and = QueryTree("OPERATOR_S", "AND")
-        relation = QueryTree("RELATION", "users")
-        filter1 = QueryTree("FILTER", "WHERE age > 18")
-        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
-        filter3 = QueryTree("FILTER", "WHERE city = 'Jakarta'")
-        filter4 = QueryTree("FILTER", "WHERE verified = true")
-        
-        inner_and.add_child(relation)
-        inner_and.add_child(filter1)
-        inner_and.add_child(filter2)
-        
-        outer_or.add_child(inner_and)
-        outer_or.add_child(filter3)
-        outer_or.add_child(filter4)
-        
-        check_query(outer_or)
-    
-    def test_valid_operator_s_with_filter_source(self):
-        # Structure: OPERATOR_S(AND) -> FILTER(with child), FILTER, FILTER
-        # FILTER with child (produces data) as source
-        operator_and = QueryTree("OPERATOR_S", "AND")
-        filter_source = QueryTree("FILTER", "WHERE verified = true")
-        relation = QueryTree("RELATION", "users")
-        filter1 = QueryTree("FILTER", "WHERE age > 18")
-        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
-        
-        filter_source.add_child(relation)
-        operator_and.add_child(filter_source)
-        operator_and.add_child(filter1)
-        operator_and.add_child(filter2)
-        
-        check_query(operator_and)
-    
-    def test_invalid_operator_s_no_value(self):
-        # Structure: OPERATOR_S -> RELATION, FILTER, FILTER
-        # Invalid because OPERATOR_S must have value (AND/OR)
-        operator_s = QueryTree("OPERATOR_S", "")
-        relation = QueryTree("RELATION", "users")
-        filter1 = QueryTree("FILTER", "WHERE age > 18")
-        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
-        
-        operator_s.add_child(relation)
-        operator_s.add_child(filter1)
-        operator_s.add_child(filter2)
-        
-        with self.assertRaises(QueryValidationError):
-            check_query(operator_s)
-    
-    def test_invalid_operator_s_not_value(self):
-        # Structure: OPERATOR_S(NOT) -> RELATION, FILTER
-        # Invalid because NOT cannot have explicit source (use OPERATOR instead)
-        operator_s = QueryTree("OPERATOR_S", "NOT")
-        relation = QueryTree("RELATION", "users")
-        filter1 = QueryTree("FILTER", "WHERE age > 18")
-        
-        operator_s.add_child(relation)
-        operator_s.add_child(filter1)
-        
-        with self.assertRaises(QueryValidationError):
-            check_query(operator_s)
-    
-    def test_invalid_operator_s_less_than_three_children(self):
-        # Structure: OPERATOR_S(AND) -> RELATION, FILTER
-        # Invalid because OPERATOR_S needs minimum 3 children (1 source + 2 conditions)
-        operator_and = QueryTree("OPERATOR_S", "AND")
-        relation = QueryTree("RELATION", "users")
-        filter1 = QueryTree("FILTER", "WHERE age > 18")
-        
-        operator_and.add_child(relation)
-        operator_and.add_child(filter1)
-        
-        with self.assertRaises(QueryValidationError):
-            check_query(operator_and)
-    
-    def test_invalid_operator_s_operator_as_source(self):
-        # Structure: OPERATOR_S(AND) -> OPERATOR(AND), FILTER, FILTER
-        # Invalid because first child cannot be OPERATOR (nested logic, doesn't produce data)
-        operator_s = QueryTree("OPERATOR_S", "AND")
-        operator_nested = QueryTree("OPERATOR", "AND")
-        filter1 = QueryTree("FILTER", "WHERE age > 18")
-        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
-        filter3 = QueryTree("FILTER", "WHERE city = 'Jakarta'")
-        
-        operator_nested.add_child(filter1)
-        operator_nested.add_child(filter2)
-        
-        operator_s.add_child(operator_nested)
-        operator_s.add_child(filter3)
-        operator_s.add_child(QueryTree("FILTER", "WHERE verified = true"))
-        
-        with self.assertRaises(QueryValidationError):
-            check_query(operator_s)
-    
-    def test_invalid_operator_s_filter_leaf_as_source(self):
-        # Structure: OPERATOR_S(AND) -> FILTER(no children), FILTER, FILTER
-        # Invalid because first child FILTER must have children (produce data)
-        operator_and = QueryTree("OPERATOR_S", "AND")
-        filter_leaf = QueryTree("FILTER", "WHERE verified = true")  # No children = condition leaf
-        filter1 = QueryTree("FILTER", "WHERE age > 18")
-        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
-        
-        operator_and.add_child(filter_leaf)
-        operator_and.add_child(filter1)
-        operator_and.add_child(filter2)
-        
-        with self.assertRaises(QueryValidationError):
-            check_query(operator_and)
-    
-    def test_invalid_operator_s_non_filter_condition(self):
-        # Structure: OPERATOR_S(AND) -> RELATION, RELATION, FILTER
-        # Invalid because conditions (child 1+) must be FILTER/OPERATOR/OPERATOR_S
-        operator_and = QueryTree("OPERATOR_S", "AND")
-        relation1 = QueryTree("RELATION", "users")
-        relation2 = QueryTree("RELATION", "profiles")
-        filter1 = QueryTree("FILTER", "WHERE age > 18")
-        
-        operator_and.add_child(relation1)
-        operator_and.add_child(relation2)
-        operator_and.add_child(filter1)
-        
-        with self.assertRaises(QueryValidationError):
-            check_query(operator_and)
+        check_query(project)
 
 
 if __name__ == '__main__':

@@ -5,7 +5,6 @@ Concurrency Control Manager - Main interface
 from typing import Dict, Optional
 from .enums import AlgorithmType, ActionType, TransactionStatus
 from .transaction import Transaction
-from .schedule import Schedule
 from .log_handler import LogHandler
 from .row import Row
 from .response import Response
@@ -22,7 +21,6 @@ class CCManager:
     def __init__(self, algorithm: AlgorithmType, log_file: str = "cc_log.txt"):
         self.algorithm: AlgorithmType = algorithm
         self.transactions: Dict[int, Transaction] = {}
-        self.schedule: Schedule = Schedule()
         self.log_handler: LogHandler = LogHandler(log_file)
         self.concurrency_algorithm: Optional[ConcurrencyAlgorithm] = None
         self.next_transaction_id: int = 1
@@ -148,9 +146,6 @@ class CCManager:
         transaction.set_status(TransactionStatus.Terminated)
         self.log_handler.log_transaction_event(transaction_id, "TERMINATED")
         
-        # Remove transaction actions from schedule
-        self.schedule.remove_transaction_actions(transaction_id)
-    
     def set_algorithm(self, algorithm: AlgorithmType) -> None:
         """Set the concurrency control algorithm"""
         if algorithm == self.algorithm:
@@ -200,10 +195,7 @@ class CCManager:
         # Set status to aborted
         transaction.set_status(TransactionStatus.Aborted)
         self.log_handler.log_transaction_event(transaction_id, "ABORTED")
-        
-        # Remove transaction actions from schedule
-        self.schedule.remove_transaction_actions(transaction_id)
-    
+
     def get_transaction_status(self, transaction_id: int) -> Optional[TransactionStatus]:
         """Get the status of a transaction"""
         transaction = self._get_transaction(transaction_id)

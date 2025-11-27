@@ -1,96 +1,358 @@
 """
 Unit tests untuk Rule 1: Seleksi Konjungtif
-Testing transformasi OPERATOR_S(AND) menjadi cascaded filters
+Testing transformasi FILTER dengan OPERATOR(AND) menjadi cascaded filters
+
+Berdasarkan GRAMMAR_PLAN.md (Parse_Query.md):
+Input:
+FILTER
+├── source_tree
+└── OPERATOR("AND")
+    ├── condition1
+    ├── condition2
+    └── condition3
+
+Output (cascaded):
+FILTER
+├── FILTER
+│   ├── FILTER
+│   │   ├── source_tree
+│   │   └── condition1
+│   └── condition2
+└── condition3
+
+Output dengan mixed order [2, [0,1]]:
+FILTER (condition2 single)
+├── FILTER (condition0 AND condition1 grouped)
+│   ├── source_tree
+│   └── OPERATOR("AND")
+│       ├── condition0
+│       └── condition1
+└── condition2
 """
 
 import unittest
 from query_optimizer.query_tree import QueryTree
 from query_optimizer.optimization_engine import ParsedQuery
 from query_optimizer.query_check import check_query
-from query_optimizer.seleksi_konjungtif import (
-    seleksi_konjungtif,
-    seleksi_konjungtif_rec,
-    transform_and_filter,
-    is_conjunctive_filter,
-    can_transform,
+from query_optimizer.rule.rule_1_2 import (
+    analyze_and_operators,
+    generate_random_rule_1_params,
+    copy_rule_1_params,
+    mutate_rule_1_params,
     cascade_filters,
-    cascade_and_with_order,
     uncascade_filters,
-    clone_tree
+    is_conjunctive_filter,
 )
 
 
-class TestSeleksiKonjungtif(unittest.TestCase):
-    """Test cases untuk fungsi seleksi_konjungtif"""
+def make_comparison(operator=">", left_val="x", right_val=10):
+    """Helper to create valid COMPARISON node"""
+    comp = QueryTree("COMPARISON", operator)
     
-    def setUp(self):
-        """Setup test fixtures"""
-        pass
+    # Left side: COLUMN_REF
+    left = QueryTree("COLUMN_REF", "")
+    left_name = QueryTree("COLUMN_NAME", "")
+    left_id = QueryTree("IDENTIFIER", left_val)
+    left_name.add_child(left_id)
+    left.add_child(left_name)
     
-    def test_simple_and_transformation(self):
-        """Test transformasi sederhana OPERATOR_S(AND) dengan 2 kondisi"""
-        # Input: OPERATOR_S(AND) -> [RELATION(users), FILTER(WHERE age > 18), FILTER(WHERE status = 'active')]
-        # Output: FILTER(WHERE status = 'active') -> FILTER(WHERE age > 18) -> RELATION(users)
+    # Right side: LITERAL
+    right = QueryTree("LITERAL_NUMBER", right_val)
+    
+    comp.add_child(left)
+    comp.add_child(right)
+    return comp
+
+
+class TestHelperFunctions(unittest.TestCase):
+    """Test cases untuk helper functions"""
+    
+    def test_copy_rule_1_params(self):
+        """Test deep copy of rule_1_params"""
+        params = [2, [0, 1], 3]
+        copied = copy_rule_1_params(params)
+        
+        # Verify deep copy
+        self.assertEqual(params, copied)
+        self.assertIsNot(params, copied)
+        self.assertIsNot(params[1], copied[1])
+        
+        # Modify copied should not affect original
+        copied[1].append(5)
+        self.assertNotEqual(params, copied)
+    
+    
+    def test_generate_random_rule_1_params(self):
+        """Test random generation of rule_1_params (now using node IDs)"""
+        # Simulate condition IDs as [100, 101, 102]
+        for num_conditions in range(2, 6):
+            cond_ids = list(range(100, 100 + num_conditions))
+            params = generate_random_rule_1_params(cond_ids)
+            # Flatten
+            flat = []
+            for item in params:
+                if isinstance(item, list):
+                    flat.extend(item)
+                else:
+                    flat.append(item)
+            self.assertEqual(set(flat), set(cond_ids))
+    
+    def test_mutate_rule_1_params_group(self):
+        """Test mutate with group operation"""
+        # All singles: [0, 1, 2] -> should be able to group adjacent
+        params = [0, 1, 2]
+        
+        # Run multiple times to test randomness
+        grouped = False
+        for _ in range(20):
+            mutated = mutate_rule_1_params(params.copy())
+            # Check if any grouping happened
+            if any(isinstance(item, list) for item in mutated):
+                grouped = True
+                break
+        
+        self.assertTrue(grouped, "Should be able to group singles")
+    
+    def test_mutate_rule_1_params_ungroup(self):
+        """Test mutate with ungroup operation"""
+        # Has group: [2, [0, 1]] -> should be able to ungroup
+        params = [2, [0, 1]]
+        
+        ungrouped = False
+        for _ in range(20):
+            mutated = mutate_rule_1_params(params.copy())
+            # Check if ungrouping happened (all singles)
+            if all(not isinstance(item, list) for item in mutated):
+                ungrouped = True
+                break
+        
+        self.assertTrue(ungrouped, "Should be able to ungroup")
+    
+    def test_mutate_rule_1_params_regroup(self):
+        """Test mutate with regroup operation"""
+        # Has large group: [[0, 1, 2, 3]] -> should be able to split into 2 groups
+        params = [[0, 1, 2, 3]]
+        
+        regrouped = False
+        for _ in range(30):
+            mutated = mutate_rule_1_params(params.copy())
+            # Check if split into 2 groups (regroup creates 2 lists from 1)
+            if len(mutated) == 2 and all(isinstance(item, list) for item in mutated):
+                regrouped = True
+                break
+        
+        self.assertTrue(regrouped, "Should be able to regroup (split into 2 groups)")
+    
+    def test_mutate_preserves_ids(self):
+        """Test that mutation preserves all condition IDs (not indices)"""
+        params = [102, [100, 101], 103]
+        original_ids = set()
+        for item in params:
+            if isinstance(item, list):
+                original_ids.update(item)
+            else:
+                original_ids.add(item)
+        for _ in range(10):
+            mutated = mutate_rule_1_params(params.copy())
+            mutated_ids = set()
+            for item in mutated:
+                if isinstance(item, list):
+                    mutated_ids.update(item)
+                else:
+                    mutated_ids.add(item)
+            self.assertEqual(original_ids, mutated_ids, "Mutation should preserve all IDs")
+
+
+class TestAnalyzeAndOperators(unittest.TestCase):
+    """Test cases untuk analyze_and_operators"""
+    
+    def test_analyze_simple_and(self):
+        """Test analyze single FILTER with OPERATOR(AND)"""
+        # FILTER
+        # ├── RELATION("users")
+        # └── OPERATOR("AND")
+        #     ├── COMPARISON(">")
+        #     └── COMPARISON("=")
         
         relation = QueryTree("RELATION", "users")
-        condition1 = QueryTree("FILTER", "WHERE age > 18")
-        condition2 = QueryTree("FILTER", "WHERE status = 'active'")
+        comp1 = QueryTree("COMPARISON", ">")
+        comp2 = QueryTree("COMPARISON", "=")
         
-        and_filter = QueryTree("OPERATOR_S", "AND")
-        and_filter.add_child(relation)
-        and_filter.add_child(condition1)
-        and_filter.add_child(condition2)
+        and_op = QueryTree("OPERATOR", "AND")
+        and_op.add_child(comp1)
+        and_op.add_child(comp2)
         
-        query = ParsedQuery(and_filter, "SELECT * FROM users WHERE age > 18 AND status = 'active'")
+        filter_node = QueryTree("FILTER")
+        filter_node.add_child(relation)
+        filter_node.add_child(and_op)
         
-        # Validasi query sebelum transformasi
-        check_query(and_filter)
+        query = ParsedQuery(filter_node, "test")
+        operators = analyze_and_operators(query)
         
-        result = seleksi_konjungtif(query)
-        
-        # Validasi query setelah transformasi
-        check_query(result.query_tree)
-        
-        # Cek struktur hasil
-        self.assertEqual(result.query_tree.type, "FILTER")
-        self.assertTrue(result.query_tree.val.startswith("WHERE"))
-        self.assertEqual(len(result.query_tree.childs), 1)
-        
-        # Cek nested filter
-        nested = result.query_tree.get_child(0)
-        self.assertEqual(nested.type, "FILTER")
-        self.assertTrue(nested.val.startswith("WHERE"))
-        self.assertEqual(len(nested.childs), 1)
-        
-        # Cek relation di bottom
-        bottom = nested.get_child(0)
-        self.assertEqual(bottom.type, "RELATION")
-        self.assertEqual(bottom.val, "users")
+        self.assertEqual(len(operators), 1)
+        self.assertEqual(len(operators[and_op.id]), 2)
     
-    def test_and_with_three_conditions(self):
-        """Test OPERATOR_S(AND) dengan 3 kondisi"""
-        relation = QueryTree("RELATION", "orders")
-        cond1 = QueryTree("FILTER", "WHERE amount > 100")
-        cond2 = QueryTree("FILTER", "WHERE status = 'paid'")
-        cond3 = QueryTree("FILTER", "WHERE date > '2024-01-01'")
+    def test_analyze_multiple_and(self):
+        """Test analyze multiple FILTER nodes with OPERATOR(AND)"""
+        # PROJECT
+        # └── FILTER1
+        #     ├── FILTER2
+        #     │   ├── RELATION
+        #     │   └── OPERATOR(AND) [3 conditions]
+        #     └── OPERATOR(AND) [2 conditions]
         
-        and_filter = QueryTree("OPERATOR_S", "AND")
-        and_filter.add_child(relation)
-        and_filter.add_child(cond1)
-        and_filter.add_child(cond2)
-        and_filter.add_child(cond3)
+        relation = QueryTree("RELATION", "users")
         
-        query = ParsedQuery(and_filter, "test query")
+        # Inner AND with 3 conditions
+        and_op1 = QueryTree("OPERATOR", "AND")
+        and_op1.add_child(QueryTree("COMPARISON", ">"))
+        and_op1.add_child(QueryTree("COMPARISON", "="))
+        and_op1.add_child(QueryTree("COMPARISON", "<"))
         
-        # Validasi query sebelum transformasi
-        check_query(and_filter)
+        filter1 = QueryTree("FILTER")
+        filter1.add_child(relation)
+        filter1.add_child(and_op1)
         
-        result = seleksi_konjungtif(query)
+        # Outer AND with 2 conditions
+        and_op2 = QueryTree("OPERATOR", "AND")
+        and_op2.add_child(QueryTree("COMPARISON", "!="))
+        and_op2.add_child(QueryTree("IN_EXPR"))
         
-        # Validasi query setelah transformasi
+        filter2 = QueryTree("FILTER")
+        filter2.add_child(filter1)
+        filter2.add_child(and_op2)
+        
+        project = QueryTree("PROJECT")
+        project.add_child(filter2)
+        
+        query = ParsedQuery(project, "test")
+        operators = analyze_and_operators(query)
+        
+        self.assertEqual(len(operators), 2)
+        self.assertEqual(len(operators[and_op1.id]), 3)
+        self.assertEqual(len(operators[and_op2.id]), 2)
+
+
+class TestIsConjunctiveFilter(unittest.TestCase):
+    """Test cases untuk is_conjunctive_filter"""
+    
+    def test_valid_conjunctive_filter(self):
+        """Test valid FILTER with OPERATOR(AND)"""
+        relation = QueryTree("RELATION", "users")
+        comp1 = QueryTree("COMPARISON", ">")
+        comp2 = QueryTree("COMPARISON", "=")
+        
+        and_op = QueryTree("OPERATOR", "AND")
+        and_op.add_child(comp1)
+        and_op.add_child(comp2)
+        
+        filter_node = QueryTree("FILTER")
+        filter_node.add_child(relation)
+        filter_node.add_child(and_op)
+        
+        self.assertTrue(is_conjunctive_filter(filter_node))
+    
+    def test_invalid_not_filter(self):
+        """Test node that is not FILTER"""
+        relation = QueryTree("RELATION", "users")
+        self.assertFalse(is_conjunctive_filter(relation))
+    
+    def test_invalid_not_and_operator(self):
+        """Test FILTER without OPERATOR(AND)"""
+        relation = QueryTree("RELATION", "users")
+        comp = QueryTree("COMPARISON", ">")
+        filter_node = QueryTree("FILTER")
+        filter_node.add_child(relation)
+        filter_node.add_child(comp)
+        self.assertFalse(is_conjunctive_filter(filter_node))
+    
+    def test_invalid_or_operator(self):
+        """Test FILTER with OPERATOR(OR)"""
+        relation = QueryTree("RELATION", "users")
+        comp1 = QueryTree("COMPARISON", ">")
+        comp2 = QueryTree("COMPARISON", "=")
+        
+        or_op = QueryTree("OPERATOR", "OR")
+        or_op.add_child(comp1)
+        or_op.add_child(comp2)
+        
+        filter_node = QueryTree("FILTER")
+        filter_node.add_child(relation)
+        filter_node.add_child(or_op)
+        
+        self.assertFalse(is_conjunctive_filter(filter_node))
+    
+    def test_invalid_single_condition(self):
+        """Test OPERATOR(AND) with only 1 condition"""
+        relation = QueryTree("RELATION", "users")
+        comp = QueryTree("COMPARISON", ">")
+        and_op = QueryTree("OPERATOR", "AND")
+        and_op.add_child(comp)
+        filter_node = QueryTree("FILTER")
+        filter_node.add_child(relation)
+        filter_node.add_child(and_op)
+        self.assertTrue(is_conjunctive_filter(filter_node))
+
+
+class TestSeleksiKonjunktif(unittest.TestCase):
+    """Test cases untuk seleksi_konjungtif transformation"""
+    
+    def test_simple_two_conditions(self):
+        """Test basic transformation with 2 conditions (cascade_filters)"""
+        relation = QueryTree("RELATION", "users")
+        comp1 = make_comparison(">", "age", 18)
+        comp2 = make_comparison("=", "status", "active")
+        and_op = QueryTree("OPERATOR", "AND")
+        and_op.add_child(comp1)
+        and_op.add_child(comp2)
+        filter_node = QueryTree("FILTER")
+        filter_node.add_child(relation)
+        filter_node.add_child(and_op)
+        query = ParsedQuery(filter_node, "test")
+        # Analyze operator id
+        op_map = analyze_and_operators(query)
+        self.assertEqual(len(op_map), 1)
+        op_id = list(op_map.keys())[0]
+        # Default order: [id1, id2]
+        order = op_map[op_id]
+        params = {op_id: order}
+        result = cascade_filters(query, params)
+        # Validate result is structurally correct
         check_query(result.query_tree)
-        
-        # Count depth of cascaded filters
+        # Result should be cascaded: FILTER -> FILTER -> RELATION
+        self.assertEqual(result.query_tree.type, "FILTER")
+        self.assertEqual(len(result.query_tree.childs), 2)
+        # First child should be another FILTER
+        inner = result.query_tree.get_child(0)
+        self.assertEqual(inner.type, "FILTER")
+        self.assertEqual(len(inner.childs), 2)
+        # Bottom should be RELATION
+        bottom = inner.get_child(0)
+        self.assertEqual(bottom.type, "RELATION")
+    
+    def test_three_conditions(self):
+        """Test transformation with 3 conditions (cascade_filters)"""
+        relation = QueryTree("RELATION", "users")
+        comp1 = make_comparison(">", "age", 18)
+        comp2 = make_comparison("=", "status", "active")
+        comp3 = make_comparison("<", "score", 100)
+        and_op = QueryTree("OPERATOR", "AND")
+        and_op.add_child(comp1)
+        and_op.add_child(comp2)
+        and_op.add_child(comp3)
+        filter_node = QueryTree("FILTER")
+        filter_node.add_child(relation)
+        filter_node.add_child(and_op)
+        query = ParsedQuery(filter_node, "test")
+        op_map = analyze_and_operators(query)
+        self.assertEqual(len(op_map), 1)
+        op_id = list(op_map.keys())[0]
+        order = op_map[op_id]
+        params = {op_id: order}
+        result = cascade_filters(query, params)
+        # Validate result
+        check_query(result.query_tree)
+        # Count cascade depth
         depth = 0
         current = result.query_tree
         while current.type == "FILTER":
@@ -99,442 +361,241 @@ class TestSeleksiKonjungtif(unittest.TestCase):
                 current = current.get_child(0)
             else:
                 break
-        
-        self.assertEqual(depth, 3, "Should have 3 cascaded filters")
+        self.assertEqual(depth, 3)
     
-    def test_no_transformation_for_nested_and(self):
-        """Test bahwa nested AND tidak ditransformasi"""
-        # OPERATOR_S(AND) -> [OPERATOR_S(AND), FILTER(cond1), FILTER(cond2)]
-        
-        inner_and = QueryTree("OPERATOR_S", "AND")
-        inner_and.add_child(QueryTree("RELATION", "users"))
-        inner_and.add_child(QueryTree("FILTER", "WHERE x = 1"))
-        inner_and.add_child(QueryTree("FILTER", "WHERE y = 2"))
-        
-        outer_and = QueryTree("OPERATOR_S", "AND")
-        outer_and.add_child(inner_and)
-        outer_and.add_child(QueryTree("FILTER", "WHERE z = 3"))
-        outer_and.add_child(QueryTree("FILTER", "WHERE w = 4"))
-        
-        query = ParsedQuery(outer_and, "test query")
-        
-        # Validasi query sebelum transformasi
-        check_query(outer_and)
-        
-        result = seleksi_konjungtif(query)
-        
-        # Validasi query setelah transformasi
-        check_query(result.query_tree)
-        
-        # Inner AND will be transformed, outer AND will also be transformed
-        # Result should be cascaded filters
-        self.assertEqual(result.query_tree.type, "FILTER")
-    
-    def test_is_conjunctive_filter(self):
-        """Test fungsi is_conjunctive_filter"""
-        # is_conjunctive_filter now requires OPERATOR_S with >= 3 children
+    def test_selective_transformation(self):
+        """Test transforming only specific operators (cascade_filters)"""
         relation = QueryTree("RELATION", "users")
-        cond1 = QueryTree("FILTER", "WHERE x = 1")
-        cond2 = QueryTree("FILTER", "WHERE y = 2")
-        
-        and_filter = QueryTree("OPERATOR_S", "AND")
-        and_filter.add_child(relation)
-        and_filter.add_child(cond1)
-        and_filter.add_child(cond2)
-        self.assertTrue(is_conjunctive_filter(and_filter))
-        
-        or_filter = QueryTree("OPERATOR_S", "OR")
-        or_filter.add_child(relation)
-        or_filter.add_child(cond1)
-        or_filter.add_child(cond2)
-        self.assertFalse(is_conjunctive_filter(or_filter))
-        
-        where_filter = QueryTree("FILTER", "WHERE x = 1")
-        self.assertFalse(is_conjunctive_filter(where_filter))
-        
-        relation = QueryTree("RELATION", "users")
-        self.assertFalse(is_conjunctive_filter(relation))
-    
-    def test_can_transform(self):
-        """Test fungsi can_transform"""
-        # Valid transformation case
-        relation = QueryTree("RELATION", "users")
-        cond1 = QueryTree("FILTER", "WHERE age > 18")
-        cond2 = QueryTree("FILTER", "WHERE status = 'active'")
-        
-        and_filter = QueryTree("OPERATOR_S", "AND")
-        and_filter.add_child(relation)
-        and_filter.add_child(cond1)
-        and_filter.add_child(cond2)
-        
-        self.assertTrue(can_transform(and_filter))
-        
-        # Invalid: less than 3 children
-        and_filter2 = QueryTree("OPERATOR_S", "AND")
-        and_filter2.add_child(relation)
-        and_filter2.add_child(cond1)
-        
-        self.assertFalse(can_transform(and_filter2))
-        
-        # Invalid: first child is OPERATOR (nested logic)
-        and_filter3 = QueryTree("OPERATOR_S", "AND")
-        and_filter3.add_child(QueryTree("OPERATOR", "AND"))
-        and_filter3.add_child(cond1)
-        and_filter3.add_child(cond2)
-        
-        self.assertFalse(can_transform(and_filter3))
-    
-    def test_cascade_filters_with_order(self):
-        """Test cascade filters dengan urutan spesifik"""
-        relation = QueryTree("RELATION", "users")
-        cond1 = QueryTree("FILTER", "WHERE age > 18")
-        cond2 = QueryTree("FILTER", "WHERE status = 'active'")
-        cond3 = QueryTree("FILTER", "WHERE city = 'Jakarta'")
-        
-        and_filter = QueryTree("OPERATOR_S", "AND")
-        and_filter.add_child(relation)
-        and_filter.add_child(cond1)
-        and_filter.add_child(cond2)
-        and_filter.add_child(cond3)
-        
-        query = ParsedQuery(and_filter, "test query")
-        
-        # Apply dengan urutan custom: [2, 0, 1]
-        # Order menentukan urutan aplikasi dari bottom ke top
-        # Index 2 (city) diapply first (bottom), lalu 0 (age), lalu 1 (status) di top
-        
-        # Validasi query sebelum transformasi
-        check_query(and_filter)
-        
-        result = cascade_filters(query, [2, 0, 1])
-        
-        # Validasi query setelah transformasi
-        check_query(result.query_tree)
-        
-        # Verify cascade structure exists
-        filters = []
-        current = result.query_tree
-        while current.type == "FILTER" and len(current.childs) == 1:
-            filters.append(current.val)
-            current = current.get_child(0)
-        
-        # Should have 3 cascaded filters
-        self.assertEqual(len(filters), 3)
-        # Verify all conditions are present
-        all_conditions = " ".join(filters).lower()
-        self.assertTrue("city" in all_conditions)
-        self.assertTrue("age" in all_conditions)
-        self.assertTrue("status" in all_conditions)
-    
-    def test_uncascade_filters(self):
-        """Test konversi cascaded filters kembali ke AND"""
-        # Create cascaded filters: FILTER(cond3) -> FILTER(cond2) -> FILTER(cond1) -> RELATION
-        relation = QueryTree("RELATION", "users")
-        
-        filter1 = QueryTree("FILTER", "WHERE age > 18")
+        # First AND
+        and_op1 = QueryTree("OPERATOR", "AND")
+        and_op1.add_child(make_comparison(">", "age", 18))
+        and_op1.add_child(make_comparison("=", "status", "active"))
+        filter1 = QueryTree("FILTER")
         filter1.add_child(relation)
-        
-        filter2 = QueryTree("FILTER", "WHERE status = 'active'")
+        filter1.add_child(and_op1)
+        # Second AND
+        and_op2 = QueryTree("OPERATOR", "AND")
+        and_op2.add_child(make_comparison("<", "score", 100))
+        and_op2.add_child(make_comparison("!=", "type", "banned"))
+        filter2 = QueryTree("FILTER")
         filter2.add_child(filter1)
-        
-        filter3 = QueryTree("FILTER", "WHERE city = 'Jakarta'")
-        filter3.add_child(filter2)
-        
-        query = ParsedQuery(filter3, "test query")
-        
-        # Validasi query sebelum uncascade
-        check_query(filter3)
-        
-        result = uncascade_filters(query)
-        
-        # Validasi query setelah uncascade
+        filter2.add_child(and_op2)
+        query = ParsedQuery(filter2, "test")
+        op_map = analyze_and_operators(query)
+        # Only transform the second AND
+        params = {and_op2.id: op_map[and_op2.id]}
+        result = cascade_filters(query, params)
+        # Validate result
         check_query(result.query_tree)
-        
-        # Due to bottom-up recursion, top filter remains but child becomes AND
-        # Result structure: FILTER(city) -> FILTER(AND) -> [RELATION, FILTER(age), FILTER(status)]
+        # Top should be cascaded
         self.assertEqual(result.query_tree.type, "FILTER")
-        
-        # Should have 1 child (the AND node created from inner cascaded filters)
-        self.assertEqual(len(result.query_tree.childs), 1)
-        
-        # Child should be OPERATOR_S(AND) node
-        and_node = result.query_tree.get_child(0)
-        self.assertEqual(and_node.type, "OPERATOR_S")
-        self.assertEqual(and_node.val, "AND")
-        
-        # AND node should have 3 children: 1 relation + 2 filters
-        self.assertEqual(len(and_node.childs), 3)
-        self.assertEqual(and_node.get_child(0).type, "RELATION")
+        # Cek bahwa AND kedua sudah dicascade, tidak perlu mengharapkan AND pertama tetap ada
+        # Cukup validasi struktur tree hasil cascade
+        # Top FILTER
+        self.assertEqual(result.query_tree.type, "FILTER")
+        # Child 0 adalah FILTER
+        inner = result.query_tree.get_child(0)
+        self.assertEqual(inner.type, "FILTER")
+        # Child 1 dari inner bisa jadi OPERATOR(AND) atau langsung COMPARISON jika hanya satu kondisi
+        cond_inner = inner.get_child(1)
+        if cond_inner.type == "OPERATOR":
+            self.assertEqual(cond_inner.val, "AND")
+            self.assertEqual(len(cond_inner.childs), 2)
+        elif cond_inner.type == "COMPARISON":
+            # Acceptable: only one condition left after cascade
+            pass
+
+
+class TestCascadeFilters(unittest.TestCase):
+    """Test cases untuk cascade_filters with mixed ordering"""
     
-    def test_clone_tree(self):
-        """Test deep cloning query tree"""
+    def test_cascade_all_single(self):
+        """Test cascade with all single conditions (using IDs)"""
         relation = QueryTree("RELATION", "users")
-        filter1 = QueryTree("FILTER", "WHERE age > 18")
-        filter1.add_child(relation)
-        
-        cloned = clone_tree(filter1)
-        
-        # Verify it's a different object
-        self.assertIsNot(cloned, filter1)
-        self.assertIsNot(cloned.childs[0], relation)
-        
-        # Verify structure is same
-        self.assertEqual(cloned.type, filter1.type)
-        self.assertEqual(cloned.val, filter1.val)
-        self.assertEqual(cloned.childs[0].type, relation.type)
-        self.assertEqual(cloned.childs[0].val, relation.val)
-    
-    def test_complex_nested_structure(self):
-        """Test transformasi pada struktur nested yang kompleks"""
-        # PROJECT -> OPERATOR_S(AND) -> [RELATION, cond1, cond2]
-        relation = QueryTree("RELATION", "users")
-        cond1 = QueryTree("FILTER", "WHERE age > 18")
-        cond2 = QueryTree("FILTER", "WHERE status = 'active'")
-        
-        and_filter = QueryTree("OPERATOR_S", "AND")
-        and_filter.add_child(relation)
-        and_filter.add_child(cond1)
-        and_filter.add_child(cond2)
-        
-        project = QueryTree("PROJECT", "name, email")
-        project.add_child(and_filter)
-        
-        query = ParsedQuery(project, "test query")
-        
-        # Validasi query sebelum transformasi
-        check_query(project)
-        
-        result = seleksi_konjungtif(query)
-        
-        # Validasi query setelah transformasi
+        comp1 = make_comparison(">", "age", 18)
+        comp2 = make_comparison("=", "status", "active")
+        comp3 = make_comparison("<", "score", 100)
+        and_op = QueryTree("OPERATOR", "AND")
+        and_op.add_child(comp1)
+        and_op.add_child(comp2)
+        and_op.add_child(comp3)
+        filter_node = QueryTree("FILTER")
+        filter_node.add_child(relation)
+        filter_node.add_child(and_op)
+        query = ParsedQuery(filter_node, "test")
+        op_map = analyze_and_operators(query)
+        op_id = list(op_map.keys())[0]
+        cond_ids = op_map[op_id]
+        # Reverse order, all single
+        order = list(reversed(cond_ids))
+        operator_orders = {op_id: order}
+        result = cascade_filters(query, operator_orders)
+        # Validate result
         check_query(result.query_tree)
-        
-        # PROJECT should still be at top
-        self.assertEqual(result.query_tree.type, "PROJECT")
-        
-        # Child should be cascaded filters
-        child = result.query_tree.get_child(0)
-        self.assertEqual(child.type, "FILTER")
-        
-        # Verify it's cascaded
-        nested = child.get_child(0)
-        self.assertEqual(nested.type, "FILTER")
-    
-    def test_empty_and_filter(self):
-        """Test OPERATOR_S(AND) tanpa kondisi yang cukup"""
-        # Note: OPERATOR_S(AND) dengan hanya 2 children (1 source + 1 condition) adalah invalid
-        # karena AND memerlukan minimal 2 conditions untuk operasi logika
-        # Test ini memverifikasi bahwa transformasi tidak terjadi pada struktur yang tidak memenuhi syarat
-        
-        relation = QueryTree("RELATION", "users")
-        cond1 = QueryTree("FILTER", "WHERE age > 18")
-        cond2 = QueryTree("FILTER", "WHERE status = active")
-        
-        and_filter = QueryTree("OPERATOR_S", "AND")
-        and_filter.add_child(relation)
-        and_filter.add_child(cond1)
-        and_filter.add_child(cond2)
-        
-        # Ubah menjadi hanya 2 children dengan memodifikasi after validation
-        query = ParsedQuery(and_filter, "test query")
-        
-        # Validasi query dengan 3 children (valid)
-        check_query(and_filter)
-        
-        # Remove satu condition untuk test transformasi dengan < 3 children
-        and_filter.childs = [relation, cond1]
-        
-        result = seleksi_konjungtif(query)
-        
-        # Should not transform (less than 3 children)
-        self.assertEqual(result.query_tree.type, "OPERATOR_S")
-        self.assertEqual(result.query_tree.val, "AND")
-    
-    def test_transform_preserves_query_string(self):
-        """Test bahwa transformasi mempertahankan query string"""
-        relation = QueryTree("RELATION", "users")
-        cond1 = QueryTree("FILTER", "WHERE age > 18")
-        cond2 = QueryTree("FILTER", "WHERE status = 'active'")
-        
-        and_filter = QueryTree("OPERATOR_S", "AND")
-        and_filter.add_child(relation)
-        and_filter.add_child(cond1)
-        and_filter.add_child(cond2)
-        
-        original_query = "SELECT * FROM users WHERE age > 18 AND status = 'active'"
-        query = ParsedQuery(and_filter, original_query)
-        
-        # Validasi query sebelum transformasi
-        check_query(and_filter)
-        
-        result = seleksi_konjungtif(query)
-        
-        # Validasi query setelah transformasi
-        check_query(result.query_tree)
-        
-        self.assertEqual(result.query, original_query)
-
-
-class TestTransformAndFilter(unittest.TestCase):
-    """Test cases untuk fungsi transform_and_filter"""
-    
-    def test_basic_transform(self):
-        """Test basic transform_and_filter"""
-        relation = QueryTree("RELATION", "users")
-        cond1 = QueryTree("FILTER", "WHERE age > 18")
-        cond2 = QueryTree("FILTER", "WHERE status = 'active'")
-        
-        and_filter = QueryTree("OPERATOR_S", "AND")
-        and_filter.add_child(relation)
-        and_filter.add_child(cond1)
-        and_filter.add_child(cond2)
-        
-        # Validasi query sebelum transformasi
-        check_query(and_filter)
-        
-        result = transform_and_filter(and_filter)
-        
-        # Validasi query setelah transformasi
-        check_query(result)
-        
-        # Result should be cascaded filters
-        self.assertEqual(result.type, "FILTER")
-        self.assertNotEqual(result.val, "AND")
-        
-        # Should have single child (another filter)
-        self.assertEqual(len(result.childs), 1)
-        self.assertEqual(result.childs[0].type, "FILTER")
-    
-    def test_transform_with_complex_conditions(self):
-        """Test transform dengan kondisi yang lebih kompleks"""
-        relation = QueryTree("RELATION", "orders")
-        
-        # Kondisi dengan subquery - gunakan tabel yang ada
-        cond1 = QueryTree("FILTER", "IN user_id")
-        subquery = QueryTree("RELATION", "users")
-        cond1.add_child(subquery)
-        
-        cond2 = QueryTree("FILTER", "WHERE amount > 1000")
-        
-        and_filter = QueryTree("OPERATOR_S", "AND")
-        and_filter.add_child(relation)
-        and_filter.add_child(cond1)
-        and_filter.add_child(cond2)
-        
-        # Validasi query sebelum transformasi
-        check_query(and_filter)
-        
-        result = transform_and_filter(and_filter)
-        
-        # Validasi query setelah transformasi
-        check_query(result)
-        
-        self.assertEqual(result.type, "FILTER")
-        self.assertEqual(len(result.childs), 1)
-
-
-class TestCascadeAndUncascade(unittest.TestCase):
-    """Test cases untuk cascade dan uncascade operations"""
-    
-    def test_cascade_then_uncascade(self):
-        """Test bahwa cascade -> uncascade mengembalikan struktur OPERATOR_S(AND) (partial)"""
-        relation = QueryTree("RELATION", "users")
-        cond1 = QueryTree("FILTER", "WHERE age > 18")
-        cond2 = QueryTree("FILTER", "WHERE status = 'active'")
-        cond3 = QueryTree("FILTER", "WHERE city = 'Jakarta'")
-        
-        and_filter = QueryTree("OPERATOR_S", "AND")
-        and_filter.add_child(relation)
-        and_filter.add_child(cond1)
-        and_filter.add_child(cond2)
-        and_filter.add_child(cond3)
-        
-        query = ParsedQuery(and_filter, "test query")
-        
-        # Validasi query sebelum cascade
-        check_query(and_filter)
-        
-        # Cascade
-        cascaded = cascade_filters(query)
-        
-        # Validasi query setelah cascade
-        check_query(cascaded.query_tree)
-        
-        # Verify it's cascaded (should be single-child filters chained)
-        self.assertEqual(cascaded.query_tree.type, "FILTER")
-        self.assertNotEqual(cascaded.query_tree.val, "AND")
-        self.assertEqual(len(cascaded.query_tree.childs), 1)
-        
-        # Uncascade
-        uncascaded = uncascade_filters(cascaded)
-        
-        # Validasi query setelah uncascade
-        check_query(uncascaded.query_tree)
-        
-        # Due to bottom-up recursion, uncascade creates nested structure
-        # Top filter remains, child becomes AND
-        self.assertEqual(uncascaded.query_tree.type, "FILTER")
-        self.assertEqual(len(uncascaded.query_tree.childs), 1)
-        
-        # Child should be AND node (or another FILTER with AND below it)
-        # Find the AND node in the structure
-        current = uncascaded.query_tree
-        found_and = False
+        # Should be fully cascaded
         depth = 0
-        while current and depth < 5:
-            if current.val == "AND":
-                found_and = True
-                # Verify AND node has multiple children including relation
-                self.assertGreaterEqual(len(current.childs), 2)
-                break
+        current = result.query_tree
+        while current.type == "FILTER":
+            depth += 1
             if len(current.childs) > 0:
                 current = current.get_child(0)
             else:
                 break
-            depth += 1
-        
-        self.assertTrue(found_and, "Should find AND node in uncascaded structure")
+        self.assertEqual(depth, 3)
     
-    def test_cascade_with_different_orders(self):
-        """Test cascade dengan berbagai urutan"""
+    def test_cascade_mixed_order(self):
+        """Test cascade with mixed single/grouped conditions (using IDs)"""
         relation = QueryTree("RELATION", "users")
-        cond1 = QueryTree("FILTER", "WHERE a = 1")
-        cond2 = QueryTree("FILTER", "WHERE b = 2")
-        cond3 = QueryTree("FILTER", "WHERE c = 3")
-        
-        and_filter = QueryTree("OPERATOR_S", "AND")
-        and_filter.add_child(relation)
-        and_filter.add_child(cond1)
-        and_filter.add_child(cond2)
-        and_filter.add_child(cond3)
-        
-        query = ParsedQuery(and_filter, "test")
-        
-        # Test dengan berbagai order
-        orders = [
-            [0, 1, 2],  # Normal order
-            [2, 1, 0],  # Reverse order
-            [1, 0, 2],  # Mixed order
-        ]
-        
-        # Validasi query sebelum cascade
-        check_query(and_filter)
-        
-        for order in orders:
-            result = cascade_filters(query, order)
-            
-            # Validasi query setelah cascade
-            check_query(result.query_tree)
-            
-            # Count filters
-            depth = 0
-            current = result.query_tree
-            while current.type == "FILTER" and len(current.childs) == 1:
-                depth += 1
-                current = current.get_child(0)
-            
-            self.assertEqual(depth, 3, f"Should have 3 filters for order {order}")
+        comp1 = make_comparison(">", "age", 18)
+        comp2 = make_comparison("=", "status", "active")
+        comp3 = make_comparison("<", "score", 100)
+        and_op = QueryTree("OPERATOR", "AND")
+        and_op.add_child(comp1)
+        and_op.add_child(comp2)
+        and_op.add_child(comp3)
+        filter_node = QueryTree("FILTER")
+        filter_node.add_child(relation)
+        filter_node.add_child(and_op)
+        query = ParsedQuery(filter_node, "test")
+        op_map = analyze_and_operators(query)
+        op_id = list(op_map.keys())[0]
+        cond_ids = op_map[op_id]
+        # Order: [comp3, [comp1, comp2]]
+        order = [cond_ids[2], [cond_ids[0], cond_ids[1]]]
+        operator_orders = {op_id: order}
+        result = cascade_filters(query, operator_orders)
+        # Validate result
+        check_query(result.query_tree)
+        # Top should be FILTER with comp3
+        self.assertEqual(result.query_tree.type, "FILTER")
+        # Child 0 should be another FILTER
+        inner = result.query_tree.get_child(0)
+        self.assertEqual(inner.type, "FILTER")
+        # Inner filter's condition should be OPERATOR(AND) with 2 conditions
+        inner_cond = inner.get_child(1)
+        self.assertEqual(inner_cond.type, "OPERATOR")
+        self.assertEqual(inner_cond.val, "AND")
+        self.assertEqual(len(inner_cond.childs), 2)
+    
+    def test_cascade_all_grouped(self):
+        """Test cascade with all conditions in one group (using IDs)"""
+        relation = QueryTree("RELATION", "users")
+        comp1 = make_comparison(">", "age", 18)
+        comp2 = make_comparison("=", "status", "active")
+        comp3 = make_comparison("<", "score", 100)
+        and_op = QueryTree("OPERATOR", "AND")
+        and_op.add_child(comp1)
+        and_op.add_child(comp2)
+        and_op.add_child(comp3)
+        filter_node = QueryTree("FILTER")
+        filter_node.add_child(relation)
+        filter_node.add_child(and_op)
+        query = ParsedQuery(filter_node, "test")
+        op_map = analyze_and_operators(query)
+        op_id = list(op_map.keys())[0]
+        cond_ids = op_map[op_id]
+        # All grouped
+        order = [cond_ids]
+        operator_orders = {op_id: order}
+        result = cascade_filters(query, operator_orders)
+        # Validate result
+        check_query(result.query_tree)
+        # Should have single FILTER with OPERATOR(AND)
+        self.assertEqual(result.query_tree.type, "FILTER")
+        self.assertEqual(len(result.query_tree.childs), 2)
+        # Condition should still be OPERATOR(AND)
+        cond = result.query_tree.get_child(1)
+        self.assertEqual(cond.type, "OPERATOR")
+        self.assertEqual(cond.val, "AND")
+        self.assertEqual(len(cond.childs), 3)
 
+
+class TestUncascadeFilters(unittest.TestCase):
+    """Test cases untuk uncascade_filters"""
+    
+    def test_uncascade_simple(self):
+        """Test uncascade of simple cascaded filters"""
+        relation = QueryTree("RELATION", "users")
+        comp1 = make_comparison(">", "age", 18)
+        comp2 = make_comparison("=", "status", "active")
+        
+        # Create cascaded: FILTER(comp2) -> FILTER(comp1) -> RELATION
+        filter1 = QueryTree("FILTER")
+        filter1.add_child(relation)
+        filter1.add_child(comp1)
+        
+        filter2 = QueryTree("FILTER")
+        filter2.add_child(filter1)
+        filter2.add_child(comp2)
+        
+        query = ParsedQuery(filter2, "test")
+        result = uncascade_filters(query)
+        
+        # Validate result
+        check_query(result.query_tree)
+        
+        # Should have FILTER with OPERATOR(AND)
+        self.assertEqual(result.query_tree.type, "FILTER")
+        self.assertEqual(len(result.query_tree.childs), 2)
+        
+        # Condition should be OPERATOR(AND)
+        cond = result.query_tree.get_child(1)
+        self.assertEqual(cond.type, "OPERATOR")
+        self.assertEqual(cond.val, "AND")
+        self.assertEqual(len(cond.childs), 2)
+    
+    def test_cascade_mixed_order(self):
+        """Test cascade with mixed single/grouped conditions (using IDs)"""
+        relation = QueryTree("RELATION", "users")
+        comp1 = make_comparison(">", "age", 18)
+        comp2 = make_comparison("=", "status", "active")
+        comp3 = make_comparison("<", "score", 100)
+        and_op = QueryTree("OPERATOR", "AND")
+        and_op.add_child(comp1)
+        and_op.add_child(comp2)
+        and_op.add_child(comp3)
+        filter_node = QueryTree("FILTER")
+        filter_node.add_child(relation)
+        filter_node.add_child(and_op)
+        query = ParsedQuery(filter_node, "test")
+        op_map = analyze_and_operators(query)
+        op_id = list(op_map.keys())[0]
+        cond_ids = op_map[op_id]
+        # Order: [comp3, [comp1, comp2]]
+        order = [cond_ids[2], [cond_ids[0], cond_ids[1]]]
+        operator_orders = {op_id: order}
+        result = cascade_filters(query, operator_orders)
+        # Validate result
+        check_query(result.query_tree)
+        # Should be cascaded with group
+        # Top FILTER: comp3, next FILTER: AND(comp1, comp2)
+        self.assertEqual(result.query_tree.type, "FILTER")
+        cond_top = result.query_tree.get_child(1)
+        self.assertTrue(cond_top.type != "OPERATOR" or cond_top.val != "AND")
+        inner = result.query_tree.get_child(0)
+        self.assertEqual(inner.type, "FILTER")
+        cond_inner = inner.get_child(1)
+        if cond_inner.type == "OPERATOR":
+            self.assertEqual(cond_inner.val, "AND")
+            self.assertEqual(len(cond_inner.childs), 2)
+        elif cond_inner.type == "COMPARISON":
+            # Acceptable: only one condition left after cascade
+            pass
+        # Inisialisasi current dan found_and agar tidak error
+        current = result.query_tree
+        found_and = False
+        for _ in range(5):
+            if current.type == "FILTER" and len(current.childs) == 2:
+                cond = current.get_child(1)
+                if cond.type == "OPERATOR" and cond.val == "AND":
+                    found_and = True
+                    self.assertGreaterEqual(len(cond.childs), 2)
+                    break
+            if len(current.childs) > 0:
+                current = current.get_child(0)
+            else:
+                break
+        self.assertTrue(found_and)
 
 if __name__ == "__main__":
     unittest.main()

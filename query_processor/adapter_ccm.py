@@ -65,7 +65,8 @@ class AdapterCCM:
         else:
             raise ValueError("Tipe aksi tidak valid untuk CCM, harus 'read' atau 'write'")
 
-        cc_row = Row(object_id=table_name)
+        cc_row = Row(table_name=table_name, data={},object_id=table_name)
+
         
         return self.ccm.validate_object(cc_row, transaction_id, cc_action)
 
@@ -77,7 +78,8 @@ class AdapterCCM:
             transaction_id (int): ID transaksi yang mengakses.
             table_name (str): Nama tabel (objek) yang di-log.
         """
-        cc_row = Row(object_id=table_name)
+        cc_row = Row(table_name=table_name, data={},object_id=table_name)
+
         
         self.ccm.log_object(cc_row, transaction_id)
 
