@@ -396,9 +396,9 @@ def demo_genetic_with_rules():
     ga = GeneticOptimizer(
         population_size=30,
         generations=15,
-        mutation_rate=0.2,
-        crossover_rate=0.8,
-        elitism=3,
+        mutation_rate=0.2
+        # crossover_rate=0.8,
+        # elitism=3,
     )
     
     optimized_query = ga.optimize(deterministic_query)

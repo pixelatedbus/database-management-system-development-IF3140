@@ -237,7 +237,7 @@ def scenario_5_ga_exploration():
         population_size=20,
         generations=10,
         mutation_rate=0.2,
-        crossover_rate=0.8
+        # crossover_rate=0.8
     )
     
     optimized = ga.optimize(parsed)

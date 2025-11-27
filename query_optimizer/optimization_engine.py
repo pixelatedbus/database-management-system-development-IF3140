@@ -66,9 +66,9 @@ class OptimizationEngine:
         population_size: int = 50,
         generations: int = 100,
         mutation_rate: float = 0.1,
-        crossover_rate: float = 0.8,
-        elitism: int = 2,
-        fitness_func: Optional[Callable[[ParsedQuery], float]] = None
+        # crossover_rate: float = 0.8,
+        # elitism: int = 2,
+        # fitness_func: Optional[Callable[[ParsedQuery], float]] = None
     ) -> ParsedQuery:
         """
         Apply optimization rules to the query tree.
@@ -128,12 +128,12 @@ class OptimizationEngine:
                 population_size=population_size,
                 generations=generations,
                 mutation_rate=mutation_rate,
-                crossover_rate=crossover_rate,
-                elitism=elitism,
-                fitness_func=fitness_func or self._default_fitness_func
+                # crossover_rate=crossover_rate,
+                # elitism=elitism,
+                # fitness_func=fitness_func or self._default_fitness_func
             )
             
-            optimized_tree = ga.optimize(query_tree)
+            optimized_tree, history = ga.optimize(query_tree)
             self.optimized_tree = optimized_tree.query_tree
         else:
             # Return original query unchanged
