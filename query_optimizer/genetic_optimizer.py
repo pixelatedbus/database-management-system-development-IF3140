@@ -113,7 +113,7 @@ class GeneticOptimizer:
             for ind in pop:
                 if ind.fitness is None:
                     eng = OptimizationEngine()
-                    ind.fitness = eng.get_cost(ind.query).total_cost
+                    ind.fitness = eng.get_cost(ind.query)
             
             pop.sort(key=lambda x: x.fitness)
             self.history.append({'gen': g, 'best': pop[0].fitness})

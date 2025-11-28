@@ -148,7 +148,7 @@ class OptimizationEngine:
     
     def get_cost(self, query_tree:ParsedQuery) -> float:
 
-        total_cost = self.cost_calculator.get_cost(query_tree.query_tree).total_cost()
+        total_cost = self.cost_calculator.get_cost(query_tree.query_tree).total_cost
         return total_cost
     
     def reset(self) -> None:
