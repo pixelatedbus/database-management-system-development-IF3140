@@ -48,8 +48,8 @@ class Individual:
             self.operation_params['join_child_params'] = jcp
 
         # Rule 6 (Associativity) - Key: Int
-        if jap:
-            q = rule_6.apply_associativity(q, jap)
+        # if jap:
+        #     q = rule_6.apply_associativity(q, jap)
             
         # Rule 4 (Join Merge) - Key: Int
         if jp:
