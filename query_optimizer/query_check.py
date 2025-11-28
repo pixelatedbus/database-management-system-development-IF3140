@@ -96,6 +96,7 @@ DDL_NODES = {
 TRANSACTION_NODES = {
     "BEGIN_TRANSACTION",
     "COMMIT",
+    "ABORT",
 }
 
 UTILITY_NODES = {
@@ -123,135 +124,106 @@ def check_query(node: QueryTree) -> None:
     elif node.type in WRAPPER_NODES:
         if num_children != 1:
             raise QueryValidationError(f"Wrapper node <{node.type}> harus punya 1 child, dapat {num_children}")
-
         if node.childs[0].type != "IDENTIFIER":
             raise QueryValidationError(f"<{node.type}> child harus IDENTIFIER, dapat {node.childs[0].type}")
     
     elif node.type == "COLUMN_REF":
         if num_children < 1 or num_children > 2:
             raise QueryValidationError(f"<COLUMN_REF> harus punya 1-2 children, dapat {num_children}")
-        # Child 0 must be COLUMN_NAME
         if node.childs[0].type != "COLUMN_NAME":
             raise QueryValidationError(f"<COLUMN_REF> child 0 harus COLUMN_NAME, dapat {node.childs[0].type}")
-        # Child 1 (optional) must be TABLE_NAME
         if num_children == 2 and node.childs[1].type != "TABLE_NAME":
             raise QueryValidationError(f"<COLUMN_REF> child 1 harus TABLE_NAME, dapat {node.childs[1].type}")
     
     elif node.type in SOURCE_NODES:
         if node.type == "RELATION":
-            # RELATION is a leaf node (0 children)
             if num_children != 0:
                 raise QueryValidationError(f"<RELATION> tidak boleh punya child, dapat {num_children}")
         
         elif node.type == "ALIAS":
-            # ALIAS has 1 child (what is being aliased)
             if num_children != 1:
                 raise QueryValidationError(f"<ALIAS> harus punya 1 child, dapat {num_children}")
         
         elif node.type == "PROJECT":
-            # PROJECT has 1+ children (last child is source, others are COLUMN_REF or value="*")
             if num_children < 1:
                 raise QueryValidationError(f"<PROJECT> harus punya minimal 1 child (source), dapat {num_children}")
         
         elif node.type == "FILTER":
-            # FILTER has 2 children (source + condition)
             if num_children != 2:
                 raise QueryValidationError(f"<FILTER> harus punya 2 children (source + condition), dapat {num_children}")
         
         elif node.type == "JOIN":
-            # JOIN has 2-3 children (rel1, rel2, optional condition for INNER JOIN)
             if num_children < 2 or num_children > 3:
                 raise QueryValidationError(f"<JOIN> harus punya 2-3 children, dapat {num_children}")
         
         elif node.type == "SORT":
-            # SORT has 2 children (order_expr, source)
-            # order_expr bisa berupa COLUMN_REF atau expression lain
             if num_children != 2:
                 raise QueryValidationError(f"<SORT> harus punya 2 children (order_expr + source), dapat {num_children}")
-            # Child 0 harus expression (COLUMN_REF, ARITH_EXPR, dll)
             if node.childs[0].type not in {"COLUMN_REF", "ARITH_EXPR", "FUNCTION_CALL", "LITERAL_NUMBER", "LITERAL_STRING"}:
                 raise QueryValidationError(f"<SORT> child 0 harus expression yang valid, dapat {node.childs[0].type}")
         
         elif node.type == "LIMIT":
-            # LIMIT has 1 child (source)
             if num_children != 1:
                 raise QueryValidationError(f"<LIMIT> harus punya 1 child (source), dapat {num_children}")
     
     elif node.type in CONDITION_NODES:
         if node.type == "OPERATOR":
-            # AND/OR: 2+ children, NOT: 1 child
             if num_children < 1:
                 raise QueryValidationError(f"<OPERATOR> minimal 1 child, dapat {num_children}")
         
         elif node.type == "COMPARISON":
-            # COMPARISON has 2 children (left, right expressions)
             if num_children != 2:
                 raise QueryValidationError(f"<COMPARISON> harus punya 2 children, dapat {num_children}")
         
         elif node.type in {"IN_EXPR", "NOT_IN_EXPR"}:
-            # IN_EXPR has 2 children (column_ref + LIST or subquery)
             if num_children != 2:
                 raise QueryValidationError(f"<{node.type}> harus punya 2 children, dapat {num_children}")
         
         elif node.type in {"EXISTS_EXPR", "NOT_EXISTS_EXPR"}:
-            # EXISTS has 1 child (subquery)
             if num_children != 1:
                 raise QueryValidationError(f"<{node.type}> harus punya 1 child (subquery), dapat {num_children}")
         
         elif node.type in {"BETWEEN_EXPR", "NOT_BETWEEN_EXPR"}:
-            # BETWEEN has 3 children (value, lower, upper)
             if num_children != 3:
                 raise QueryValidationError(f"<{node.type}> harus punya 3 children, dapat {num_children}")
         
         elif node.type in {"IS_NULL_EXPR", "IS_NOT_NULL_EXPR"}:
-            # IS NULL has 1 child (column_ref)
             if num_children != 1:
                 raise QueryValidationError(f"<{node.type}> harus punya 1 child, dapat {num_children}")
     
     elif node.type == "ARITH_EXPR":
-        # ARITH_EXPR has 2 children (left, right)
         if num_children != 2:
             raise QueryValidationError(f"<ARITH_EXPR> harus punya 2 children, dapat {num_children}")
     
     elif node.type == "LIST":
-        # LIST can have 0+ children (list items)
         pass
     
     elif node.type in DML_NODES:
         if node.type == "UPDATE_QUERY":
-            # UPDATE has 2-3 children (relation, assignment(s), optional filter)
             if num_children < 2:
                 raise QueryValidationError(f"<UPDATE_QUERY> minimal 2 children, dapat {num_children}")
         
         elif node.type == "INSERT_QUERY":
-            # INSERT has 3 children (relation, column_list, values_clause)
             if num_children != 3:
                 raise QueryValidationError(f"<INSERT_QUERY> harus punya 3 children, dapat {num_children}")
         
         elif node.type == "DELETE_QUERY":
-            # DELETE has 1-2 children (relation, optional filter)
             if num_children < 1 or num_children > 2:
                 raise QueryValidationError(f"<DELETE_QUERY> harus punya 1-2 children, dapat {num_children}")
         
         elif node.type == "ASSIGNMENT":
-            # ASSIGNMENT has 2 children (column_ref, value_expr)
             if num_children != 2:
                 raise QueryValidationError(f"<ASSIGNMENT> harus punya 2 children, dapat {num_children}")
     
     elif node.type in DDL_NODES:
-        # DDL validation can be added here if needed
         pass
     
     elif node.type in TRANSACTION_NODES:
-        # BEGIN_TRANSACTION can have 0+ children (statements)
-        # COMMIT has 0 children
         pass
     
     elif node.type in UTILITY_NODES:
-        # COLUMN_LIST, VALUES_CLAUSE, COLUMN_DEF_LIST can have 0+ children
         pass
     
-    # Validasi value
     check_value(node)
 
 def check_value(node: QueryTree) -> None:
@@ -265,7 +237,6 @@ def check_value(node: QueryTree) -> None:
         if node.type == "LITERAL_NULL":
             pass
         else:
-            # Literals lain harus punya value
             if not node.val and node.val != 0:
                 raise QueryValidationError(f"<{node.type}> harus punya value")
     

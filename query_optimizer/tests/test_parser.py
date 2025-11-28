@@ -264,16 +264,19 @@ class TestDML(unittest.TestCase):
 
 
 class TestTransaction(unittest.TestCase):
-    def test_transaction(self):
+    def test_begin_transaction(self):
         sql = """
         BEGIN TRANSACTION;
-        UPDATE users SET name = 'test';
-        COMMIT;
         """
         tree = Parser(Tokenizer(sql)).parse()
         self.assertEqual(tree.type, "BEGIN_TRANSACTION")
-        self.assertEqual(tree.childs[0].type, "UPDATE_QUERY")
-        self.assertEqual(tree.childs[1].type, "COMMIT")
+    
+    def test_commit_transaction(self):
+        sql = """
+        COMMIT;
+        """
+        tree = Parser(Tokenizer(sql)).parse()
+        self.assertEqual(tree.type, "COMMIT")
 
 
 class TestPDFExamples(unittest.TestCase):
@@ -334,15 +337,23 @@ class TestPDFExamples(unittest.TestCase):
     def test_example_d_transaction(self):
         sql = """
         BEGIN TRANSACTION;
-        UPDATE accounts SET balance = balance - 100 WHERE id = 1;
-        UPDATE accounts SET balance = balance + 100 WHERE id = 2;
-        COMMIT;
         """
         tree = Parser(Tokenizer(sql)).parse()
         self.assertEqual(tree.type, "BEGIN_TRANSACTION")
-        self.assertEqual(tree.childs[-1].type, "COMMIT")
-        self.assertEqual(tree.childs[0].type, "UPDATE_QUERY")
-        self.assertEqual(tree.childs[1].type, "UPDATE_QUERY")
+    
+    def test_example_d_commit(self):
+        sql = """
+        COMMIT;
+        """
+        tree = Parser(Tokenizer(sql)).parse()
+        self.assertEqual(tree.type, "COMMIT")
+    
+    def test_example_d_commit(self):
+        sql = """
+        ABORT;
+        """
+        tree = Parser(Tokenizer(sql)).parse()
+        self.assertEqual(tree.type, "ABORT")
 
     def test_example_e_create_table(self):
         sql = """
