@@ -165,4 +165,4 @@ def validate_params(params: str) -> bool:
     return isinstance(params, str) and params in {'left', 'right', 'none'}
 
 def clone(node: QueryTree) -> QueryTree:
-    return node.clone(deep=True) if node else None
+    return node.clone(deep=True, preserve_id=True) if node else None

@@ -1,57 +1,140 @@
+import sys
+import random
+
+# ==========================================
+# FIX: Force UTF-8 Encoding for Windows Output
+# ==========================================
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+except AttributeError:
+    # Fallback for older Python versions or specific environments
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
 from query_optimizer.genetic_optimizer import GeneticOptimizer, Individual
-from query_optimizer.optimization_engine import OptimizationEngine
+from query_optimizer.optimization_engine import OptimizationEngine, ParsedQuery
 from query_optimizer.rule_params_manager import get_rule_params_manager
 
-# Example SQL query for testing
-sql = "SELECT users.email FROM users JOIN profiles ON users.id = profiles.user_id WHERE users.age > 25 AND users.status = 'active' AND profiles.bio IS NOT NULL"
+# ==========================================
+# 0. DEFINISI SKEMA
+# ==========================================
+dummy_tables = {
+    "users": ["id", "name", "email"],
+    "profiles": ["id", "user_id", "bio"],
+    "orders": ["id", "user_id", "amount", "total", "product_id"],
+    "products": ["id", "name", "category", "price", "stock", "description", "discount"],
+    "employees": ["id", "name", "salary", "department", "bonus"],
+    "accounts": ["id", "balance"],
+    "logs": ["id", "message"],
+    "payroll": ["salary"]
+}
 
-# Initialize engine and parse query
+# ==========================================
+# 1. SETUP & QUERY AWAL
+# ==========================================
+sql = """
+SELECT u.name, prod.name, o.total 
+FROM users u 
+JOIN profiles prof ON u.id = prof.user_id 
+JOIN orders o ON u.id = o.user_id 
+JOIN products prod ON o.product_id = prod.id 
+WHERE u.email LIKE '%@gmail.com' 
+AND prod.category = 'Electronics' 
+AND o.total > 100000 
+AND prof.bio IS NOT NULL
+"""
+
+print(f"Executing Query: {sql}\n")
+
 engine = OptimizationEngine()
 query = engine.parse_query(sql)
+optimizer_helper = GeneticOptimizer() 
+mgr = get_rule_params_manager()
 
-print("=== Query Tree Awal ===")
+print("==================================================")
+print(" 1. QUERY TREE AWAL (BASE)")
+print("==================================================")
 print(query.query_tree.tree(show_id=True))
 
-# --- MANUAL STEP 1: Analisa Rules ---
-# Karena method _analyze_query_for_rules sudah di-inline ke optimize,
-# kita panggil RuleParamsManager secara manual untuk testing.
-mgr = get_rule_params_manager()
+# Analisa Rules (Manual Step)
 ops = mgr.get_registered_operations()
-
-rule_analysis = {}
+base_analysis = {}
 for op in ops:
-    rule_analysis[op] = mgr.analyze_query(query, op)
+    base_analysis[op] = mgr.analyze_query(query, op)
 
-print("\n=== Rule Analysis Result ===")
-print(rule_analysis)
+# ==========================================
+# 2. POPULASI GENERASI 1
+# ==========================================
+print("\n==================================================")
+print(" 2. GENERASI 1 (INITIAL POPULATION)")
+print("==================================================")
 
-# --- MANUAL STEP 2: Initialize Population ---
-# Membangun populasi manual untuk testing
 population_size = 20
 population = []
 
 for _ in range(population_size):
     params = {}
-    for op, metadata in rule_analysis.items():
+    for op, metadata in base_analysis.items():
         params[op] = {}
         for key, meta in metadata.items():
-            # Key bisa berupa int (NodeID) atau frozenset (Signature)
-            # Generate random params untuk setiap key yang ditemukan
             params[op][key] = mgr.generate_random_params(op, meta)
+    population.append(Individual(params, query))
+
+for ind in population:
+    if ind.fitness is None:
+        ind.fitness = engine.get_cost(ind.query).total_cost
+
+population.sort(key=lambda x: x.fitness)
+
+def print_individual(title, ind, show_genealogy=False):
+    print(f"\n--- {title} ---")
+    print(f"Fitness (Cost): {ind.fitness}")
+    print(f"Params Applied: {ind.operation_params}")
+    if show_genealogy and hasattr(ind, 'genealogy'):
+        print(f"Genealogy Source: {ind.genealogy}")
+    print(ind.query.query_tree.tree(show_id=True))
+
+print("\n>>> BEST Child Generasi 1:")
+print_individual("Best Gen 1", population[0])
+
+# ==========================================
+# 3. SIMULASI CROSSOVER & MUTASI
+# ==========================================
+print("\n==================================================")
+print(" 3. DEMO CROSSOVER & MUTASI (3 PAIRS)")
+print("==================================================")
+
+parents_pool = population[:10]
+demo_pairs = [
+    (parents_pool[0], parents_pool[1]), 
+    (parents_pool[2], parents_pool[3]), 
+    (parents_pool[4], parents_pool[5]) 
+]
+
+for i, (p1, p2) in enumerate(demo_pairs):
+    print(f"\n################ PASANGAN KE-{i+1} ################")
+    print(f"Parent A (Cost: {p1.fitness}) Params: {p1.operation_params}")
+    print(f"Parent B (Cost: {p2.fitness}) Params: {p2.operation_params}")
     
-    # Buat individual baru
-    ind = Individual(params, query)
-    population.append(ind)
-
-print(f"\n=== First Generation ({len(population)} individuals) ===")
-# Tampilkan contoh 1 individu pertama
-for i, individual in enumerate(population[:1]):
-    print(f"\nChild {i+1}:")
-    print("Params:", individual.operation_params)
-    print("Fitness:", individual.fitness) # Akan None karena belum dievaluasi
-    print("Tree Transformation:")
-    print(individual.query.query_tree.tree(show_id=True))
-
-# Jika ingin mengetes optimasi penuh:
-# optimizer = GeneticOptimizer(population_size=20, generations=1)
-# optimized_query = optimizer.optimize(query)
+    # Lakukan Crossover
+    c1, c2 = optimizer_helper._crossover(p1, p2, query)
+    
+    # Khusus Pasangan ke-3, Mutasi
+    mutation_note = ""
+    if i == 2:
+        print("\n[!] MUTASI DIPICU PADA CHILD A...")
+        original_params = str(c1.operation_params)
+        c1 = optimizer_helper._mutate(c1)
+        mutation_note = f" (MUTATED!)\n"
+    
+    c1.fitness = engine.get_cost(c1.query).total_cost
+    c2.fitness = engine.get_cost(c2.query).total_cost
+    
+    print(f"\n-> Hasil Crossover Child A{mutation_note}:")
+    print_individual("Child A", c1, show_genealogy=True)
+    
+    print(f"\n-> Hasil Crossover Child B:")
+    print_individual("Child B", c2, show_genealogy=True)
+    
+    population.append(c1)
+    population.append(c2)

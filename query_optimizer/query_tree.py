@@ -39,12 +39,14 @@ class QueryTree:
         
         result = prefix
         if prefix:
-            result += "└── " if is_last else "├── "
+            # Menggunakan karakter ASCII biasa agar tidak error di Windows/Text File
+            result += "`-- " if is_last else "|-- "
         result += node_str + "\n"
         
         for i, child in enumerate(self.childs):
             is_last_child = (i == len(self.childs) - 1)
-            new_prefix = prefix + ("    " if is_last else "│   ")
+            # Menggunakan karakter ASCII biasa
+            new_prefix = prefix + ("    " if is_last else "|   ")
             result += child.tree(new_prefix, is_last_child, show_id)
         return result
     
