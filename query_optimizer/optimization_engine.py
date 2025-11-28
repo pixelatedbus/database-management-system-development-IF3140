@@ -146,9 +146,10 @@ class OptimizationEngine:
         """Default fitness function using cost estimation."""
         return float(self.get_cost(query))
     
-    def get_cost(self, query_tree:ParsedQuery) -> int:
+    def get_cost(self, query_tree:ParsedQuery) -> float:
 
-        return self.cost_calculator.get_cost(query_tree.query_tree)
+        total_cost = self.cost_calculator.get_cost(query_tree.query_tree).total_cost()
+        return total_cost
     
     def reset(self) -> None:
         """
