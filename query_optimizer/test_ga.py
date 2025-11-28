@@ -82,7 +82,7 @@ for _ in range(population_size):
 
 for ind in population:
     if ind.fitness is None:
-        ind.fitness = engine.get_cost(ind.query).total_cost
+        ind.fitness = engine.get_cost(ind.query)
 
 population.sort(key=lambda x: x.fitness)
 
@@ -127,8 +127,8 @@ for i, (p1, p2) in enumerate(demo_pairs):
         c1 = optimizer_helper._mutate(c1)
         mutation_note = f" (MUTATED!)\n"
     
-    c1.fitness = engine.get_cost(c1.query).total_cost
-    c2.fitness = engine.get_cost(c2.query).total_cost
+    c1.fitness = engine.get_cost(c1.query)
+    c2.fitness = engine.get_cost(c2.query)
     
     print(f"\n-> Hasil Crossover Child A{mutation_note}:")
     print_individual("Child A", c1, show_genealogy=True)
