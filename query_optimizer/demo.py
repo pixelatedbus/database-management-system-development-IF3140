@@ -1,25 +1,15 @@
 """
-Demo Program untuk Query Optimizer
-
-New Structure:
-- Demo 0: Help
-- Demo 1-8: Individual Rules with scenarios
-- Demo 9: Parse
-- Demo 10: Optimize
-- Demo 11: Genetic Algorithm
-- Demo 12: All demos
+Demo Program
 """
 
 
 def print_separator(title=""):
-    """Print section separator"""
     print("\n" + "="*70)
     if title:
         print(f"  {title}")
         print("="*70)
 
 def print_help():
-    """Print help message for demo usage"""
     print_separator("QUERY OPTIMIZER DEMO HELP")
     print("Usage: python -m query_optimizer.demo [N] or [N.S]")
     print("")
@@ -28,12 +18,12 @@ def print_help():
     print("  1.1  -   Scenario: Full cascade")
     print("  1.2  -   Scenario: No cascade")
     print("  1.3  -   Scenario: Mixed cascade")
-    print("  1.4  -   Scenario: Uncascade (reverse)")
+    print("  1.4  -   Scenario: Cycle transitions")
     print("")
     print("  2    - Rule 2: Reorder AND Conditions (Seleksi Komutatif)")
-    print("  2.1  -   Scenario: Original order baseline")
-    print("  2.2  -   Scenario: Reversed order")
-    print("  2.3  -   Scenario: Finding optimal order")
+    print("  2.1  -   Scenario: Vertical reordering")
+    print("  2.2  -   Scenario: Horizontal reordering")
+    print("  2.3  -   Scenario: Complex shuffle")
     print("")
     print("  3    - Rule 3: Projection Elimination")
     print("  3.1  -   Scenario: Nested projections")
@@ -61,7 +51,9 @@ def print_help():
     print("")
     print("  8    - Rule 8: Projection over Join")
     print("  8.1  -   Scenario: Basic pushdown")
-    print("  8.2  -   Scenario: Selective projection")
+    print("  8.2  -   Scenario: Join Key Preservation")
+    print("  8.3  -   Scenario: Undo Optimization")
+    print("  8.4  -   Scenario: SELECT * (Negative Test)")
     print("")
     print("General demos:")
     print("  9    - Parse: Parse SQL queries and show query trees")
@@ -77,36 +69,42 @@ def print_help():
 # =============================================================================
 
 def demo_rule_1():
-    """Demo 1: Rule 1 - Cascade Filters (all scenarios)"""
-    print_separator("DEMO 1: Rule 1 - Cascade Filters (Seleksi Konjungtif)")
-    
-    print("\nThis demo has multiple scenarios:")
-    print("  1.1 - Full cascade (all single filters)")
-    print("  1.2 - No cascade (keep all grouped)")
-    print("  1.3 - Mixed cascade (some single, some grouped)")
-    print("  1.4 - Uncascade (reverse transformation)")
-    
+    print_separator("DEMO 1: Rule 1 - (Seleksi Konjungtif)")
     print("\nRunning all scenarios...")
     
     from query_optimizer.subdemo.demo_rule1_scenarios import (
         scenario_1_full_cascade,
         scenario_2_no_cascade,
         scenario_3_mixed_cascade,
-        scenario_4_uncascade
+        scenario_4_cycle_transitions
     )
     
     scenario_1_full_cascade()
     scenario_2_no_cascade()
     scenario_3_mixed_cascade()
-    scenario_4_uncascade()
+    scenario_4_cycle_transitions()
     
     print_separator("DEMO 1 COMPLETED")
-    print("\nKey Insights:")
-    print("- Rule 1 allows flexible cascade/grouping of AND conditions")
-    print("- Each variation produces different cost")
-    print("- Best order depends on selectivity of conditions")
-    print("- More selective conditions should be evaluated first")
-    print("- Genetic Algorithm can find optimal configuration (see Demo 11)")
+
+# =============================================================================
+# RULE 2: REORDER AND CONDITIONS
+# =============================================================================
+
+def demo_rule_2():
+    print_separator("DEMO 2: Rule 2 - (Seleksi Komutatif)")
+    print("\nRunning all scenarios...")
+    
+    from query_optimizer.subdemo.demo_rule2_scenarios import (
+        scenario_1_vertical_reordering,
+        scenario_2_horizontal_reordering,
+        scenario_3_complex_shuffle
+    )
+    
+    scenario_1_vertical_reordering()
+    scenario_2_horizontal_reordering()
+    scenario_3_complex_shuffle()
+
+    print_separator("DEMO 2 COMPLETED")
 
 # =============================================================================
 # RULE 3: PROJECTION ELIMINATION
@@ -257,29 +255,24 @@ def demo_rule_7():
 # =============================================================================
 
 def demo_rule_8():
-    """Demo 8: Rule 8 - Projection over Join (all scenarios)"""
     print_separator("DEMO 8: Rule 8 - Projection over Join")
-    
-    print("\nThis demo has multiple scenarios:")
-    print("  8.1 - Basic projection pushdown")
-    print("  8.2 - Selective projection (many columns)")
-    
     print("\nRunning all scenarios...")
     
     from query_optimizer.subdemo.demo_rule8_scenarios import (
         scenario_1_basic_pushdown,
-        scenario_2_selective_projection
+        scenario_2_join_key_preservation,
+        scenario_3_nested_joins,
+        scenario_4_undo_optimization,
+        scenario_5_star_query
     )
     
     scenario_1_basic_pushdown()
-    scenario_2_selective_projection()
+    scenario_2_join_key_preservation()
+    scenario_3_nested_joins()
+    scenario_4_undo_optimization()
+    scenario_5_star_query()
     
     print_separator("DEMO 8 COMPLETED")
-    print("\nKey Insights:")
-    print("- Rule 8 pushes projections to join children")
-    print("- Reduces tuple width before join")
-    print("- Each relation projects only needed columns + join keys")
-    print("- More beneficial for wide tables with many columns")
 
 
 # =============================================================================
@@ -480,6 +473,7 @@ def demo_all():
     
     # Rules
     demo_rule_1()
+    demo_rule_2()
     demo_rule_3()
     demo_rule_4()
     demo_rule_5()
@@ -543,7 +537,7 @@ def main():
                     scenario_1_full_cascade,
                     scenario_2_no_cascade,
                     scenario_3_mixed_cascade,
-                    scenario_4_uncascade
+                    scenario_4_cycle_transitions
                 )
                 
                 if scenario_num == 1:
@@ -553,10 +547,34 @@ def main():
                 elif scenario_num == 3:
                     scenario_3_mixed_cascade()
                 elif scenario_num == 4:
-                    scenario_4_uncascade()
+                    scenario_4_cycle_transitions()
                 else:
                     print(f"\n Error: Invalid scenario number {scenario_num}")
                     print("Valid scenarios: 1.1, 1.2, 1.3, 1.4")
+                    return
+                
+                print_separator("DEMO COMPLETED")
+        
+        # Rule 2: Reorder AND Conditions
+        elif demo_num == 2:
+            if scenario_num is None:
+                demo_rule_2()
+            else:
+                from query_optimizer.subdemo.demo_rule2_scenarios import (
+                    scenario_1_vertical_reordering,
+                    scenario_2_horizontal_reordering,
+                    scenario_3_complex_shuffle
+                )
+                
+                if scenario_num == 1:
+                    scenario_1_vertical_reordering()
+                elif scenario_num == 2:
+                    scenario_2_horizontal_reordering()
+                elif scenario_num == 3:
+                    scenario_3_complex_shuffle()
+                else:
+                    print(f"\n Error: Invalid scenario number {scenario_num}")
+                    print("Valid scenarios: 2.1, 2.2, 2.3")
                     return
                 
                 print_separator("DEMO COMPLETED")
@@ -676,16 +694,25 @@ def main():
             else:
                 from query_optimizer.subdemo.demo_rule8_scenarios import (
                     scenario_1_basic_pushdown,
-                    scenario_2_selective_projection
+                    scenario_2_join_key_preservation,
+                    scenario_3_nested_joins,
+                    scenario_4_undo_optimization,
+                    scenario_5_star_query
                 )
                 
                 if scenario_num == 1:
                     scenario_1_basic_pushdown()
                 elif scenario_num == 2:
-                    scenario_2_selective_projection()
+                    scenario_2_join_key_preservation()
+                elif scenario_num == 3:
+                    scenario_3_nested_joins()
+                elif scenario_num == 4:
+                    scenario_4_undo_optimization()
+                elif scenario_num == 5:
+                    scenario_5_star_query()
                 else:
                     print(f"\n Error: Invalid scenario number {scenario_num}")
-                    print("Valid scenarios: 8.1, 8.2")
+                    print("Valid scenarios: 8.1, 8.2, 8.3, 8.4, 8.5")
                     return
                 
                 print_separator("DEMO COMPLETED")
