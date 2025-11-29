@@ -14,31 +14,8 @@ def get_metadata():
     """
     sm = StorageManager()
     metadata = sm.get_metadata()
-    
-    # Dummy tables untuk testing di comment jika sudah test integrasi
-    dummy_tables = {
-        "users": ["id", "name", "email"],
-        "profiles": ["id", "user_id", "bio"],
-        "orders": ["id", "user_id", "amount", "total", "product_id"],
-        "products": ["id", "name", "category", "price", "stock", "description", "discount"],
-        "employees": ["id", "name", "salary", "department", "bonus"],
-        "accounts": ["id", "balance"],
-        "logs": ["id", "message"],
-        "payroll": ["salary"]
-    }
-    
-    all_tables = set(metadata["tables"])
-    all_columns = metadata["columns"].copy()
-    
-    for table, columns in dummy_tables.items():
-        if table not in all_tables:
-            all_tables.add(table)
-            all_columns[table] = columns
-    
-    return {
-        "tables": sorted(list(all_tables)),
-        "columns": all_columns
-    }
+
+    return metadata
 
 ATOMIC_NODES = {
     "IDENTIFIER",

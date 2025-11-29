@@ -1,8 +1,10 @@
 """
 Unit tests untuk Rule 8: Projection Operation over Theta Join Operation
+Menggunakan Mock Metadata untuk isolasi pengujian.
 """
 
 import unittest
+from unittest.mock import patch, MagicMock
 from query_optimizer.query_tree import QueryTree
 from query_optimizer.optimization_engine import ParsedQuery
 from query_optimizer.query_check import check_query
@@ -15,6 +17,19 @@ from query_optimizer.rule.rule_8 import (
     extract_join_condition_columns
 )
 
+# --- MOCK METADATA ---
+MOCK_METADATA = {
+    "tables": ["users", "profiles", "orders", "table1", "table2", "t1", "t2"],
+    "columns": {
+        "users": ["id", "name", "age", "bio"],
+        "profiles": ["id", "user_id", "bio"],
+        "orders": ["id", "user_id", "amount"],
+        "table1": ["id", "name"],
+        "table2": ["id", "name"],
+        "t1": ["id", "name"],
+        "t2": ["id", "name"]
+    }
+}
 
 def make_comparison(operator="=", left_col="id", right_col="id", left_table=None, right_table=None):
     """Helper to create valid COMPARISON node for join conditions"""
@@ -49,10 +64,11 @@ def make_comparison(operator="=", left_col="id", right_col="id", left_table=None
     return comp
 
 
+@patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA)
 class TestAnalyzeProjectionOverJoin(unittest.TestCase):
     """Test analisis pattern PROJECT → JOIN"""
     
-    def test_detect_project_join_pattern(self):
+    def test_detect_project_join_pattern(self, mock_meta):
         """Test detection of PROJECT → JOIN pattern"""
         # Build: PROJECT → JOIN
         rel1 = QueryTree("RELATION", "users")
@@ -85,7 +101,7 @@ class TestAnalyzeProjectionOverJoin(unittest.TestCase):
         self.assertIn(join.id, opportunities)
         self.assertTrue(opportunities[join.id]['can_optimize'])
     
-    def test_no_join_pattern(self):
+    def test_no_join_pattern(self, mock_meta):
         """Test when there's no JOIN"""
         rel = QueryTree("RELATION", "users")
         project = QueryTree("PROJECT", "")
@@ -98,10 +114,11 @@ class TestAnalyzeProjectionOverJoin(unittest.TestCase):
         self.assertEqual(len(opportunities), 0)
 
 
+@patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA)
 class TestExtractColumns(unittest.TestCase):
     """Test extraction of columns"""
     
-    def test_extract_projected_columns(self):
+    def test_extract_projected_columns(self, mock_meta):
         """Test extraction of projected column names"""
         # Build PROJECT with columns
         col1 = QueryTree("COLUMN_REF", "")
@@ -126,7 +143,7 @@ class TestExtractColumns(unittest.TestCase):
         self.assertIn("age", cols)
         self.assertEqual(len(cols), 2)
     
-    def test_extract_join_condition_columns(self):
+    def test_extract_join_condition_columns(self, mock_meta):
         """Test extraction of columns from join condition"""
         # Build: emp.dept_id = dept.id
         left_col = QueryTree("COLUMN_REF", "")
@@ -151,10 +168,11 @@ class TestExtractColumns(unittest.TestCase):
         self.assertIn("id", right_cols)
 
 
+@patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA)
 class TestCanApplyRule8(unittest.TestCase):
     """Test kondisi penerapan Rule 8"""
     
-    def test_can_apply_basic_case(self):
+    def test_can_apply_basic_case(self, mock_meta):
         """Test basic case where Rule 8 can be applied"""
         # Build valid structure
         rel1 = QueryTree("RELATION", "table1")
@@ -173,7 +191,7 @@ class TestCanApplyRule8(unittest.TestCase):
         
         self.assertTrue(can_apply_rule8(project))
     
-    def test_cannot_apply_select_star(self):
+    def test_cannot_apply_select_star(self, mock_meta):
         """Test SELECT * cannot use Rule 8"""
         rel1 = QueryTree("RELATION", "table1")
         rel2 = QueryTree("RELATION", "table2")
@@ -189,7 +207,7 @@ class TestCanApplyRule8(unittest.TestCase):
         
         self.assertFalse(can_apply_rule8(project))
     
-    def test_cannot_apply_no_join(self):
+    def test_cannot_apply_no_join(self, mock_meta):
         """Test when there's no JOIN child"""
         rel = QueryTree("RELATION", "table1")
         col1 = QueryTree("COLUMN_REF", "")
@@ -200,7 +218,7 @@ class TestCanApplyRule8(unittest.TestCase):
         
         self.assertFalse(can_apply_rule8(project))
     
-    def test_cannot_apply_natural_join(self):
+    def test_cannot_apply_natural_join(self, mock_meta):
         """Test NATURAL JOIN is not supported"""
         rel1 = QueryTree("RELATION", "table1")
         rel2 = QueryTree("RELATION", "table2")
@@ -217,10 +235,11 @@ class TestCanApplyRule8(unittest.TestCase):
         self.assertFalse(can_apply_rule8(project))
 
 
+@patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA)
 class TestPushProjection(unittest.TestCase):
     """Test push projection transformation"""
     
-    def test_push_projection_basic(self):
+    def test_push_projection_basic(self, mock_meta):
         """Test basic push projection transformation"""
         # Build query structure
         rel1 = QueryTree("RELATION", "users")
@@ -257,10 +276,11 @@ class TestPushProjection(unittest.TestCase):
         self.assertEqual(optimized.query_tree.type, "PROJECT")
 
 
+@patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA)
 class TestUndoRule8(unittest.TestCase):
     """Test undo Rule 8 transformation"""
     
-    def test_undo_removes_projections(self):
+    def test_undo_removes_projections(self, mock_meta):
         """Test that undo removes projections under join"""
         # Build structure with projections under join
         rel1 = QueryTree("RELATION", "users")
@@ -299,10 +319,11 @@ class TestUndoRule8(unittest.TestCase):
         self.assertEqual(join_node.childs[1].type, "RELATION")
 
 
+@patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA)
 class TestRule8Integration(unittest.TestCase):
     """Test Rule 8 dengan query yang lebih kompleks"""
     
-    def test_multiple_columns_projection(self):
+    def test_multiple_columns_projection(self, mock_meta):
         """Test dengan multiple columns dalam projection"""
         # Build: SELECT name, bio FROM users JOIN profiles
         rel1 = QueryTree("RELATION", "users")
@@ -346,10 +367,11 @@ class TestRule8Integration(unittest.TestCase):
             check_query(optimized.query_tree)
 
 
+@patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA)
 class TestPushProjectionOverJoins(unittest.TestCase):
     """Test main function push_projection_over_joins"""
     
-    def test_push_projection_over_joins_applies_to_all(self):
+    def test_push_projection_over_joins_applies_to_all(self, mock_meta):
         """Test that push_projection_over_joins applies to all opportunities"""
         from query_optimizer.rule.rule_8 import push_projection_over_joins
         
@@ -386,7 +408,7 @@ class TestPushProjectionOverJoins(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertIsInstance(result, ParsedQuery)
     
-    def test_push_projection_no_opportunities(self):
+    def test_push_projection_no_opportunities(self, mock_meta):
         """Test when there are no opportunities"""
         from query_optimizer.rule.rule_8 import push_projection_over_joins
         

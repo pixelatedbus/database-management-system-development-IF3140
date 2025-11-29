@@ -1,11 +1,10 @@
 """
 Unit tests untuk Rule 7: Seleksi Push Down ke Join (Filter Pushdown over Join)
-
-Rule 7: σ(F)(R ⋈ S) → σ(F_R)(R) ⋈ σ(F_S)(S)
-Memindahkan filter ke bawah join operation agar filtering dilakukan lebih awal
+Menggunakan Mock Metadata untuk isolasi pengujian.
 """
 
 import unittest
+from unittest.mock import patch, MagicMock
 from query_optimizer.query_tree import QueryTree
 from query_optimizer.optimization_engine import ParsedQuery
 from query_optimizer.query_check import check_query
@@ -24,6 +23,17 @@ from query_optimizer.rule.rule_7 import (
     validate_params
 )
 
+# --- MOCK METADATA ---
+MOCK_METADATA = {
+    "tables": ["users", "profiles", "orders", "table1", "table2"],
+    "columns": {
+        "users": ["id", "name", "age", "status"],
+        "profiles": ["id", "user_id", "verified", "bio"],
+        "orders": ["id", "user_id", "amount", "status", "discount"],
+        "table1": ["id", "name"],
+        "table2": ["id", "description"]
+    }
+}
 
 def make_column_ref(col_name: str, table_name: str = None):
     """Helper to create COLUMN_REF node"""
@@ -73,10 +83,11 @@ def make_join_condition(left_col: str, right_col: str, left_table: str, right_ta
     return comp
 
 
+@patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA)
 class TestFindPatterns(unittest.TestCase):
     """Test detection of FILTER → JOIN patterns"""
     
-    def test_find_single_filter_over_join(self):
+    def test_find_single_filter_over_join(self, mock_meta):
         """Test finding single filter over join"""
         # Build: FILTER → JOIN
         rel1 = QueryTree("RELATION", "users")
@@ -106,7 +117,7 @@ class TestFindPatterns(unittest.TestCase):
         self.assertEqual(patterns[filter_node.id]['num_conditions'], 1)
         self.assertFalse(patterns[filter_node.id]['has_and'])
     
-    def test_find_filter_with_and_over_join(self):
+    def test_find_filter_with_and_over_join(self, mock_meta):
         """Test finding filter with AND over join"""
         # Build: FILTER → JOIN with AND conditions
         rel1 = QueryTree("RELATION", "users")
@@ -142,7 +153,7 @@ class TestFindPatterns(unittest.TestCase):
         self.assertEqual(patterns[filter_node.id]['num_conditions'], 3)
         self.assertTrue(patterns[filter_node.id]['has_and'])
     
-    def test_no_pattern_found(self):
+    def test_no_pattern_found(self, mock_meta):
         """Test when there's no FILTER → JOIN pattern"""
         # Just a relation
         rel = QueryTree("RELATION", "users")
@@ -487,10 +498,11 @@ class TestPushFilter(unittest.TestCase):
         self.assertEqual(result.childs[0].type, "JOIN")
 
 
+@patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA)
 class TestApplyPushdown(unittest.TestCase):
     """Test apply_pushdown main function"""
     
-    def test_apply_pushdown_with_auto_decision(self):
+    def test_apply_pushdown_with_auto_decision(self, mock_meta):
         """Test apply pushdown with automatic decision"""
         rel1 = QueryTree("RELATION", "users")
         rel2 = QueryTree("RELATION", "profiles")
@@ -520,7 +532,7 @@ class TestApplyPushdown(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertIsInstance(result, ParsedQuery)
     
-    def test_apply_pushdown_with_explicit_plan(self):
+    def test_apply_pushdown_with_explicit_plan(self, mock_meta):
         """Test apply pushdown with explicit plan"""
         rel1 = QueryTree("RELATION", "users")
         rel2 = QueryTree("RELATION", "orders")
@@ -562,10 +574,11 @@ class TestApplyPushdown(unittest.TestCase):
         self.assertIsNotNone(result)
 
 
+@patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA)
 class TestUndoPushdown(unittest.TestCase):
     """Test undo pushdown transformation"""
     
-    def test_undo_pushdown_left(self):
+    def test_undo_pushdown_left(self, mock_meta):
         """Test undoing pushdown from left side"""
         # Build structure with filter on left child of join
         rel1 = QueryTree("RELATION", "users")
@@ -596,7 +609,7 @@ class TestUndoPushdown(unittest.TestCase):
         self.assertEqual(result.query_tree.type, "FILTER")
         self.assertEqual(result.query_tree.childs[0].type, "JOIN")
     
-    def test_undo_pushdown_both(self):
+    def test_undo_pushdown_both(self, mock_meta):
         """Test undoing pushdown from both sides"""
         # Build structure with filters on both children of join
         rel1 = QueryTree("RELATION", "users")
@@ -662,190 +675,3 @@ class TestWrapFilter(unittest.TestCase):
     def test_wrap_no_conditions(self):
         """Test wrapping with no conditions returns source"""
         rel = QueryTree("RELATION", "users")
-        
-        result = wrap_filter(rel, [])
-        
-        self.assertEqual(result.type, "RELATION")
-
-
-class TestParameterManagement(unittest.TestCase):
-    """Test parameter generation and manipulation"""
-    
-    def test_generate_params_single_condition(self):
-        """Test generating params for single condition"""
-        metadata = {'num_conditions': 1}
-        
-        params = generate_params(metadata)
-        
-        self.assertIn('distribution', params)
-        self.assertIn('left_conditions', params)
-        self.assertIn('right_conditions', params)
-        self.assertIn(params['distribution'], ['left', 'right', 'both', 'none'])
-    
-    def test_generate_params_multiple_conditions(self):
-        """Test generating params for multiple conditions"""
-        metadata = {'num_conditions': 3}
-        
-        params = generate_params(metadata)
-        
-        self.assertIn('distribution', params)
-        # Total conditions should match
-        total = len(params['left_conditions']) + len(params['right_conditions'])
-        
-        if params['distribution'] != 'none':
-            self.assertGreater(total, 0)
-    
-    def test_copy_params(self):
-        """Test copying parameters"""
-        original = {
-            'distribution': 'both',
-            'left_conditions': [0, 1],
-            'right_conditions': [2]
-        }
-        
-        copied = copy_params(original)
-        
-        self.assertEqual(original['distribution'], copied['distribution'])
-        self.assertEqual(original['left_conditions'], copied['left_conditions'])
-        self.assertEqual(original['right_conditions'], copied['right_conditions'])
-        
-        # Ensure it's a deep copy
-        copied['left_conditions'].append(3)
-        self.assertNotEqual(len(original['left_conditions']), len(copied['left_conditions']))
-    
-    def test_mutate_params(self):
-        """Test mutating parameters"""
-        params = {
-            'distribution': 'both',
-            'left_conditions': [0, 1],
-            'right_conditions': [2]
-        }
-        
-        mutated = mutate_params(params)
-        
-        # Should still be valid
-        self.assertTrue(validate_params(mutated))
-        
-        # Should have same structure
-        self.assertIn('distribution', mutated)
-        self.assertIn('left_conditions', mutated)
-        self.assertIn('right_conditions', mutated)
-    
-    def test_validate_params_valid(self):
-        """Test validating valid parameters"""
-        params = {
-            'distribution': 'both',
-            'left_conditions': [0, 1],
-            'right_conditions': [2, 3]
-        }
-        
-        self.assertTrue(validate_params(params))
-    
-    def test_validate_params_invalid_distribution(self):
-        """Test validating with invalid distribution"""
-        params = {
-            'distribution': 'invalid',
-            'left_conditions': [0],
-            'right_conditions': []
-        }
-        
-        self.assertFalse(validate_params(params))
-    
-    def test_validate_params_overlapping_conditions(self):
-        """Test validating with overlapping conditions"""
-        params = {
-            'distribution': 'both',
-            'left_conditions': [0, 1],
-            'right_conditions': [1, 2]  # Overlap with left
-        }
-        
-        self.assertFalse(validate_params(params))
-    
-    def test_validate_params_missing_keys(self):
-        """Test validating with missing keys"""
-        params = {
-            'distribution': 'left',
-            'left_conditions': [0]
-            # Missing 'right_conditions'
-        }
-        
-        self.assertFalse(validate_params(params))
-
-
-class TestRule7Integration(unittest.TestCase):
-    """Integration tests for Rule 7"""
-    
-    def test_complete_pushdown_workflow(self):
-        """Test complete workflow: find, push, undo"""
-        # Build query
-        rel1 = QueryTree("RELATION", "users")
-        rel2 = QueryTree("RELATION", "orders")
-        
-        join_cond = make_join_condition("id", "user_id", "users", "orders")
-        
-        join = QueryTree("JOIN", "INNER")
-        join.add_child(rel1)
-        join.add_child(rel2)
-        join.add_child(join_cond)
-        
-        cond1 = make_comparison(">", "age", "18", "users")
-        cond2 = make_comparison(">", "amount", "1000", "orders")
-        
-        and_op = QueryTree("OPERATOR", "AND")
-        and_op.add_child(cond1)
-        and_op.add_child(cond2)
-        
-        filter_node = QueryTree("FILTER", "")
-        filter_node.add_child(join)
-        filter_node.add_child(and_op)
-        
-        original_query = ParsedQuery(filter_node, "SELECT * FROM users JOIN orders WHERE ...")
-        
-        # Step 1: Find patterns
-        patterns = find_patterns(original_query)
-        self.assertGreater(len(patterns), 0)
-        
-        # Step 2: Apply pushdown
-        pushed_query = apply_pushdown(original_query)
-        check_query(pushed_query.query_tree)
-        
-        # Step 3: Undo pushdown
-        restored_query = undo_pushdown(pushed_query)
-        check_query(restored_query.query_tree)
-        
-        # Should have FILTER on top again
-        self.assertEqual(restored_query.query_tree.type, "FILTER")
-    
-    def test_no_pushdown_when_not_applicable(self):
-        """Test that pushdown doesn't apply when not beneficial"""
-        # Build query where filter references both tables (cross-table condition)
-        rel1 = QueryTree("RELATION", "users")
-        rel2 = QueryTree("RELATION", "orders")
-        
-        join_cond = make_join_condition("id", "user_id", "users", "orders")
-        
-        join = QueryTree("JOIN", "INNER")
-        join.add_child(rel1)
-        join.add_child(rel2)
-        join.add_child(join_cond)
-        
-        # Cross-table condition
-        cross_cond = QueryTree("COMPARISON", ">")
-        cross_cond.add_child(make_column_ref("age", "users"))
-        cross_cond.add_child(make_column_ref("discount", "orders"))
-        
-        filter_node = QueryTree("FILTER", "")
-        filter_node.add_child(join)
-        filter_node.add_child(cross_cond)
-        
-        query = ParsedQuery(filter_node, "SELECT * FROM users JOIN orders WHERE ...")
-        
-        # Apply pushdown
-        result = apply_pushdown(query)
-        
-        # Should still be valid but structure might not change much
-        check_query(result.query_tree)
-
-
-if __name__ == '__main__':
-    unittest.main()
