@@ -25,7 +25,6 @@ class OptimizationEngine:
     _instance: Optional[OptimizationEngine] = None
     
     def __new__(cls):
-        """Singleton pattern"""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
@@ -43,9 +42,6 @@ class OptimizationEngine:
         self.cost_calculator = CostCalculator(self.statistics)
     
     def parse_query(self, sql: str) -> ParsedQuery:
-        """
-        Parse SQL query string into a QueryTree.
-        """
         self.original_sql = sql
         
         tokenizer = Tokenizer(sql)
@@ -66,8 +62,7 @@ class OptimizationEngine:
         population_size: int = 50,
         generations: int = 100,
         mutation_rate: float = 0.1,
-        # crossover_rate: float = 0.8,
-        # elitism: int = 2,
+        elitism: int = 2,
         # fitness_func: Optional[Callable[[ParsedQuery], float]] = None
     ) -> ParsedQuery:
         """
@@ -79,26 +74,10 @@ class OptimizationEngine:
             population_size: GA population size (default: 50)
             generations: GA number of generations (default: 100)
             mutation_rate: GA mutation rate (default: 0.1)
-            crossover_rate: GA crossover rate (default: 0.8)
             elitism: GA elitism count (default: 2)
-            fitness_func: Custom fitness function. If None, uses default cost function
         
         Returns:
-            ParsedQuery: Optimized query tree
-        
-        Examples:
-            # Basic optimization with default GA settings
-            optimized = engine.optimize_query(query)
-            
-            # Quick optimization with smaller parameters
-            optimized = engine.optimize_query(query, population_size=20, generations=30)
-            
-            # Without GA (returns original query)
-            optimized = engine.optimize_query(query, use_genetic=False)
-            
-            # With custom fitness function
-            def my_fitness(q): return len(q.query_tree.find_nodes_by_type("FILTER"))
-            optimized = engine.optimize_query(query, fitness_func=my_fitness)
+            ParsedQuery: Optimized query tree        
         """
 
         if query_tree is None:
@@ -120,40 +99,29 @@ class OptimizationEngine:
         query_tree = push_projection_over_joins(query_tree)
         
         if use_genetic:
-            # Lazy import
             from .genetic_optimizer import GeneticOptimizer
             
-            # Use Genetic Algorithm for optimization
             ga = GeneticOptimizer(
                 population_size=population_size,
                 generations=generations,
                 mutation_rate=mutation_rate,
-                # crossover_rate=crossover_rate,
-                # elitism=elitism,
+                elitism=elitism or 2,
                 # fitness_func=fitness_func or self._default_fitness_func
             )
             
             optimized_tree, history = ga.optimize(query_tree)
             self.optimized_tree = optimized_tree.query_tree
         else:
-            # Return original query unchanged
             optimized_tree = query_tree
             self.optimized_tree = optimized_tree.query_tree
 
         return optimized_tree
     
-    def _default_fitness_func(self, query: ParsedQuery) -> float:
-        """Default fitness function using cost estimation."""
-        return float(self.get_cost(query))
-    
-    def get_cost(self, query_tree:ParsedQuery) -> int:
-
-        return self.cost_calculator.get_cost(query_tree.query_tree)
+    def get_cost(self, query_tree:ParsedQuery) -> float:
+        total_cost = self.cost_calculator.get_cost(query_tree.query_tree).total_cost
+        return total_cost
     
     def reset(self) -> None:
-        """
-        Reset the engine state.
-        """
         self.query_tree = None
         self.optimized_tree = None
         self.original_sql = ""

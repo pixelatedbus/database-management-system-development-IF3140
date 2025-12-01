@@ -1,14 +1,28 @@
 """
 Test integration of Rule 5 (Join Commutativity) with Genetic Algorithm
+Menggunakan Mock Metadata untuk isolasi pengujian.
 """
 
 import unittest
+from unittest.mock import patch, MagicMock
 from query_optimizer.genetic_optimizer import GeneticOptimizer, Individual
 from query_optimizer.optimization_engine import OptimizationEngine, ParsedQuery
 from query_optimizer.rule_params_manager import get_rule_params_manager
 from query_optimizer.rule import rule_5
 
+# --- MOCK METADATA ---
+MOCK_METADATA = {
+    "tables": ["employees", "payroll", "users", "orders", "products"],
+    "columns": {
+        "employees": ["id", "name", "salary", "employee_id"], 
+        "payroll": ["id", "employee_id", "amount"],
+        "users": ["id", "name"],
+        "orders": ["id", "user_id", "product_id"],
+        "products": ["id", "name", "price"]
+    }
+}
 
+@patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA)
 class TestRule5Integration(unittest.TestCase):
     """Test Rule 5 integration dengan GA."""
     
@@ -30,7 +44,7 @@ class TestRule5Integration(unittest.TestCase):
         SELECT * FROM employees e NATURAL JOIN payroll p
         """
     
-    def test_rule_5_find_join_nodes(self):
+    def test_rule_5_find_join_nodes(self, mock_meta):
         """Test apakah rule 5 bisa detect JOIN nodes."""
         parsed = self.engine.parse_query(self.query_str_1)
         join_nodes = rule_5.find_join_nodes(parsed)
@@ -44,14 +58,14 @@ class TestRule5Integration(unittest.TestCase):
             self.assertIsNotNone(metadata['left_child'])
             self.assertIsNotNone(metadata['right_child'])
     
-    def test_rule_5_multiple_joins(self):
+    def test_rule_5_multiple_joins(self, mock_meta):
         """Test detection multiple JOIN nodes."""
         parsed = self.engine.parse_query(self.query_str_2)
         join_nodes = rule_5.find_join_nodes(parsed)
         
         self.assertEqual(len(join_nodes), 2)
     
-    def test_rule_5_params_generation(self):
+    def test_rule_5_params_generation(self, mock_meta):
         """Test generation random params untuk rule 5."""
         metadata = {
             'left_child': None,
@@ -64,31 +78,31 @@ class TestRule5Integration(unittest.TestCase):
         self.assertIn(True, results)
         self.assertIn(False, results)
     
-    def test_rule_5_params_mutation(self):
+    def test_rule_5_params_mutation(self, mock_meta):
         """Test mutation untuk join child params."""
         self.assertEqual(rule_5.mutate_join_child_params(True), False)
         self.assertEqual(rule_5.mutate_join_child_params(False), True)
     
-    def test_rule_5_params_copy(self):
+    def test_rule_5_params_copy(self, mock_meta):
         """Test copy params."""
         self.assertEqual(rule_5.copy_join_child_params(True), True)
         self.assertEqual(rule_5.copy_join_child_params(False), False)
     
-    def test_rule_5_params_validation(self):
+    def test_rule_5_params_validation(self, mock_meta):
         """Test validation params."""
         self.assertTrue(rule_5.validate_join_child_params(True))
         self.assertTrue(rule_5.validate_join_child_params(False))
         self.assertFalse(rule_5.validate_join_child_params("invalid"))
         self.assertFalse(rule_5.validate_join_child_params(None))
     
-    def test_rule_5_registration_in_manager(self):
+    def test_rule_5_registration_in_manager(self, mock_meta):
         """Test apakah rule 5 sudah ter-register di manager."""
         manager = get_rule_params_manager()
         
         operations = manager.get_registered_operations()
         self.assertIn('join_child_params', operations)
     
-    def test_rule_5_analysis_via_manager(self):
+    def test_rule_5_analysis_via_manager(self, mock_meta):
         """Test analysis via manager."""
         parsed = self.engine.parse_query(self.query_str_1)
         manager = get_rule_params_manager()
@@ -100,7 +114,7 @@ class TestRule5Integration(unittest.TestCase):
         for join_id, metadata in analysis.items():
             self.assertIsInstance(metadata, dict)
     
-    def test_rule_5_transformation_preserves_structure(self):
+    def test_rule_5_transformation_preserves_structure(self, mock_meta):
         """Test bahwa transformation tidak merusak struktur tree."""
         parsed = self.engine.parse_query(self.query_str_1)
         
@@ -118,7 +132,7 @@ class TestRule5Integration(unittest.TestCase):
         transformed_count = count_nodes(transformed.query_tree)
         self.assertEqual(original_count, transformed_count)
     
-    def test_rule_5_swap_and_unswap(self):
+    def test_rule_5_swap_and_unswap(self, mock_meta):
         """Test bahwa swap 2x mengembalikan ke struktur original."""
         parsed = self.engine.parse_query(self.query_str_1)
         
@@ -146,7 +160,7 @@ class TestRule5Integration(unittest.TestCase):
         
         self.assertEqual(original_children, final_children)
     
-    def test_ga_initialization_includes_join_child_params(self):
+    def test_ga_initialization_includes_join_child_params(self, mock_meta):
         """Test apakah GA initialization include join_child_params."""
         parsed = self.engine.parse_query(self.query_str_1)
         manager = get_rule_params_manager()
@@ -156,7 +170,7 @@ class TestRule5Integration(unittest.TestCase):
         if len(analysis) > 0:
             self.assertGreater(len(analysis), 0)
     
-    def test_individual_applies_join_child_transformations(self):
+    def test_individual_applies_join_child_transformations(self, mock_meta):
         """Test apakah Individual class apply rule 5 transformations."""
         parsed = self.engine.parse_query(self.query_str_1)
         
@@ -172,7 +186,7 @@ class TestRule5Integration(unittest.TestCase):
             self.assertIsNotNone(individual.query)
             self.assertIsNotNone(individual.query.query_tree)
     
-    def test_ga_optimization_with_rule_5(self):
+    def test_ga_optimization_with_rule_5(self, mock_meta):
         """Test full GA optimization dengan rule 5."""
         parsed = self.engine.parse_query(self.query_str_1)
         ga = GeneticOptimizer(
@@ -188,7 +202,7 @@ class TestRule5Integration(unittest.TestCase):
             self.assertIn('gen', gen_info)
             self.assertIn('best', gen_info)
     
-    def test_rule_5_with_natural_join(self):
+    def test_rule_5_with_natural_join(self, mock_meta):
         """Test rule 5 dengan NATURAL JOIN."""
         parsed = self.engine.parse_query(self.query_str_3)
         join_nodes = rule_5.find_join_nodes(parsed)
@@ -204,13 +218,14 @@ class TestRule5Integration(unittest.TestCase):
         self.assertIsNotNone(transformed.query_tree)
 
 
+@patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA)
 class TestRule5Scenarios(unittest.TestCase):
     """Test various scenarios untuk Rule 5."""
     
     def setUp(self):
         self.engine = OptimizationEngine()
     
-    def test_single_join_swap(self):
+    def test_single_join_swap(self, mock_meta):
         """Test swap single JOIN."""
         sql = "SELECT * FROM users INNER JOIN orders ON users.id = orders.user_id"
         parsed = self.engine.parse_query(sql)
@@ -227,7 +242,7 @@ class TestRule5Scenarios(unittest.TestCase):
         self.assertIsInstance(original_cost, (int, float))
         self.assertIsInstance(swapped_cost, (int, float))
     
-    def test_multiple_joins_selective_swap(self):
+    def test_multiple_joins_selective_swap(self, mock_meta):
         """Test selective swap untuk multiple JOINs."""
         sql = """
         SELECT * FROM users u 
@@ -252,7 +267,7 @@ class TestRule5Scenarios(unittest.TestCase):
         cost = self.engine.get_cost(selective)
         self.assertIsInstance(cost, (int, float))
     
-    def test_cost_comparison_swap_vs_no_swap(self):
+    def test_cost_comparison_swap_vs_no_swap(self, mock_meta):
         """Test cost comparison antara swap vs no swap."""
         sql = "SELECT * FROM employees e INNER JOIN payroll p ON e.id = p.employee_id"
         parsed = self.engine.parse_query(sql)

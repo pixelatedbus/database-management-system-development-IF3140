@@ -1,134 +1,137 @@
 """
-Demo scenarios for Rule 1 - Cascade Filters (Seleksi Konjungtif)
+Demo scenarios for Rule 1 (Seleksi Konjungtif)
 """
 
 from query_optimizer.optimization_engine import OptimizationEngine
-from query_optimizer.rule.rule_1_2 import cascade_filters, uncascade_filters
-
+from query_optimizer.rule.rule_1_2 import (
+    analyze_and_operators, 
+    apply_rule1_rule2
+)
 
 def print_separator(title):
-    """Print section separator"""
     print("\n" + "="*70)
     print(f"  {title}")
     print("="*70)
 
+def get_signature_and_ids(query):
+    signatures = analyze_and_operators(query)
+    if not signatures:
+        raise Exception("Tidak ditemukan operator AND/Filter pada query ini.")
+    
+    sig_key = list(signatures.keys())[0]
+    condition_ids = signatures[sig_key]
+    return sig_key, condition_ids
+
+def print_tree_structure(query, label):
+    print(f"\n--- {label} ---")
+    print(query.query_tree.tree(show_id=True))
 
 def scenario_1_full_cascade():
-    """Scenario 1.1: Full cascade (all single filters)"""
     print("\n")
-    print_separator("SCENARIO 1.1: Full Cascade - All Single Filters")
+    print_separator("SCENARIO 1.1: Cascade - Semua menjadi single (Split)")
     
     sql = "SELECT * FROM users WHERE age > 25 AND status = 'active' AND city = 'Jakarta'"
     print(f"Query: {sql}")
     
     engine = OptimizationEngine()
     query = engine.parse_query(sql)
-    and_operator = query.query_tree.childs[0].childs[1]
     
-    print("\nOriginal Query Tree:")
-    print(query.query_tree.tree(show_id=True))
-    cost_original = engine.get_cost(query)
-    print(f"Cost: {cost_original:.2f}")
+    sig_key, ids = get_signature_and_ids(query)
     
-    print("\n" + "-"*70)
-    print("Transformation: Full cascade [0, 1, 2] - three separate FILTERs")
+    sorted_ids = sorted(ids) 
+    params = {
+        sig_key: sorted_ids 
+    }
+    print("Signaure yang ditemukan:", sig_key)
+    print_tree_structure(query, "Initial Tree (1.1)")
     
-    operator_orders = {and_operator.id: [0, 1, 2]}
-    transformed = cascade_filters(query, operator_orders)
+    print(f"Applying Params: {params}")
     
-    print("\nTransformed Query Tree:")
-    print(transformed.query_tree.tree(show_id=True))
-    cost = engine.get_cost(transformed)
-    print(f"Cost: {cost:.2f} (change: {cost - cost_original:+.2f})")
-
+    new_query, _ = apply_rule1_rule2(query, params)
+    
+    print_tree_structure(new_query, "Result Tree (1.1)")
 
 def scenario_2_no_cascade():
-    """Scenario 1.2: No cascade (keep all grouped)"""
     print("\n")
-    print_separator("SCENARIO 1.2: No Cascade - Keep All Grouped")
+    print_separator("SCENARIO 1.2: Uncascade - Semua dibawah 1 operator AND (Grouped)")
     
     sql = "SELECT * FROM users WHERE age > 25 AND status = 'active' AND city = 'Jakarta'"
     
     engine = OptimizationEngine()
     query = engine.parse_query(sql)
-    and_operator = query.query_tree.childs[0].childs[1]
     
-    print("\nOriginal Query Tree:")
-    print(query.query_tree.tree(show_id=True))
-    cost_original = engine.get_cost(query)
-    print(f"Cost: {cost_original:.2f}")
+    sig_key, ids = get_signature_and_ids(query)
     
-    print("\n" + "-"*70)
-    print("Transformation: No cascade [[0, 1, 2]] - single FILTER with AND")
+    params = {
+        sig_key: [ids]
+    }
+    print("Signaure yang ditemukan:", sig_key)
+    print_tree_structure(query, "Initial Tree (1.2)")
     
-    operator_orders = {and_operator.id: [[0, 1, 2]]}
-    transformed = cascade_filters(query, operator_orders)
+    print(f"Applying Params: {params}")
     
-    print("\nTransformed Query Tree:")
-    print(transformed.query_tree.tree(show_id=True))
-    cost = engine.get_cost(transformed)
-    print(f"Cost: {cost:.2f} (no change)")
-
+    new_query, _ = apply_rule1_rule2(query, params)
+    
+    print_tree_structure(new_query, "Result Tree (1.2)")
 
 def scenario_3_mixed_cascade():
-    """Scenario 1.3: Mixed cascade (some single, some grouped)"""
     print("\n")
-    print_separator("SCENARIO 1.3: Mixed Cascade")
+    print_separator("SCENARIO 1.3: Mixed Cascade - Beberapa single, beberapa dibawah AND")
     
     sql = "SELECT * FROM users WHERE age > 25 AND status = 'active' AND city = 'Jakarta'"
     
     engine = OptimizationEngine()
     query = engine.parse_query(sql)
-    and_operator = query.query_tree.childs[0].childs[1]
     
-    print("\nOriginal Query Tree:")
-    print(query.query_tree.tree(show_id=True))
-    cost_original = engine.get_cost(query)
-    print(f"Cost: {cost_original:.2f}")
+    sig_key, ids = get_signature_and_ids(query)
     
-    print("\n" + "-"*70)
-    print("Transformation: Mixed [2, [0, 1]] - FILTER(c2) → FILTER(AND(c0, c1))")
+    single_id = ids[0]
+    grouped_ids = ids[1:]
     
-    operator_orders = {and_operator.id: [2, [0, 1]]}
-    transformed = cascade_filters(query, operator_orders)
+    params = {
+        sig_key: [single_id, grouped_ids]
+    }
+    print("Signaure yang ditemukan:", sig_key)
+    print_tree_structure(query, "Initial Tree (1.3)")
     
-    print("\nTransformed Query Tree:")
-    print(transformed.query_tree.tree(show_id=True))
-    cost = engine.get_cost(transformed)
-    print(f"Cost: {cost:.2f} (change: {cost - cost_original:+.2f})")
+    print(f"Applying Params: {params}")
+    
+    new_query, _ = apply_rule1_rule2(query, params)
+    
+    print_tree_structure(new_query, "Result Tree (1.3)")
 
 
-def scenario_4_uncascade():
-    """Scenario 1.4: Reverse transformation (uncascade)"""
+def scenario_4_cycle_transitions():
     print("\n")
-    print_separator("SCENARIO 1.4: Reverse Transformation - Uncascade")
+    print_separator("SCENARIO 1.4: Cycle Transitions (Cascade -> Mixed -> Uncascade)")
     
     sql = "SELECT * FROM users WHERE age > 25 AND status = 'active' AND city = 'Jakarta'"
     
     engine = OptimizationEngine()
-    query = engine.parse_query(sql)
-    and_operator = query.query_tree.childs[0].childs[1]
+    initial_query = engine.parse_query(sql)
     
-    print("\nOriginal (AND operator):")
-    print(query.query_tree.tree(show_id=True))
-    cost_original = engine.get_cost(query)
-    print(f"Cost: {cost_original:.2f}")
+    sig_key, ids = get_signature_and_ids(initial_query)
+    ids = sorted(ids)
+    print("Signaure yang ditemukan:", sig_key)
+    print_tree_structure(initial_query, "0. Initial Query Tree")
+
+    # TAHAP 1: Ubah ke FULL CASCADE (Split semua)
+    params_cascade = { sig_key: ids }
+    print(f"\n[TRANSFORM 1] Applying Cascade Params: {params_cascade}")
     
-    print("\n" + "-"*70)
-    print("Step 1: Cascade [0, 1, 2]")
-    operator_orders = {and_operator.id: [0, 1, 2]}
-    cascaded = cascade_filters(query, operator_orders)
+    query_cascade, _ = apply_rule1_rule2(initial_query, params_cascade)
+    print_tree_structure(query_cascade, "1. Result: Full Cascade")
     
-    print("\nCascaded:")
-    print(cascaded.query_tree.tree(show_id=True))
-    cost_cascaded = engine.get_cost(cascaded)
-    print(f"Cost: {cost_cascaded:.2f}")
+    # TAHAP 2: Ubah ke MIXED (Sebagian split, sebagian group)
+    params_mixed = { sig_key: [ids[0], ids[1:]] } 
+    print(f"\n[TRANSFORM 2] Applying Mixed Params: {params_mixed}")
     
-    print("\n" + "-"*70)
-    print("Step 2: Uncascade")
-    uncascaded = uncascade_filters(cascaded)
+    query_mixed, _ = apply_rule1_rule2(query_cascade, params_mixed)
+    print_tree_structure(query_mixed, "2. Result: Mixed Structure")
+
+    # TAHAP 3: Ubah ke FULL UNCASCADE (Gabung total)
+    params_uncascade = { sig_key: [ids] }
+    print(f"\n[TRANSFORM 3] Applying Uncascade Params: {params_uncascade}")
     
-    print("\nUncascaded (back to AND):")
-    print(uncascaded.query_tree.tree(show_id=True))
-    cost_uncascaded = engine.get_cost(uncascaded)
-    print(f"Cost: {cost_uncascaded:.2f}")
+    query_uncascade, _ = apply_rule1_rule2(query_mixed, params_uncascade)
+    print_tree_structure(query_uncascade, "3. Result: Full Uncascade (Single Operator)")
