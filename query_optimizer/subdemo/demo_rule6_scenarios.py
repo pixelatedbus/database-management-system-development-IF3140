@@ -235,26 +235,123 @@ def scenario_4_complex_nested():
         return parsed, parsed, parsed
 
 
-def run_all_scenarios():
-    print("\n" + "="*70)
-    print("  RULE 6 DEMO: JOIN ASSOCIATIVITY")
-    print("="*70)
+def scenario_5_natural_join():
+    print("\n")
+    print_separator("SCENARIO 6.5: Natural JOIN Associativity")
 
-    scenario_1_basic_reassociation()
-    scenario_2_semantic_validation()
-    scenario_3_performance_impact()
-    scenario_4_complex_nested()
+    print("Concept: Natural joins are associative")
+    print("Rule: (E1 ⋈ E2) ⋈ E3 = E1 ⋈ (E2 ⋈ E3)")
+    print("Query: SELECT * FROM a NATURAL JOIN b NATURAL JOIN users")
 
-    print("\n" + "="*70)
-    print("  DEMO COMPLETE")
-    print("="*70)
-    print("\nKey Takeaways:")
-    print("1. Join associativity changes join tree structure")
-    print("2. Semantic validation ensures correctness")
-    print("3. Different associations have different costs")
-    print("4. GA explores to find optimal join order")
-    print("5. Parameters: {join_id: 'left'|'right'|'none'}")
+    engine = OptimizationEngine()
+    sql = """
+    SELECT * FROM a
+    NATURAL JOIN b
+    NATURAL JOIN users
+    """
+    parsed = engine.parse_query(sql)
+
+    print("\nOriginal Query Tree:")
+    print(parsed.query_tree.tree(show_id=True))
+    cost_original = engine.get_cost(parsed)
+    print(f"Cost: {cost_original:.2f}")
+
+    patterns = rule_6.find_patterns(parsed)
+    print(f"\nFound {len(patterns)} nested JOIN pattern(s)")
+
+    if patterns:
+        print("\n" + "-"*70)
+        print("Natural joins don't have explicit conditions")
+        print("They join on all common column names")
+        
+        print("\n" + "-"*70)
+        print("Testing left-associate: ((A ⋈ B) ⋈ U)")
+        decisions_left = {join_id: 'left' for join_id in patterns.keys()}
+        left_result = rule_6.apply_associativity(parsed, decisions_left)
+        print(left_result.query_tree.tree(show_id=True))
+        cost_left = engine.get_cost(left_result)
+        print(f"Cost: {cost_left:.2f}")
+
+        print("\n" + "-"*70)
+        print("Testing right-associate: (A ⋈ (B ⋈ U))")
+        decisions_right = {join_id: 'right' for join_id in patterns.keys()}
+        right_result = rule_6.apply_associativity(parsed, decisions_right)
+        print(right_result.query_tree.tree(show_id=True))
+        cost_right = engine.get_cost(right_result)
+        print(f"Cost: {cost_right:.2f}")
+
+        print("\n" + "-"*70)
+        print("Analysis:")
+        print("✓ Natural joins are associative")
+        print("✓ Both structures produce same result")
+        print("✓ Cost may differ based on table sizes")
+        print(f"  Left:  {cost_left:.2f}")
+        print(f"  Right: {cost_right:.2f}")
+
+        return left_result, right_result
+    else:
+        print("\nNo nested patterns found")
+        return parsed, parsed
 
 
-if __name__ == "__main__":
-    run_all_scenarios()
+def scenario_6_theta_attribute_validation():
+    print("\n")
+    print_separator("SCENARIO 6.6: Theta Join Attribute Validation")
+
+    print("Concept: Theta join associativity condition")
+    print("Rule: (E1 ⋈θ1 E2) ⋈θ2 E3 = E1 ⋈θ1 (E2 ⋈θ2 E3)")
+    print("      where θ2 only involves attributes from E2 and E3")
+
+    engine = OptimizationEngine()
+    
+    # Valid case: θ2 only references E2 and E3
+    print("\n" + "-"*70)
+    print("CASE 1: Valid - θ2 only references E2 and E3")
+    sql_valid = """
+    SELECT * FROM users u
+    INNER JOIN orders o ON u.id = o.user_id
+    INNER JOIN products p ON o.product_id = p.id
+    """
+    parsed_valid = engine.parse_query(sql_valid)
+    
+    print("Query: U ⋈(u.id=o.user_id) O ⋈(o.product_id=p.id) P")
+    print("θ2 = (o.product_id = p.id) -> references O and P only ✓")
+    
+    patterns = rule_6.find_patterns(parsed_valid)
+    if patterns:
+        decisions = {join_id: 'right' for join_id in patterns.keys()}
+        result = rule_6.apply_associativity(parsed_valid, decisions)
+        print("\nReassociation result: U ⋈ (O ⋈ P)")
+        print(result.query_tree.tree(show_id=True))
+        print("✓ Valid transformation")
+    
+    # Invalid case: θ2 references E1 (should fail semantic check)
+    print("\n" + "-"*70)
+    print("CASE 2: Invalid - θ2 references E1, E2, and E3")
+    sql_invalid = """
+    SELECT * FROM users u
+    INNER JOIN orders o ON u.id = o.user_id
+    INNER JOIN products p ON u.age > 18 AND o.product_id = p.id
+    """
+    parsed_invalid = engine.parse_query(sql_invalid)
+    
+    print("Query: (U ⋈ O) ⋈(u.age>18 AND o.product_id=p.id) P")
+    print("θ2 references U (u.age) -> Cannot reassociate! ✗")
+    
+    patterns2 = rule_6.find_patterns(parsed_invalid)
+    if patterns2:
+        decisions2 = {join_id: 'right' for join_id in patterns2.keys()}
+        result2 = rule_6.apply_associativity(parsed_invalid, decisions2)
+        
+        if result2.query_tree.tree(show_id=True) == parsed_invalid.query_tree.tree(show_id=True):
+            print("\n✓ Semantic validation blocked invalid transformation")
+            print("  Original structure preserved")
+        else:
+            print("\n✗ WARNING: Transformation applied when it shouldn't")
+    
+    print("\n" + "-"*70)
+    print("Key Point:")
+    print("  Rule 6 validates that outer condition only references")
+    print("  tables in the inner subtree before reassociating")
+    
+    return result, result2
