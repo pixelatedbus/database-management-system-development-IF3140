@@ -561,23 +561,84 @@ class StorageManager:
             return filtered_rows
 
     def _find_usable_index(self, table: str, conditions: List[Condition]) -> Optional[Tuple[Any, Condition]]:
-        # cari index yang bisa dipake buat optimasi query
-        # hash index: cuma bisa dipake buat equality condition (operation = '=')
-        # b+ tree: bisa dipake buat equality dan range (=, <, <=, >, >=)
+        """Cari index yang bisa dipake dengan smart optimized prioritize.
+        
+        Priority (untuk multiple conditions):
+        1. Operation compatibility: Range queries MUST use B+ tree
+        2. For equality (=) only: Pick hash if available (O(1) vs O(log n))
+        3. Selectivity: Lower V(column) = more selective (less distinct values)
+        
+        Returns:
+            Tuple (index_object, matching_condition) atau None
+        """
+        # Collect semua usable indexes
+        usable_indexes = []
+        
+        try:
+            all_stats = self.get_stats()
+            table_stats = all_stats.get(table)  # Get stats for specific table
+        except:
+            table_stats = None
+        
         for condition in conditions:
             index_key = (table, condition.column)
+            
             if index_key in self.indexes:
                 index = self.indexes[index_key]
-
-                # hash index: hanya untuk '='
+                
+                # Check compatibility
+                is_compatible = False
                 if isinstance(index, HashIndex) and condition.operation == '=':
-                    return (index, condition)
-
-                # b+ tree: untuk '=', '<', '<=', '>', '>='
-                if isinstance(index, BPlusTreeIndex) and condition.operation in ['=', '<', '<=', '>', '>=']:
-                    return (index, condition)
-
-        return None
+                    is_compatible = True
+                elif isinstance(index, BPlusTreeIndex) and condition.operation in ['=', '<', '<=', '>', '>=']:
+                    is_compatible = True
+                
+                if is_compatible:
+                    # Get selectivity (jumlah distinct values)
+                    selectivity = 999999  # default tinggi
+                    if table_stats and condition.column in table_stats.V_a_r:
+                        selectivity = table_stats.V_a_r[condition.column]
+                    
+                    # OPTIMIZED PRIORITY:
+                    # 1. For range queries: MUST use B+ tree (hash can't do range)
+                    #    priority_type = 0 (B+ tree for range)
+                    # 2. For equality: prefer hash (O(1)) > B+ tree (O(log n))
+                    #    priority_type = 1 (hash for equality)
+                    # 3. Fallback: if no hash, use B+ tree for safety
+                    #    priority_type = 2 (B+ tree fallback)
+                    
+                    if condition.operation in ['<', '<=', '>', '>=']:
+                        # Range query - MUST use B+ tree
+                        if isinstance(index, BPlusTreeIndex):
+                            priority_type = 0  # Best: B+ tree for range
+                        else:
+                            continue  # Skip hash index for range queries
+                    else:  # operation == '='
+                        # Equality - prefer hash (faster O(1))
+                        if isinstance(index, HashIndex):
+                            priority_type = 1  # Best: hash for equality (O(1))
+                        else:  # B+ tree
+                            priority_type = 2  # Fallback: B+ tree for equality (O(log n))
+                    
+                    usable_indexes.append({
+                        'index': index,
+                        'condition': condition,
+                        'priority_type': priority_type,      # 0=range, 1=hash equal, 2=btree equal
+                        'selectivity': selectivity,          # Lower = better
+                    })
+        
+        if not usable_indexes:
+            return None
+        
+        # Sort by priority:
+        # 1. Priority type (0=range btree < 1=hash equal < 2=btree equal)
+        # 2. Selectivity (lower distinct values = more selective)
+        usable_indexes.sort(
+            key=lambda x: (x['priority_type'], x['selectivity'])
+        )
+        
+        best = usable_indexes[0]
+        return (best['index'], best['condition'])
 
     def _read_with_index(
         self,

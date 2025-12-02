@@ -66,14 +66,14 @@ class Individual:
 
         if fp_for_rule1:
             q, _ = rule_1_2.apply_rule1_rule2(q, fp_for_rule1)
-            
+        
         if jcp:
             q, jcp = rule_5.apply_join_commutativity(q, jcp)
             self.operation_params['join_child_params'] = jcp
 
         # Rule 6 (Associativity)
-        # if jap:
-        #     q = rule_6.apply_associativity(q, jap)
+        if jap:
+            q = rule_6.apply_associativity(q, jap)
             
         if jp:
             q, jp, fp_clean = rule_4.apply_merge(q, jp, fp_for_rule1)
