@@ -1,7 +1,10 @@
 """
 Genetic Algorithm - Hybrid Support
-- Filter Params: Uses Signature-Based Crossover
-- Join/Other Params: Uses ID-Based Crossover (Dictionary Match)
+- Filter Params: Uses Signature-Based Crossover (coupled with join_params)
+- Join Params: Uses ID-Based Crossover (coupled with filter_params)
+- Join Child Params: Independent ID-Based Crossover (swap children)
+- Join Associativity Params: Independent ID-Based Crossover (left/right/none)
+- Join Method Params: Independent ID-Based Crossover (nested_loop/hash)
 """
 
 import random
@@ -61,6 +64,7 @@ class Individual:
         jp = self.operation_params.get('join_params', {})
         jcp = self.operation_params.get('join_child_params', {})
         jap = self.operation_params.get('join_associativity_params', {})
+        jmp = self.operation_params.get('join_method_params', {})
         
         fp_for_rule1 = self._inject_join_params_into_filter(fp_raw, jp)
 
@@ -80,6 +84,14 @@ class Individual:
         if jcp:
             q, jcp = rule_5.apply_join_commutativity(q, jcp)
             self.operation_params['join_child_params'] = jcp
+        
+        if jmp:
+            def apply_methods(node):
+                if node.type == "JOIN" and node.id in jmp:
+                    node.method = jmp[node.id]
+                for child in node.childs:
+                    apply_methods(child)
+            apply_methods(q.query_tree)
             
         return q
 
