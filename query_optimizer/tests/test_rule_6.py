@@ -8,7 +8,7 @@ from unittest.mock import patch, MagicMock
 from query_optimizer.genetic_optimizer import GeneticOptimizer, Individual
 from query_optimizer.optimization_engine import OptimizationEngine, ParsedQuery
 from query_optimizer.rule_params_manager import get_rule_params_manager
-from query_optimizer.rule import rule_6
+from query_optimizer.rule import rule_6, rule_4
 
 # --- MOCK METADATA ---
 MOCK_METADATA = {
@@ -315,6 +315,57 @@ class TestRule6Integration(unittest.TestCase):
 
             self.assertIsInstance(result_query, ParsedQuery)
             self.assertIsNotNone(result_query.query_tree)
+
+    def test_rule_6_preserves_join_ids_with_rule_4(self, mock_meta):
+        """Ensure associativity keeps join IDs so rule 4 params still apply."""
+        sql = """
+        SELECT * FROM employees e
+        INNER JOIN payroll p ON e.id = p.employee_id
+        INNER JOIN accounts a ON p.id = a.payroll_id
+        WHERE a.bank_name = 'ABC'
+        """
+        parsed = self.engine.parse_query(sql)
+
+        def collect_join_ids(node):
+            if node is None:
+                return set()
+            ids = {node.id} if node.type == "JOIN" else set()
+            for ch in node.childs:
+                ids |= collect_join_ids(ch)
+            return ids
+
+        before_ids = collect_join_ids(parsed.query_tree)
+        assoc_patterns = rule_6.find_patterns(parsed)
+        join_patterns = rule_4.find_patterns(parsed)
+        if not assoc_patterns or not join_patterns:
+            self.skipTest("No patterns found for associativity/join merge")
+
+        decisions = {jid: 'right' for jid in assoc_patterns.keys()}
+        target_join_id = next(iter(join_patterns.keys()))
+        join_params = {target_join_id: join_patterns[target_join_id]['filter_conditions']}
+
+        operation_params = {
+            'filter_params': {},
+            'join_params': join_params,
+            'join_associativity_params': decisions
+        }
+
+        individual = Individual(operation_params, parsed)
+        result_tree = individual.query.query_tree
+
+        after_ids = collect_join_ids(result_tree)
+        self.assertEqual(before_ids, after_ids, "Join IDs should be stable after associativity")
+
+        def count_filters(node):
+            if node is None:
+                return 0
+            return (1 if node.type == "FILTER" else 0) + sum(count_filters(ch) for ch in node.childs)
+
+        self.assertLess(
+            count_filters(result_tree),
+            count_filters(parsed.query_tree),
+            "Rule 4 should still merge filter conditions after associativity"
+        )
 
 
 @patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA)

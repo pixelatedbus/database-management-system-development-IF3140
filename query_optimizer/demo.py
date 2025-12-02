@@ -72,7 +72,13 @@ def print_help():
     print("  5.4  -   Scenario: Bidirectional transformation")
     print("  5.5  -   Scenario: GA exploration of join orders")
     print("")
-    print("  6    - Rule 6: Associativity/Commutativity of Joins (Coming soon)")
+    print("  6    - Rule 6: Join Associativity")
+    print("  6.1  -   Scenario: Basic JOIN associativity")
+    print("  6.2  -   Scenario: Semantic validation")
+    print("  6.3  -   Scenario: Performance impact analysis")
+    print("  6.4  -   Scenario: Complex nested JOINs")
+    print("  6.5  -   Scenario: Natural JOIN associativity")
+    print("  6.6  -   Scenario: Theta join attribute validation")
     print("")
     print("  7    - Rule 7: Filter Pushdown over Join")
     print("  7.1  -   Scenario: Single condition pushdown")
@@ -236,6 +242,51 @@ def demo_rule_5():
     print("- Different orders can have different costs")
     print("- Transformation is bidirectional (swap twice returns original)")
     print("- Genetic Algorithm can find optimal join order (see Demo 11)")
+
+
+# =============================================================================
+# RULE 6: JOIN ASSOCIATIVITY
+# =============================================================================
+
+@use_mock_metadata
+def demo_rule_6():
+    """Demo 6: Rule 6 - Join Associativity (all scenarios)"""
+    print_separator("DEMO 6: Rule 6 - Join Associativity")
+    
+    print("\nThis demo has multiple scenarios:")
+    print("  6.1 - Basic JOIN associativity")
+    print("  6.2 - Semantic validation")
+    print("  6.3 - Performance impact analysis")
+    print("  6.4 - Complex nested JOINs")
+    print("  6.5 - Natural JOIN associativity")
+    print("  6.6 - Theta join attribute validation")
+    
+    print("\nRunning all scenarios...")
+    
+    from query_optimizer.subdemo.demo_rule6_scenarios import (
+        scenario_1_basic_reassociation,
+        scenario_2_semantic_validation,
+        scenario_3_performance_impact,
+        scenario_4_complex_nested,
+        scenario_5_natural_join,
+        scenario_6_theta_attribute_validation
+    )
+    
+    scenario_1_basic_reassociation()
+    scenario_2_semantic_validation()
+    scenario_3_performance_impact()
+    scenario_4_complex_nested()
+    scenario_5_natural_join()
+    scenario_6_theta_attribute_validation()
+    
+    print_separator("DEMO 6 COMPLETED")
+    print("\nKey Insights:")
+    print("- Rule 6 enables JOIN associativity: (A⋈B)⋈C = A⋈(B⋈C)")
+    print("- Natural joins are always associative")
+    print("- Theta joins are associative when θ2 only uses inner tables")
+    print("- Semantic validation prevents invalid transformations")
+    print("- Different associations have different costs")
+    print("- Parameters: {join_id: 'left'|'right'|'none'}")
 
 
 # =============================================================================
@@ -505,6 +556,7 @@ def demo_all():
     demo_rule_3()
     demo_rule_4()
     demo_rule_5()
+    demo_rule_6()
     demo_rule_7()
     demo_rule_8()
     
@@ -636,9 +688,23 @@ def main():
                 print_separator("DEMO COMPLETED")
         
         elif demo_num == 6:
-            print_separator("DEMO 6: Rule 6 - Associativity/Commutativity of Joins")
-            print("\n⚠ This rule is not yet implemented.")
-            print("Coming soon...")
+            if scenario_num is None:
+                demo_rule_6()
+            else:
+                from query_optimizer.subdemo.demo_rule6_scenarios import (
+                    scenario_1_basic_reassociation, scenario_2_semantic_validation,
+                    scenario_3_performance_impact, scenario_4_complex_nested,
+                    scenario_5_natural_join, scenario_6_theta_attribute_validation
+                )
+                with patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA):
+                    if scenario_num == 1: scenario_1_basic_reassociation()
+                    elif scenario_num == 2: scenario_2_semantic_validation()
+                    elif scenario_num == 3: scenario_3_performance_impact()
+                    elif scenario_num == 4: scenario_4_complex_nested()
+                    elif scenario_num == 5: scenario_5_natural_join()
+                    elif scenario_num == 6: scenario_6_theta_attribute_validation()
+                    else: print(f"Invalid scenario 6.{scenario_num}"); return
+                print_separator("DEMO COMPLETED")
         
         elif demo_num == 7:
             if scenario_num is None:
