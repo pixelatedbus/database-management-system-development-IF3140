@@ -75,7 +75,6 @@ class Individual:
         # if jap:
         #     q = rule_6.apply_associativity(q, jap)
             
-        # Rule 4 (Join Merge)
         if jp:
             q, jp, fp_clean = rule_4.apply_merge(q, jp, fp_for_rule1)
             self.operation_params['join_params'] = jp
@@ -86,10 +85,11 @@ class Individual:
         return q
 
 class GeneticOptimizer:
-    def __init__(self, population_size=50, generations=100, mutation_rate=0.1):
+    def __init__(self, population_size=50, generations=100, mutation_rate=0.1, elitism=2):
         self.pop_size = population_size
         self.gens = generations
         self.mut_rate = mutation_rate
+        self.elitism = elitism
         self.history = []
         
     def optimize(self, query):
@@ -113,12 +113,12 @@ class GeneticOptimizer:
             for ind in pop:
                 if ind.fitness is None:
                     eng = OptimizationEngine()
-                    ind.fitness = eng.get_cost(ind.query).total_cost
+                    ind.fitness = eng.get_cost(ind.query)
             
             pop.sort(key=lambda x: x.fitness)
             self.history.append({'gen': g, 'best': pop[0].fitness})
             
-            next_pop = pop[:2] # Elitism
+            next_pop = pop[:self.elitism]
             
             while len(next_pop) < self.pop_size:
                 p1, p2 = random.sample(pop[:10], 2)
@@ -133,11 +133,6 @@ class GeneticOptimizer:
         return pop[0].query, self.history
 
     def _crossover(self, p1, p2, base_query):
-        """
-        Modified Crossover:
-        - filter_params & join_params: DIJAGA KONSISTENSINYA (Coupled).
-        - parameter lain: Independent / Uniform Crossover.
-        """
         c1_params = {}
         c2_params = {}
         c1_genealogy = {}

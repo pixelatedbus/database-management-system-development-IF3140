@@ -1,14 +1,44 @@
+"""
+Unit tests untuk Query Validator (check_query)
+Menggunakan Mock Metadata agar validasi tabel/kolom tidak bergantung pada storage asli.
+"""
+
 import unittest
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from query_optimizer.query_check import QueryTree, check_query, QueryValidationError
 
+# --- MOCK METADATA ---
+# Definisi tabel dan kolom yang dibutuhkan oleh test cases di bawah
+MOCK_METADATA = {
+    "tables": ["users", "profiles"],
+    "columns": {
+        "users": [
+            "id", "name", "age", "status", "city", 
+            "salary", "category", "price", "description"
+        ],
+        "profiles": ["id", "user_id", "bio"]
+    }
+}
 
 class TestQueryValidator(unittest.TestCase):
     
+    def setUp(self):
+        """
+        Setup patcher untuk get_metadata sebelum setiap test berjalan.
+        Ini menggantikan fungsi get_metadata asli dengan mock yang mengembalikan MOCK_METADATA.
+        """
+        self.patcher = patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA)
+        self.mock_metadata = self.patcher.start()
+
+    def tearDown(self):
+        """Hentikan patcher setelah test selesai."""
+        self.patcher.stop()
+
     # ====================================================================
     # ATOMIC NODE TESTS
     # ====================================================================
@@ -159,6 +189,7 @@ class TestQueryValidator(unittest.TestCase):
     
     def test_valid_relation(self):
         # RELATION is a leaf node with table name
+        # "users" exists in MOCK_METADATA
         relation = QueryTree("RELATION", "users")
         check_query(relation)
     
@@ -169,7 +200,7 @@ class TestQueryValidator(unittest.TestCase):
             check_query(relation)
     
     def test_invalid_relation_unknown_table(self):
-        # Table must exist in database
+        # Table must exist in database (MOCK_METADATA)
         relation = QueryTree("RELATION", "nonexistent")
         with self.assertRaises(QueryValidationError):
             check_query(relation)

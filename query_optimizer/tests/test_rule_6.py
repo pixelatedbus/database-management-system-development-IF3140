@@ -1,14 +1,30 @@
 """
 Test integration of Rule 6 (Join Associativity) with Genetic Algorithm
+Menggunakan Mock Metadata untuk isolasi pengujian.
 """
 
 import unittest
+from unittest.mock import patch, MagicMock
 from query_optimizer.genetic_optimizer import GeneticOptimizer, Individual
 from query_optimizer.optimization_engine import OptimizationEngine, ParsedQuery
 from query_optimizer.rule_params_manager import get_rule_params_manager
 from query_optimizer.rule import rule_6
 
+# --- MOCK METADATA ---
+MOCK_METADATA = {
+    "tables": ["employees", "payroll", "accounts", "users", "orders", "products", "logs"],
+    "columns": {
+        "employees": ["id", "name", "salary", "employee_id"],
+        "payroll": ["id", "employee_id", "amount", "payroll_id"],
+        "accounts": ["id", "payroll_id", "bank_name"],
+        "users": ["id", "name"],
+        "orders": ["id", "user_id", "product_id"],
+        "products": ["id", "name", "price"],
+        "logs": ["id", "user_id", "message"]
+    }
+}
 
+@patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA)
 class TestRule6Integration(unittest.TestCase):
     """Test Rule 6 integration dengan GA."""
 
@@ -35,7 +51,7 @@ class TestRule6Integration(unittest.TestCase):
         INNER JOIN users u2 ON o.id = u2.id
         """
 
-    def test_rule_6_find_patterns(self):
+    def test_rule_6_find_patterns(self, mock_meta):
         """Test apakah rule 6 bisa detect nested JOIN patterns."""
         parsed = self.engine.parse_query(self.query_str_1)
         patterns = rule_6.find_patterns(parsed)
@@ -50,7 +66,7 @@ class TestRule6Integration(unittest.TestCase):
             self.assertIsInstance(metadata['outer_condition'], bool)
             self.assertIsInstance(metadata['inner_condition'], bool)
 
-    def test_rule_6_is_reassociable(self):
+    def test_rule_6_is_reassociable(self, mock_meta):
         """Test detection of reassociable JOIN nodes."""
         parsed = self.engine.parse_query(self.query_str_1)
 
@@ -67,7 +83,7 @@ class TestRule6Integration(unittest.TestCase):
 
         self.assertGreaterEqual(reassociable_count, 0)
 
-    def test_rule_6_params_generation(self):
+    def test_rule_6_params_generation(self, mock_meta):
         """Test generation random params untuk rule 6."""
         metadata = {
             'inner_join_id': 42,
@@ -83,13 +99,13 @@ class TestRule6Integration(unittest.TestCase):
         self.assertIn('right', results)
         self.assertIn('none', results)
 
-    def test_rule_6_params_copy(self):
+    def test_rule_6_params_copy(self, mock_meta):
         """Test copy params."""
         self.assertEqual(rule_6.copy_params('left'), 'left')
         self.assertEqual(rule_6.copy_params('right'), 'right')
         self.assertEqual(rule_6.copy_params('none'), 'none')
 
-    def test_rule_6_params_mutation(self):
+    def test_rule_6_params_mutation(self, mock_meta):
         """Test mutation untuk associativity params."""
         for _ in range(10):
             original = 'left'
@@ -103,7 +119,7 @@ class TestRule6Integration(unittest.TestCase):
             mutated = rule_6.mutate_params(original)
             self.assertNotEqual(mutated, original)
 
-    def test_rule_6_params_validation(self):
+    def test_rule_6_params_validation(self, mock_meta):
         """Test validation params."""
         self.assertTrue(rule_6.validate_params('left'))
         self.assertTrue(rule_6.validate_params('right'))
@@ -114,7 +130,7 @@ class TestRule6Integration(unittest.TestCase):
         self.assertFalse(rule_6.validate_params(None))
         self.assertFalse(rule_6.validate_params(True))
 
-    def test_rule_6_apply_associativity_right(self):
+    def test_rule_6_apply_associativity_right(self, mock_meta):
         """Test apply right-associativity."""
         parsed = self.engine.parse_query(self.query_str_1)
         patterns = rule_6.find_patterns(parsed)
@@ -131,7 +147,7 @@ class TestRule6Integration(unittest.TestCase):
             self.assertIsInstance(cost_original, (int, float))
             self.assertIsInstance(cost_result, (int, float))
 
-    def test_rule_6_apply_associativity_left(self):
+    def test_rule_6_apply_associativity_left(self, mock_meta):
         """Test apply left-associativity."""
         parsed = self.engine.parse_query(self.query_str_1)
         patterns = rule_6.find_patterns(parsed)
@@ -143,7 +159,7 @@ class TestRule6Integration(unittest.TestCase):
             self.assertIsInstance(result, ParsedQuery)
             self.assertIsNotNone(result.query_tree)
 
-    def test_rule_6_apply_associativity_none(self):
+    def test_rule_6_apply_associativity_none(self, mock_meta):
         """Test apply no change (none)."""
         parsed = self.engine.parse_query(self.query_str_1)
         patterns = rule_6.find_patterns(parsed)
@@ -154,7 +170,7 @@ class TestRule6Integration(unittest.TestCase):
 
             self.assertIsInstance(result, ParsedQuery)
 
-    def test_rule_6_undo_associativity(self):
+    def test_rule_6_undo_associativity(self, mock_meta):
         """Test undo associativity transformation."""
         parsed = self.engine.parse_query(self.query_str_1)
         patterns = rule_6.find_patterns(parsed)
@@ -167,7 +183,7 @@ class TestRule6Integration(unittest.TestCase):
             self.assertIsInstance(undone, ParsedQuery)
             self.assertIsNotNone(undone.query_tree)
 
-    def test_rule_6_collect_tables(self):
+    def test_rule_6_collect_tables(self, mock_meta):
         """Test table collection from node."""
         parsed = self.engine.parse_query(self.query_str_1)
         tables = rule_6.collect_tables(parsed.query_tree)
@@ -175,7 +191,7 @@ class TestRule6Integration(unittest.TestCase):
         self.assertIsInstance(tables, set)
         self.assertGreaterEqual(len(tables), 0)
 
-    def test_rule_6_multiple_nested_joins(self):
+    def test_rule_6_multiple_nested_joins(self, mock_meta):
         """Test with multiple nested JOINs."""
         parsed = self.engine.parse_query(self.query_str_2)
         patterns = rule_6.find_patterns(parsed)
@@ -191,7 +207,7 @@ class TestRule6Integration(unittest.TestCase):
             result = rule_6.apply_associativity(parsed, decisions)
             self.assertIsInstance(result, ParsedQuery)
 
-    def test_rule_6_reassociate_right(self):
+    def test_rule_6_reassociate_right(self, mock_meta):
         """Test reassociate_right function directly."""
         parsed = self.engine.parse_query(self.query_str_1)
 
@@ -209,7 +225,7 @@ class TestRule6Integration(unittest.TestCase):
             result = rule_6.reassociate_right(join_node)
             self.assertIsNotNone(result)
 
-    def test_rule_6_reassociate_left(self):
+    def test_rule_6_reassociate_left(self, mock_meta):
         """Test reassociate_left function directly."""
         parsed = self.engine.parse_query(self.query_str_1)
         patterns = rule_6.find_patterns(parsed)
@@ -232,14 +248,14 @@ class TestRule6Integration(unittest.TestCase):
                 result = rule_6.reassociate_left(join_node)
                 self.assertIsNotNone(result)
 
-    def test_rule_6_with_manager(self):
+    def test_rule_6_with_manager(self, mock_meta):
         """Test Rule 6 registered di RuleParamsManager."""
         manager = get_rule_params_manager()
         operations = manager.get_registered_operations()
 
         self.assertIn('join_associativity_params', operations)
 
-    def test_rule_6_manager_analyze(self):
+    def test_rule_6_manager_analyze(self, mock_meta):
         """Test manager analyze function for Rule 6."""
         manager = get_rule_params_manager()
         parsed = self.engine.parse_query(self.query_str_1)
@@ -247,7 +263,7 @@ class TestRule6Integration(unittest.TestCase):
         patterns = manager.analyze_query(parsed, 'join_associativity_params')
         self.assertIsInstance(patterns, dict)
 
-    def test_rule_6_manager_generate(self):
+    def test_rule_6_manager_generate(self, mock_meta):
         """Test manager generate function for Rule 6."""
         manager = get_rule_params_manager()
         metadata = {
@@ -259,14 +275,14 @@ class TestRule6Integration(unittest.TestCase):
         params = manager.generate_random_params('join_associativity_params', metadata)
         self.assertIn(params, {'left', 'right', 'none'})
 
-    def test_rule_6_manager_copy(self):
+    def test_rule_6_manager_copy(self, mock_meta):
         """Test manager copy function for Rule 6."""
         manager = get_rule_params_manager()
         original = 'right'
         copied = manager.copy_params('join_associativity_params', original)
         self.assertEqual(copied, original)
 
-    def test_rule_6_manager_mutate(self):
+    def test_rule_6_manager_mutate(self, mock_meta):
         """Test manager mutate function for Rule 6."""
         manager = get_rule_params_manager()
         original = 'left'
@@ -274,7 +290,7 @@ class TestRule6Integration(unittest.TestCase):
         self.assertNotEqual(mutated, original)
         self.assertIn(mutated, {'left', 'right', 'none'})
 
-    def test_rule_6_manager_validate(self):
+    def test_rule_6_manager_validate(self, mock_meta):
         """Test manager validate function for Rule 6."""
         manager = get_rule_params_manager()
         self.assertTrue(manager.validate_params('join_associativity_params', 'left'))
@@ -282,7 +298,7 @@ class TestRule6Integration(unittest.TestCase):
         self.assertTrue(manager.validate_params('join_associativity_params', 'none'))
         self.assertFalse(manager.validate_params('join_associativity_params', 'invalid'))
 
-    def test_rule_6_in_ga_integration(self):
+    def test_rule_6_in_ga_integration(self, mock_meta):
         """Test Rule 6 works in GA Individual."""
         parsed = self.engine.parse_query(self.query_str_1)
         patterns = rule_6.find_patterns(parsed)
@@ -301,13 +317,14 @@ class TestRule6Integration(unittest.TestCase):
             self.assertIsNotNone(result_query.query_tree)
 
 
+@patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA)
 class TestRule6SemanticValidation(unittest.TestCase):
     """Test semantic validation for Rule 6."""
 
     def setUp(self):
         self.engine = OptimizationEngine()
 
-    def test_semantic_check_valid(self):
+    def test_semantic_check_valid(self, mock_meta):
         """Test semantic check untuk valid reassociation."""
         sql = """
         SELECT * FROM users u
@@ -322,7 +339,7 @@ class TestRule6SemanticValidation(unittest.TestCase):
             result = rule_6.apply_associativity(parsed, decisions)
             self.assertIsNotNone(result)
 
-    def test_default_behavior(self):
+    def test_default_behavior(self, mock_meta):
         """Test default behavior tanpa decisions."""
         sql = """
         SELECT * FROM employees e

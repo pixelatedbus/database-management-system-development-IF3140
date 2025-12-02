@@ -1,5 +1,6 @@
 """
 Tests untuk Rule Deterministik (Rule 3, Rule 7, dan Rule 8)
+Menggunakan Mock Metadata untuk isolasi pengujian.
 
 Rule deterministik adalah rule yang dijalankan SEKALI di awal proses optimasi,
 sebelum genetic algorithm. Rule ini bersifat always beneficial dan tidak memerlukan
@@ -11,6 +12,7 @@ parameter space exploration.
 """
 
 import unittest
+from unittest.mock import patch, MagicMock
 from query_optimizer.query_tree import QueryTree
 from query_optimizer.optimization_engine import ParsedQuery
 from query_optimizer.query_check import check_query
@@ -18,11 +20,21 @@ from query_optimizer.rule.rule_3 import seleksi_proyeksi
 from query_optimizer.rule.rule_7 import apply_pushdown
 from query_optimizer.rule.rule_8 import push_projection_over_joins
 
+# --- MOCK METADATA ---
+MOCK_METADATA = {
+    "tables": ["users", "profiles", "orders"],
+    "columns": {
+        "users": ["id", "name", "age", "bio"],
+        "profiles": ["id", "user_id", "bio", "verified"],
+        "orders": ["id", "user_id", "amount"]
+    }
+}
 
+@patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA)
 class TestRule3ProjectionElimination(unittest.TestCase):
     """Test Rule 3: Projection Elimination"""
     
-    def test_eliminate_nested_projection(self):
+    def test_eliminate_nested_projection(self, mock_meta):
         """Test eliminasi nested projection: PROJECT(PROJECT(RELATION))"""
         # Build: PROJECT(col1) -> PROJECT(col1, col2) -> RELATION
         relation = QueryTree("RELATION", "users")
@@ -76,7 +88,7 @@ class TestRule3ProjectionElimination(unittest.TestCase):
         
         self.assertFalse(has_nested_project, "Should not have nested PROJECT")
     
-    def test_no_nested_projection(self):
+    def test_no_nested_projection(self, mock_meta):
         """Test query tanpa nested projection (tidak ada perubahan)"""
         # Build: PROJECT -> RELATION (no nesting)
         relation = QueryTree("RELATION", "users")
@@ -113,10 +125,11 @@ class TestRule3ProjectionElimination(unittest.TestCase):
         self.assertEqual(relation_child.val, "users")
 
 
+@patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA)
 class TestRule8ProjectionOverJoin(unittest.TestCase):
     """Test Rule 8: Projection over Join"""
     
-    def test_push_projection_to_join(self):
+    def test_push_projection_to_join(self, mock_meta):
         """Test push projection ke join children"""
         # Build: PROJECT(e.name, d.department) -> JOIN(e, d)
         
@@ -214,7 +227,7 @@ class TestRule8ProjectionOverJoin(unittest.TestCase):
         self.assertTrue(left_has_relation, "Left PROJECT should have RELATION")
         self.assertTrue(right_has_relation, "Right PROJECT should have RELATION")
     
-    def test_no_join_no_change(self):
+    def test_no_join_no_change(self, mock_meta):
         """Test query tanpa JOIN (tidak ada perubahan)"""
         # Build: PROJECT -> RELATION (no JOIN)
         relation = QueryTree("RELATION", "users")
@@ -245,6 +258,7 @@ class TestRule8ProjectionOverJoin(unittest.TestCase):
         self.assertFalse(has_join)
 
 
+@patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA)
 class TestRule7FilterPushdown(unittest.TestCase):
     """Test Rule 7: Filter Pushdown over Join"""
     
@@ -282,7 +296,7 @@ class TestRule7FilterPushdown(unittest.TestCase):
         comp.add_child(right)
         return comp
     
-    def test_push_filter_to_left(self):
+    def test_push_filter_to_left(self, mock_meta):
         """Test push filter ke left side of join"""
         # Build: FILTER → JOIN where filter only references left table
         rel1 = QueryTree("RELATION", "users")
@@ -322,7 +336,7 @@ class TestRule7FilterPushdown(unittest.TestCase):
         right_child = result.query_tree.childs[1]
         self.assertEqual(right_child.type, "RELATION", "Right child should remain RELATION")
     
-    def test_push_filter_to_right(self):
+    def test_push_filter_to_right(self, mock_meta):
         """Test push filter ke right side of join"""
         rel1 = QueryTree("RELATION", "users")
         rel2 = QueryTree("RELATION", "profiles")
@@ -356,7 +370,7 @@ class TestRule7FilterPushdown(unittest.TestCase):
         right_child = result.query_tree.childs[1]
         self.assertEqual(right_child.type, "FILTER", "Right child should be FILTER after pushdown")
     
-    def test_push_filter_to_both_sides(self):
+    def test_push_filter_to_both_sides(self, mock_meta):
         """Test push filters ke both sides of join"""
         rel1 = QueryTree("RELATION", "users")
         rel2 = QueryTree("RELATION", "orders")
@@ -398,7 +412,7 @@ class TestRule7FilterPushdown(unittest.TestCase):
         self.assertEqual(left_child.type, "FILTER", "Left child should be FILTER")
         self.assertEqual(right_child.type, "FILTER", "Right child should be FILTER")
     
-    def test_no_filter_no_change(self):
+    def test_no_filter_no_change(self, mock_meta):
         """Test query tanpa FILTER → JOIN (tidak ada perubahan)"""
         rel1 = QueryTree("RELATION", "users")
         rel2 = QueryTree("RELATION", "profiles")
@@ -422,10 +436,11 @@ class TestRule7FilterPushdown(unittest.TestCase):
         self.assertEqual(result.query_tree.type, "JOIN")
 
 
+@patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA)
 class TestDeterministicRulesInteraction(unittest.TestCase):
-    """Test interaksi antara Rule 3 dan Rule 8"""
+    """Test interaksi antara Rule 3, Rule 7, dan Rule 8"""
     
-    def test_rule3_then_rule8(self):
+    def test_rule3_then_rule8(self, mock_meta):
         """Test Rule 3 dulu, lalu Rule 8"""
         # Build: PROJECT -> PROJECT -> JOIN
         # Rule 3 akan eliminate nested PROJECT
@@ -517,7 +532,7 @@ class TestDeterministicRulesInteraction(unittest.TestCase):
             self.assertTrue(left_is_project or right_is_project, 
                           "At least one JOIN child should be PROJECT after Rule 8")
     
-    def test_rule8_without_rule3(self):
+    def test_rule8_without_rule3(self, mock_meta):
         """Test Rule 8 langsung tanpa Rule 3"""
         # Build: PROJECT -> JOIN (no nested PROJECT)
         
@@ -580,7 +595,7 @@ class TestDeterministicRulesInteraction(unittest.TestCase):
             self.assertTrue(left_is_project or right_is_project,
                           "At least one JOIN child should be PROJECT after Rule 8")
     
-    def test_rule3_then_rule7_then_rule8(self):
+    def test_rule3_then_rule7_then_rule8(self, mock_meta):
         """Test sequence Rule 3 -> Rule 7 -> Rule 8"""
         # Build: PROJECT -> PROJECT -> FILTER -> JOIN
         # Should eliminate inner PROJECT, push filter, then push projection
@@ -671,7 +686,7 @@ class TestDeterministicRulesInteraction(unittest.TestCase):
         # Result should be valid
         self.assertIsNotNone(after_rule8.query_tree)
     
-    def test_order_independence(self):
+    def test_order_independence(self, mock_meta):
         """Test bahwa urutan Rule 3 dan Rule 8 tidak mempengaruhi hasil akhir"""
         # Build query with nested PROJECT over JOIN
         

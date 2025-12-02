@@ -240,7 +240,7 @@ def scenario_5_ga_exploration():
         # crossover_rate=0.8
     )
     
-    optimized = ga.optimize(parsed)
+    optimized, _ = ga.optimize(parsed)
     
     print("\nOptimized Query:")
     print(optimized.query_tree.tree(show_id=True))
@@ -252,11 +252,6 @@ def scenario_5_ga_exploration():
     if cost_optimized < cost_original:
         improvement = ((cost_original - cost_optimized) / cost_original) * 100
         print(f"✓ Improved by {improvement:.1f}%")
-    
-    if ga.best_individual and 'join_child_params' in ga.best_individual.operation_params:
-        print("\nBest JOIN child parameters:")
-        for join_id, swap in ga.best_individual.operation_params['join_child_params'].items():
-            print(f"  JOIN {join_id}: {'SWAP' if swap else 'KEEP'}")
     
     return optimized
 

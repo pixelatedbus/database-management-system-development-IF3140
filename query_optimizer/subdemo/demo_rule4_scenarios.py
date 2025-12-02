@@ -3,7 +3,7 @@ Separate scenarios for Demo Rule 4 to keep demo.py cleaner
 """
 
 from query_optimizer.optimization_engine import OptimizationEngine
-from query_optimizer import rule_4
+from query_optimizer.rule import rule_4
 
 
 def print_separator(title):
