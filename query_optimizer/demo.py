@@ -486,12 +486,23 @@ def demo_genetic_with_rules():
 
     population.sort(key=lambda x: x.fitness)
 
+    def print_params(params):
+        for op, op_params in params.items():
+            print(f"  {op}:")
+            for key, value in op_params.items():
+                print(f"    {key}: {value}")
+
+    def print_genealogy(genealogy):
+        print("Genealogy:")
+        for event in genealogy:
+            print(f"  - {event}: {genealogy[event]}")
+
     def print_individual(title, ind, show_genealogy=False):
         print(f"\n--- {title} ---")
         print(f"Fitness (Cost): {ind.fitness}")
-        print(f"Params Applied: {ind.operation_params}")
+        print_params(ind.operation_params)
         if show_genealogy and hasattr(ind, 'genealogy'):
-            print(f"Genealogy Source: {ind.genealogy}")
+            print_genealogy(ind.genealogy)
         print(ind.query.query_tree.tree(show_id=True))
 
     print("\n>>> BEST Child Generasi 1:")
