@@ -39,6 +39,9 @@ class QueryProcessor:
         
         self.active_transactions = {}
         
+        # Set reference to self in FRM adapter for checkpoint functionality
+        self.adapter_frm.query_processor = self
+        
 
     def execute_query(self, query: str, client_id: int):
         try:
@@ -158,13 +161,16 @@ class QueryProcessor:
                 self.adapter_frm.log_commit(t_id)
                 self.adapter_ccm.commit_transaction(t_id)
             else:
-                # ABORT - discard buffered operations
-                print(f"\n[ABORT] Discarding buffered operations for transaction {t_id}...")
+                # ABORT - discard buffered operations and recover any flushed operations
+                print(f"\n[ABORT] Aborting transaction {t_id}...")
                 buffered_ops = self.query_execution_engine.transaction_buffer.get_buffered_operations(t_id)
-                print(f"[ABORT] Discarded {len(buffered_ops)} buffered operation(s)")
+                print(f"[ABORT] Discarding {len(buffered_ops)} buffered operation(s)")
                 
                 # Clear buffer for this transaction
                 self.query_execution_engine.transaction_buffer.clear_transaction(t_id)
+                
+                # Recover any operations that were flushed to storage during checkpoint
+                self.adapter_frm.recover_transaction(t_id)
                 
                 # Log abort to FRM
                 self.adapter_frm.log_abort(t_id)
@@ -298,6 +304,9 @@ class QueryProcessor:
                 # Clear buffer for aborted transaction
                 self.query_execution_engine.transaction_buffer.clear_transaction(t_id)
                 
+                # Recover any operations that were flushed to storage during checkpoint
+                self.adapter_frm.recover_transaction(t_id)
+                
                 # Log abort to FRM
                 self.adapter_frm.log_abort(t_id)
                 
@@ -314,10 +323,14 @@ class QueryProcessor:
             except Exception as e:
                 # Other errors - abort transaction
                 print(f"\n[ERROR] Execution failed for transaction {t_id}: {e}")
-                self.adapter_ccm.abort_transaction(t_id)
                 
                 # Clear buffer
                 self.query_execution_engine.transaction_buffer.clear_transaction(t_id)
+                
+                # Recover any operations that were flushed to storage during checkpoint
+                self.adapter_frm.recover_transaction(t_id)
+                
+                self.adapter_ccm.abort_transaction(t_id)
                 
                 # Remove from active transactions if it was explicit
                 if in_explicit_transaction and client_id in self.active_transactions:

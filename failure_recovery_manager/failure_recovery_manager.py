@@ -50,7 +50,7 @@ class FailureRecovery:
     def _flush_mem_wal(self):
         with self.lock:
             for infos in self.mem_wal:
-                logFile.write_log_execRes(infos)
+                self.logFile.write_log_execRes(infos)
         self.mem_wal = []
 
     def write_log(self, info: ExecutionResult):
@@ -69,7 +69,10 @@ class FailureRecovery:
             with self.lock:
                 self.mem_wal.append(info)
 
-                if "commit" in info.query.lower() or info.action.lower() == "commit":
+                # Check if action is commit (can be int 2 or string "commit")
+                is_commit = ("commit" in info.query.lower()) or (info.action == 2) or (isinstance(info.action, str) and info.action.lower() == "commit")
+                
+                if is_commit:
                     for infos in self.mem_wal:
                         self.logFile.write_log_execRes(infos)
                 
@@ -79,7 +82,7 @@ class FailureRecovery:
                         self.logFile.write_log_execRes(infos)
                 
                 # to be more efficient, we can also insert the transaction ID into the undo list
-                if "commit" not in info.query.lower() or info.action.lower() != "commit":
+                if not is_commit:
                     if info.transaction_id not in self.undo_list:
                         self.undo_list.append(info.transaction_id)
 
@@ -94,7 +97,7 @@ class FailureRecovery:
             transaction_id=self.current_transaction_id, 
             action=actiontype.checkpoint,
             timestamp=datetime.now(),
-            old_data=self.undo_list,
+            old_data=self.undo_list.copy(),  # Store copy of undo list
             new_data=None,
             table_name=self.current_table_name
         )
@@ -103,6 +106,9 @@ class FailureRecovery:
         # Assume this is the part where we renew the .dat file
 
         self.logFile.write_log(checkpoint_log)
+        
+        # Clear mem_wal after checkpoint since all operations are now in stable storage
+        self.mem_wal = []
 
         pass
 
@@ -114,12 +120,13 @@ class FailureRecovery:
         data_execs = [] # data executions for requesting to Storage Manager
         found_checkpoint = False
 
-        # traverse the log list in reverse
+        # traverse the log list in reverse (newest to oldest)
         for i in range(len(l_list) - 1, -1, -1):
             l = l_list[i]
 
+            # Track checkpoints but don't stop collecting - there may be multiple checkpoints
             if l.action == actiontype.checkpoint:
-                found_checkpoint= True
+                found_checkpoint = True
             
             if l.transaction_id == transaction_id:
                 if l.action == actiontype.write:
@@ -133,14 +140,19 @@ class FailureRecovery:
                     )
                     self.logFile.write_log(undo_log)
 
-                    # if log is before checkpoint, it means that the changes are still at buffer. let QP handle it.
-                    if not found_checkpoint:
-                        continue
+                    # If ANY checkpoint was found, this operation was flushed to storage
+                    # and needs to be undone. Only operations still in buffer (no checkpoint
+                    # encountered yet while going backwards) should be skipped.
+                    if found_checkpoint:
+                        # This operation was flushed during some checkpoint - undo it
+                        data_undo = l.to_data_undo()
+                        data_execs += data_undo
+                    # else: still in buffer, QP will discard it
 
-                    data_undo = l.to_data_undo()
-                    data_execs += data_undo
-                else: # start, commit, abort.
+                elif l.action == actiontype.start:
+                    # Reached transaction start, stop traversing
                     break
+                # else: commit, abort, or checkpoint for this transaction - continue traversing
 
         abort_log = log(
             transaction_id=transaction_id,

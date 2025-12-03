@@ -2,6 +2,16 @@
 
 Comprehensive unit tests for the Query Processor module covering all major SQL operations.
 
+## 📊 Test Reports
+
+Detailed test results and coverage analysis:
+
+- **[TEST_RESULTS.md](TEST_RESULTS.md)** - Main SQL operations test results *(existing)*
+- **[TEST_CONCURRENCY_RESULTS.md](TEST_CONCURRENCY_RESULTS.md)** - Concurrency control test results *(existing)*
+- **[TEST_ABORT_RECOVERY_RESULTS.md](TEST_ABORT_RECOVERY_RESULTS.md)** - Transaction abort recovery and checkpoint test results ✅ **NEW**
+
+---
+
 ## Test Coverage
 
 ### 1. CREATE TABLE Tests (`TestCreateTable`)
@@ -293,6 +303,40 @@ Each test class follows this pattern:
 - `assertQuerySuccess(result)`: Verify query executed successfully
 - `assertQueryFails(result)`: Verify query failed as expected
 - Standard unittest assertions: `assertEqual`, `assertIn`, `assertGreater`, etc.
+
+## Failure Recovery & Checkpoint Tests
+
+### Transaction Abort Recovery with Checkpoints (`test_abort_recovery.py`) ✅
+Comprehensive test for transaction abort recovery and checkpoint functionality:
+- **Test**: Abort transaction after multiple checkpoints
+- **Purpose**: Verify that abort undoes both buffered and flushed operations
+- **Status**: ✅ PASSED (see [TEST_ABORT_RECOVERY_RESULTS.md](TEST_ABORT_RECOVERY_RESULTS.md))
+
+**Key Features Tested:**
+- Automatic checkpoint creation at WAL threshold
+- Operations flushed to storage during checkpoint
+- FRM `recover_transaction()` undoes flushed operations
+- Query processor discards buffered operations
+- Complete rollback verification
+- Checkpoint triggering logic
+- Bottom-to-top log traversal for recovery
+
+**Example Scenario:**
+```python
+# Set low WAL size to trigger frequent checkpoints
+qp.adapter_frm.frm.wal_size = 5
+
+# Insert 15 rows (triggers 3 checkpoints)
+for i in range(15):
+    qp.execute_query(f"INSERT INTO table VALUES ({i})", client_id)
+# Result: 11 rows flushed, 4 in buffer
+
+# Abort transaction
+qp.execute_query("ABORT", client_id)
+# Result: All 15 rows removed (11 via recovery, 4 discarded)
+```
+
+**Demo Available**: Run `python query_processor/tests/demo_abort_recovery.py`
 
 ## Notes
 
