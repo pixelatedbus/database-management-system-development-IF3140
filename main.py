@@ -1,6 +1,8 @@
 import sys
 import os
 import logging
+import threading
+import time
 
 logging.basicConfig(
     level=logging.CRITICAL,  # Change to INFO for debug output
@@ -71,14 +73,33 @@ def format_results(result):
     
     return result.message
 
+def run_transaction(qp, client_id, statements, sleep_time=5):
+    print(f"[INFO] Transaction {client_id} scheduled. Sleeping {sleep_time} seconds before processing...")
+    time.sleep(10)
+    print(f"[INFO] Transaction {client_id} starting...")
+
+    for query in statements:
+        result = qp.execute_query(query, client_id)
+        print(format_results(result))
+        print()
+
 
 def main():
     print_banner()
     print("Type 'help' or '\\h' for help, '\\q' to quit.\n")
+    print("End your input with a semicolon (;).")
     
+    # client id: 0 untuk single query, >=1 untuk transaction
+
     processor = QueryProcessor()
     client_id = 1  # Single client in CLI mode
     transaction_active = False
+
+    buffer = "" # handling multiline
+
+    # handling transaksi konkuren
+    transaction_statements = []
+    transaction_client_id = None
     
     while True:
         try:
@@ -88,44 +109,83 @@ def main():
             else:
                 prompt = "dbms> "
             
-            # Get input
-            query = input(prompt).strip()
-            
-            # Skip empty lines
-            if not query:
+            line = input(prompt).strip()
+            buffer += " " + line
+
+            if ";" not in buffer:
                 continue
             
-            # Handle special commands
-            if query.lower() in ['\\q', 'quit', 'exit']:
+            # handling multi-statement
+            statements = buffer.split(";")
+            buffer = statements[-1].strip() # sisa
+            statements = [s.strip() for s in statements[:-1] if s.strip()] # jaga-jaga
+
+            for query in statements:
+                # Skip empty lines
+                if not query:
+                    continue
+            
+                # Handle special commands
+                if query.lower() in ['\\q', 'quit', 'exit']:
+                    if transaction_active:
+                        print("Warning: Transaction still active. Committing...")
+                        result = processor.execute_query("COMMIT", client_id)
+                    print("\nGoodbye!")
+                    sys.exit()
+            
+                if query.lower() in ['\\h', 'help']:
+                    print_help()
+                    continue
+            
+                query_upper = query.upper().strip()
+                # handling transaksi
+                if query_upper == "BEGIN TRANSACTION":
+                    if transaction_active:
+                        print("[ERROR] Already inside a transaction...")
+                        continue
+
+                    result = processor.execute_query(query, client_id)
+                    print(format_results(result), '\n')
+
+                    if result.success:
+                        transaction_active = True
+                        transaction_statements = []
+                        transaction_client_id = client_id
+                        client_id += 1
+                    
+                    continue
+
                 if transaction_active:
-                    print("Warning: Transaction still active. Committing...")
-                    result = processor.execute_query("COMMIT", client_id)
-                print("\nGoodbye!")
-                break
-            
-            if query.lower() in ['\\h', 'help']:
-                print_help()
-                continue
-            
-            # Execute query
-            result = processor.execute_query(query, client_id)
-            
-            # Update transaction state
-            query_upper = query.upper().strip()
-            if query_upper == "BEGIN TRANSACTION":
-                if result.success:
-                    transaction_active = True
-            elif query_upper in ["COMMIT", "ABORT"]:
-                if result.success or "aborted" in result.message.lower():
-                    transaction_active = False
-            
-            # Check if transaction was aborted by system
-            if not result.success and ("aborted" in result.message.lower() or "died" in result.message.lower()):
-                transaction_active = False
-            
-            # Display results
-            print(format_results(result))
-            print()
+                    if query_upper not in ["COMMIT", "ABORT"]:
+                        transaction_statements.append(query)
+                        print(f"(queued) {query} \n") # sanity check, boleh dihapus
+                        continue
+
+                    if query_upper == "COMMIT":
+                        print(f"[INFO] Spawning transaction thread for T{transaction_client_id}...\n")
+                        
+                        stmts_copy = transaction_statements.copy()
+                        thread = threading.Thread(target=run_transaction, args=(processor, transaction_client_id, stmts_copy), daemon=True)
+                        thread.start()
+                    
+                        transaction_active = False
+                        transaction_statements = []
+                        transaction_client_id = None
+                        continue
+                    
+                    if query_upper == "ABORT":
+                        result = processor.execute_query(query, transaction_client_id)
+                        print(format_results(result), "\n")
+                        transaction_active = False
+                        transaction_statements = []
+                        transaction_client_id = None
+                        continue
+
+                # Execute query (normal)
+                result = processor.execute_query(query, 0) # untuk single query (non transaction)
+                # Display results
+                print(format_results(result))
+                print()
             
         except KeyboardInterrupt:
             print("\n\nInterrupted. Use '\\q' to quit.")
