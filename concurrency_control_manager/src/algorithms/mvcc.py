@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Set
 from datetime import datetime
 from enum import Enum
 from .base import ConcurrencyAlgorithm
@@ -14,6 +14,12 @@ class MVTOResponse(AlgorithmResponse):
     def __init__(self, allowed: bool, message: str, value: any = None, cascaded_tids: Optional[List[int]] = None):
         super().__init__(allowed, message, value)
         self.cascaded_tids = cascaded_tids
+
+class MV2PLResponse(AlgorithmResponse):
+    """Response khusus untuk MV2PL yang menyimpan informasi operasi yang dieksekusi dari queue"""
+    def __init__(self, allowed: bool, message: str, value: any = None, executed_ops: Optional[List[Tuple]] = None):
+        super().__init__(allowed, message, value)
+        self.executed_ops = executed_ops  # List of (op_type, tid, message, value)
 
 class MVCCVariant(Enum):
     MVTO = "MVTO"                               # Multi-Version Timestamp Ordering
@@ -48,7 +54,7 @@ class TransactionInfo:
         self.write_intents: set = set()                             # Objek yang akan ditulis (untuk keputusan lock MV2PL)
         self.read_versions: Dict[str, int] = {}                     # Lacak write_ts dari versi yang dibaca untuk setiap object_id (untuk cascading rollback)
         self.locks_held: Dict[str, str] = {}                        # Lock yang dipegang (MV2PL)
-        self.has_exclusive_lock: bool = False                       # Flag exclusive lock (SI)
+        self.exclusive_locks: Set[str] = set()                      # Objects with exclusive lock (SI-FUW)
         self.buffered_writes: Dict[str, Any] = {}                   # Buffered writes (SI)
         self.rollback_count: int = 0                                # Jumlah rollback
         self.locks_from_queue: set = set()                          # Lacak lock yang didapat dari queue (MV2PL)
@@ -208,17 +214,14 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
         
         if self.variant == MVCCVariant.MVTO:
             success, message = self._commit_mvto(transaction, trans_info)
+            response = AlgorithmResponse(allowed=success, message=message)
         elif self.variant == MVCCVariant.MV2PL:
-            result = self._commit_mv2pl(transaction, trans_info)
-            if len(result) == 3:
-                success, message, executed_ops = result
-                # Simpan executed_ops untuk tampilan test jika diperlukan
-                if hasattr(self, '_last_executed_ops'):
-                    self._last_executed_ops = executed_ops
-            else:
-                success, message = result
+            response = self._commit_mv2pl(transaction, trans_info)
+            success = response.allowed
+            message = response.message
         else:
             success, message = self._commit_snapshot(transaction, trans_info)
+            response = AlgorithmResponse(allowed=success, message=message)
         
         if success:
             transaction.set_status(TransactionStatus.Committed)
@@ -229,7 +232,7 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
             event = "COMMIT" if success else "ABORT"
             self.log_handler.log_transaction_event(transaction.transaction_id, event)
         
-        return AlgorithmResponse(allowed=success, message=message)
+        return response
     
     def abort_transaction(self, transaction: Transaction) -> AlgorithmResponse:
         if transaction.transaction_id not in self.transaction_info:
@@ -240,9 +243,20 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
         
         transaction.set_status(TransactionStatus.Aborted)
         
+        # Clear all transaction state for clean restart
+        trans_info.read_set.clear()
+        trans_info.write_set.clear()
+        trans_info.write_intents.clear()
+        trans_info.read_versions.clear()
+        trans_info.buffered_writes.clear()
+        trans_info.locks_from_queue.clear()
+        
         if self.variant == MVCCVariant.MV2PL:
             self._release_all_locks(transaction.transaction_id)
+            trans_info.locks_held.clear()
         
+        if self.variant in [MVCCVariant.SNAPSHOT_ISOLATION]:
+            trans_info.exclusive_locks.clear()
         
         if self.log_handler:
             self.log_handler.log_transaction_event(
@@ -338,11 +352,17 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
     def validate_write_mvto(self, transaction: Transaction, row: Row, auto_reexecute: bool = True) -> MVTOResponse:
         """Validasi write untuk MVTO dengan rollback dan re-execution otomatis.
         
+        Note: Parameter auto_reexecute diabaikan untuk MVTO. Logic MVTO selalu:
+        - Mendeteksi apakah operasi pertama atau bukan
+        - Jika operasi pertama yang abort: auto re-execute
+        - Jika bukan operasi pertama yang abort: return abort, caller restart dari awal
+        
         Returns:
             MVTOResponse yang berisi:
             - allowed: apakah operasi berhasil
             - message: pesan hasil operasi
             - cascaded_tids: List ID transaksi yang di-cascade (None jika tidak ada rollback)
+            - abort_message: pesan abort asli (jika ada rollback)
         """
         action = Action(
             action_id=self.next_action_id,
@@ -356,22 +376,45 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
         # Coba operasi write
         success, message = self._write_mvto(transaction, row, action)
         
-        # Jika gagal (ABORT) dan auto_reexecute enabled, rollback dan retry
-        if not success and auto_reexecute:
-            # Lakukan rollback dan dapatkan transaksi yang di-cascade
-            new_ts, cascaded_tids = self.rollback_mvto_transaction(transaction)
+        # Jika gagal (ABORT), SELALU lakukan rollback untuk MVTO
+        # Logic otomatis mendeteksi first operation untuk re-execution
+        if not success:
+            trans_info = self.transaction_info[transaction.transaction_id]
+            abort_message = message  # Save original abort message
             
-            # Re-execute write dengan timestamp baru
-            success, message = self._write_mvto(transaction, row, action)
+            # Check if this is the first operation (no previous reads or writes)
+            is_first_operation = len(trans_info.read_set) == 0 and len(trans_info.write_set) == 0
             
-            return MVTOResponse(allowed=success, message=message, cascaded_tids=cascaded_tids)
+            # Build transactions_dict for recursive cascading
+            transactions_dict = {tid: info.transaction for tid, info in self.transaction_info.items()}
+            
+            # Lakukan rollback dan dapatkan transaksi yang di-cascade (including nested)
+            new_ts, cascaded_tids = self.rollback_mvto_transaction(transaction, transactions_dict)
+            
+            # If this was the first operation, automatically re-execute it
+            if is_first_operation:
+                success, message = self._write_mvto(transaction, row, action)
+                response = MVTOResponse(allowed=success, message=message, cascaded_tids=cascaded_tids)
+                response.abort_message = abort_message  # Add abort message to response
+                return response
+            
+            # Not first operation - return abort status, caller must restart from first operation
+            return MVTOResponse(allowed=False, message=abort_message, cascaded_tids=cascaded_tids)
         
-        # Tidak perlu rollback
+        # Tidak perlu rollback atau berhasil
         return MVTOResponse(allowed=success, message=message, cascaded_tids=None)
     
-    def rollback_mvto_transaction(self, transaction: Transaction) -> Tuple[int, List[int]]:
+    def rollback_mvto_transaction(self, transaction: Transaction, transactions_dict: Optional[Dict[int, Transaction]] = None) -> Tuple[int, List[int]]:
         """Rollback transaksi di MVTO dan tangani cascading rollback.
-        Returns (new_timestamp, cascaded_transaction_ids).
+        Returns (new_timestamp, all_cascaded_transaction_ids_including_nested).
+        
+        Args:
+            transaction: Transaction object yang akan di-rollback
+            transactions_dict: Optional dict mapping tid -> Transaction object untuk recursive cascading.
+                              Jika None, hanya immediate cascading yang dilakukan.
+        
+        Note: Method ini sekarang menangani SEMUA cascading rollback secara rekursif jika
+        transactions_dict diberikan. Jika tidak, hanya immediate cascading yang dilakukan.
         """
         trans_info = self.transaction_info[transaction.transaction_id]
         
@@ -414,7 +457,7 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
         
         # Cascading rollback: abort transaksi yang membaca VERSI yang ditulis oleh transaksi ini
         # Hanya abort jika mereka membaca versi spesifik dengan write_ts = old_timestamp
-        cascaded_transactions = []
+        immediate_cascaded = []
         for tid, other_info in self.transaction_info.items():
             if tid == transaction.transaction_id:
                 continue
@@ -435,9 +478,100 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
             
             if should_cascade:
                 other_info.transaction.set_status(TransactionStatus.Aborted)
-                cascaded_transactions.append(tid)
+                immediate_cascaded.append(tid)
         
-        return new_timestamp, cascaded_transactions
+        # If transactions_dict is provided, handle nested cascading recursively
+        if transactions_dict is not None:
+            all_cascaded = []
+            to_process = list(immediate_cascaded)
+            
+            while to_process:
+                cascaded_tid = to_process.pop(0)
+                if cascaded_tid in all_cascaded:
+                    continue  # Already processed
+                
+                all_cascaded.append(cascaded_tid)
+                cascaded_t = transactions_dict.get(cascaded_tid)
+                
+                if cascaded_t:
+                    # Rollback cascaded transaction and get its nested cascaded transactions
+                    _, nested_cascaded = self._rollback_mvto_single(cascaded_t)
+                    # Add nested cascaded transactions to process
+                    to_process.extend(nested_cascaded)
+            
+            return new_timestamp, all_cascaded
+        else:
+            # Return only immediate cascading
+            return new_timestamp, immediate_cascaded
+    
+    def _rollback_mvto_single(self, transaction: Transaction) -> Tuple[int, List[int]]:
+        """Rollback single transaction without recursive cascading.
+        Used internally by rollback_mvto_transaction for nested rollbacks.
+        Returns (new_timestamp, immediate_cascaded_transaction_ids).
+        """
+        trans_info = self.transaction_info[transaction.transaction_id]
+        
+        # Simpan timestamp lama sebelum update (untuk menghapus versi)
+        old_timestamp = trans_info.timestamp
+        
+        # Hitung timestamp baru (lebih besar dari semua transaksi aktif)
+        max_concurrent_ts = max(
+            (info.timestamp for tid, info in self.transaction_info.items()
+                if tid != transaction.transaction_id),
+            default=0
+        )
+        new_timestamp = max(self.operation_count, max_concurrent_ts + 1)
+        self.operation_count = new_timestamp
+        
+        # Increment counter rollback
+        trans_info.rollback_count += 1
+        
+        # Simpan write set lama untuk pengecekan cascading rollback
+        old_write_set = trans_info.write_set.copy()
+        
+        # Bersihkan state transaksi untuk re-execution
+        trans_info.write_set.clear()
+        trans_info.read_set.clear()
+        trans_info.timestamp = new_timestamp
+        trans_info.locks_held.clear()
+        trans_info.buffered_writes.clear()
+        
+        # Hapus versi yang dibuat oleh transaksi ini (menggunakan old_timestamp)
+        for obj_id in old_write_set:
+            if obj_id in self.data_versions:
+                # Hapus versi yang ditulis oleh transaksi ini dengan timestamp lama
+                self.data_versions[obj_id] = [
+                    v for v in self.data_versions[obj_id]
+                    if v.write_ts != old_timestamp
+                ]
+        
+        # Set status transaksi ke active untuk re-execution
+        transaction.set_status(TransactionStatus.Active)
+        
+        # Cascading rollback: abort transaksi yang membaca VERSI yang ditulis oleh transaksi ini
+        immediate_cascaded = []
+        for tid, other_info in self.transaction_info.items():
+            if tid == transaction.transaction_id:
+                continue
+            if other_info.transaction.status == TransactionStatus.Aborted:
+                continue
+            if other_info.transaction.status == TransactionStatus.Committed:
+                continue
+            
+            # Cek apakah transaksi lain membaca VERSI yang ditulis oleh transaksi yang di-rollback
+            should_cascade = False
+            for obj_id in old_write_set:
+                # Cek apakah transaksi lain membaca objek ini DAN membaca versi yang ditulis oleh tx yang di-rollback
+                if obj_id in other_info.read_versions:
+                    if other_info.read_versions[obj_id] == old_timestamp:
+                        should_cascade = True
+                        break
+            
+            if should_cascade:
+                other_info.transaction.set_status(TransactionStatus.Aborted)
+                immediate_cascaded.append(tid)
+        
+        return new_timestamp, immediate_cascaded
     
     def _rollback_mvto(self, transaction: Transaction) -> int:
         """Method legacy - memanggil rollback_mvto_transaction"""
@@ -475,7 +609,17 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
         
         else:
             # Akan menulis objek ini - perlu lock
-            if not self._acquire_lock(transaction.transaction_id, object_id, "S"):
+            lock_acquired, wounded_tids = self._acquire_lock(transaction.transaction_id, object_id, "S")
+            
+            # Handle wounded transactions
+            if wounded_tids:
+                for wounded_tid in wounded_tids:
+                    # Remove from queue - wounded transaction cannot proceed
+                    self.operation_queue = [op for op in self.operation_queue if op['tid'] != wounded_tid]
+                    if wounded_tid in self.blocked_transactions:
+                        self.blocked_transactions.remove(wounded_tid)
+            
+            if not lock_acquired:
                 # Tambahkan ke queue
                 self.operation_queue.append({
                     'type': 'read',
@@ -504,7 +648,17 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
         # Tandai write intent
         trans_info.write_intents.add(object_id)
         
-        if not self._acquire_lock(transaction.transaction_id, object_id, "X"):
+        lock_acquired, wounded_tids = self._acquire_lock(transaction.transaction_id, object_id, "X")
+        
+        # Handle wounded transactions
+        if wounded_tids:
+            for wounded_tid in wounded_tids:
+                # Remove from queue - wounded transaction cannot proceed
+                self.operation_queue = [op for op in self.operation_queue if op['tid'] != wounded_tid]
+                if wounded_tid in self.blocked_transactions:
+                    self.blocked_transactions.remove(wounded_tid)
+        
+        if not lock_acquired:
             # Tambahkan ke queue
             self.operation_queue.append({
                 'type': 'write',
@@ -532,9 +686,20 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
             return True, f"T{transaction.transaction_id} writes {object_id}∞ (lock-X acquired from queue)"
         return True, f"T{transaction.transaction_id} writes {object_id}∞ (lock-X acquired)"
     
-    def _commit_mv2pl(self, transaction: Transaction, trans_info: TransactionInfo) -> Tuple[bool, str]:
+    def _commit_mv2pl(self, transaction: Transaction, trans_info: TransactionInfo) -> MV2PLResponse:
         if trans_info.transaction_type == TransactionType.READ_ONLY:
-            return True, f"T{transaction.transaction_id} (read-only) COMMIT"
+            # Tetap proses queue meskipun read-only
+            executed_ops = self._release_all_locks_and_process_queue(transaction.transaction_id)
+            
+            base_message = f"T{transaction.transaction_id} (read-only) COMMIT"
+            
+            if executed_ops:
+                queue_str = self._get_queue_string()
+                if queue_str:
+                    return MV2PLResponse(allowed=True, message=f"{base_message}, process queue {queue_str}", value=None, executed_ops=executed_ops)
+                return MV2PLResponse(allowed=True, message=f"{base_message}, process queue", value=None, executed_ops=executed_ops)
+            
+            return MV2PLResponse(allowed=True, message=base_message, value=None, executed_ops=None)
         
         new_ts = self.ts_counter + 1
         trans_info.timestamp = new_ts
@@ -559,25 +724,39 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
         if executed_ops:
             # Tambahkan info tentang pemrosesan queue
             if queue_str:
-                return True, f"{base_message}, process queue {queue_str}", executed_ops
-            return True, f"{base_message}, process queue", executed_ops
+                return MV2PLResponse(allowed=True, message=f"{base_message}, process queue {queue_str}", executed_ops=executed_ops)
+            return MV2PLResponse(allowed=True, message=f"{base_message}, process queue", executed_ops=executed_ops)
         
         if queue_str:
-            return True, f"{base_message} {queue_str}"
-        return True, base_message
+            return MV2PLResponse(allowed=True, message=f"{base_message} {queue_str}", executed_ops=None)
+        return MV2PLResponse(allowed=True, message=base_message, executed_ops=None)
     
-    def _acquire_lock(self, transaction_id: int, object_id: str, lock_type: str) -> bool:
+    def _acquire_lock(self, transaction_id: int, object_id: str, lock_type: str) -> tuple[bool, list[int]]:
+        """
+        Acquire lock with Wound-Wait deadlock prevention.
+        
+        Uses transaction ID as priority (lower ID = older = higher priority)
+        since in MV2PL timestamps are only assigned at commit time.
+        
+        Returns:
+            tuple[bool, list[int]]: (lock_acquired, list_of_wounded_transactions)
+            - If lock acquired: (True, [])
+            - If must wait: (False, [])
+            - If wounds younger transactions: (True, [tid1, tid2, ...])
+        """
         trans_info = self.transaction_info[transaction_id]
+        requesting_id = transaction_id  # Use TID as priority (lower = older)
+        wounded_tids = []
         
         # Cek apakah transaksi sudah punya lock ini
         if object_id in trans_info.locks_held:
             held_lock = trans_info.locks_held[object_id]
             # Jika sudah punya X lock, bisa melakukan apapun
             if held_lock == "X":
-                return True
+                return True, []
             # Jika punya S lock dan mau S lock, OK
             if held_lock == "S" and lock_type == "S":
-                return True
+                return True, []
             # Jika punya S lock dan mau X lock, perlu upgrade (cek tidak ada S lock lain)
             if held_lock == "S" and lock_type == "X":
                 # Cek apakah ada transaksi lain yang memegang S lock pada objek yang sama
@@ -585,15 +764,25 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
                     if tid == transaction_id:
                         continue
                     if object_id in other_info.locks_held and other_info.locks_held[object_id] == "S":
-                        # Tidak bisa upgrade, harus menunggu
-                        self.blocked_transactions.add(transaction_id)
-                        return False
-                # Bisa upgrade
+                        other_id = tid
+                        
+                        # Wound-Wait: Jika requesting lebih tua (ID lebih kecil), wound yang lebih muda
+                        if requesting_id < other_id:
+                            # Wound the younger transaction
+                            wounded_tids.append(tid)
+                            # Hapus lock-nya
+                            other_info.locks_held.pop(object_id, None)
+                        else:
+                            # Requesting lebih muda, harus wait
+                            self.blocked_transactions.add(transaction_id)
+                            return False, []
+                
+                # Bisa upgrade sekarang (semua younger transactions di-wound)
                 trans_info.locks_held[object_id] = "X"
-                return True
+                return True, wounded_tids
         
-        # Cek apakah lock bisa didapat
-        can_acquire = True
+        # Cek konflik dengan lock yang ada
+        conflicting_tids = []
         for tid, other_info in self.transaction_info.items():
             if tid == transaction_id:
                 continue
@@ -604,17 +793,37 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
                 # 1. Mau X lock - konflik dengan lock apapun (S atau X)
                 # 2. Mau S lock - konflik hanya dengan X lock
                 if lock_type == "X" or held_lock == "X":
-                    can_acquire = False
+                    conflicting_tids.append(tid)
+        
+        if conflicting_tids:
+            # Ada konflik - terapkan Wound-Wait
+            all_conflicts_younger = True
+            
+            for tid in conflicting_tids:
+                other_id = tid
+                
+                if requesting_id < other_id:
+                    # Requesting lebih tua (ID lebih kecil) - WOUND yang lebih muda
+                    wounded_tids.append(tid)
+                    # Hapus lock yang dipegang younger transaction
+                    self.transaction_info[tid].locks_held.pop(object_id, None)
+                else:
+                    # Requesting lebih muda - harus WAIT
+                    all_conflicts_younger = False
                     break
+            
+            if not all_conflicts_younger:
+                # Ada transaction yang lebih tua dari requesting, harus wait
+                self.blocked_transactions.add(transaction_id)
+                return False, []
+            
+            # Semua conflicting transactions sudah di-wound, acquire lock
+            trans_info.locks_held[object_id] = lock_type
+            return True, wounded_tids
         
-        if not can_acquire:
-            # Tandai transaksi sebagai blocked
-            self.blocked_transactions.add(transaction_id)
-            return False
-        
-        # Berikan lock
+        # Tidak ada konflik - berikan lock
         trans_info.locks_held[object_id] = lock_type
-        return True
+        return True, []
     
     def _release_all_locks(self, transaction_id: int) -> None:
         trans_info = self.transaction_info[transaction_id]
@@ -642,7 +851,17 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
                     row = op['row']
                     
                     # Coba untuk mendapat lock
-                    if self._acquire_lock(op_tid, object_id, "S"):
+                    lock_acquired, wounded_tids = self._acquire_lock(op_tid, object_id, "S")
+                    
+                    # Handle wounded transactions from queue
+                    if wounded_tids:
+                        for wounded_tid in wounded_tids:
+                            # Remove wounded transaction from queue
+                            remaining_queue = [item for item in remaining_queue if item['tid'] != wounded_tid]
+                            if wounded_tid in self.blocked_transactions:
+                                self.blocked_transactions.remove(wounded_tid)
+                    
+                    if lock_acquired:
                         # Eksekusi read
                         versions = self.data_versions[object_id]
                         latest_version = versions[-1]
@@ -661,7 +880,17 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
                     row = op['row']
                     
                     # Coba untuk mendapat lock
-                    if self._acquire_lock(op_tid, object_id, "X"):
+                    lock_acquired, wounded_tids = self._acquire_lock(op_tid, object_id, "X")
+                    
+                    # Handle wounded transactions from queue
+                    if wounded_tids:
+                        for wounded_tid in wounded_tids:
+                            # Remove wounded transaction from queue
+                            remaining_queue = [item for item in remaining_queue if item['tid'] != wounded_tid]
+                            if wounded_tid in self.blocked_transactions:
+                                self.blocked_transactions.remove(wounded_tid)
+                    
+                    if lock_acquired:
                         # Eksekusi write
                         versions = self.data_versions[object_id]
                         new_version = RowVersion(
@@ -683,9 +912,9 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
                         remaining_queue.append(op)
                 
                 elif op_type == 'commit':
-                    # Cek apakah transaksi masih punya operasi non-commit yang pending
+                    # Cek apakah transaksi masih punya operasi non-commit yang pending di remaining_queue
                     has_pending = any(item['tid'] == op_tid and item['type'] != 'commit' 
-                                    for item in self.operation_queue if item != op)
+                                    for item in remaining_queue)
                     
                     if not has_pending:
                         # Bisa commit sekarang
@@ -712,6 +941,9 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
                         transaction.set_status(TransactionStatus.Committed)
                         executed_ops.append(('commit', op_tid, message, None))
                         progress = True
+                        
+                        # Lepaskan semua lock yang dimiliki transaksi ini
+                        self._release_all_locks(op_tid)
                         
                         # Hapus dari blocked
                         if op_tid in self.blocked_transactions:
@@ -747,17 +979,20 @@ class MVCCAlgorithm(ConcurrencyAlgorithm):
         trans_info = self.transaction_info[transaction.transaction_id]
         
         if self.isolation_policy == IsolationPolicy.FIRST_UPDATER_WIN:
+            # Check if any other active transaction has exclusive lock on THIS specific object
             for tid, other_info in self.transaction_info.items():
                 if tid == transaction.transaction_id:
                     continue
                 if other_info.transaction.status in [TransactionStatus.Committed, TransactionStatus.Aborted]:
                     continue
                 
-                if other_info.has_exclusive_lock:
+                # Only conflict if other transaction has exclusive lock on THE SAME object
+                if object_id in other_info.exclusive_locks:
                     transaction.set_status(TransactionStatus.Aborted)
-                    return False, f"T{transaction.transaction_id} ABORTED: exclusive lock conflict"
+                    return False, f"T{transaction.transaction_id} ABORTED: exclusive lock conflict on {object_id}"
             
-            trans_info.has_exclusive_lock = True
+            # Acquire exclusive lock on this specific object
+            trans_info.exclusive_locks.add(object_id)
         
         trans_info.write_set.add(object_id)
         trans_info.buffered_writes[object_id] = row.data.get('value', 0)
