@@ -12,6 +12,7 @@ from .models import (
     DataRetrieval,
     DataWrite,
     DataDeletion,
+    DataUpdate,
     Statistic,
     ColumnDefinition,
     ForeignKey
@@ -568,7 +569,7 @@ class StorageManager:
         2. For equality (=) only: Pick hash if available (O(1) vs O(log n))
         3. Selectivity: Lower V(column) = more selective (less distinct values)
         
-        Returns:
+        Returns: 
             Tuple (index_object, matching_condition) atau None
         """
         # Collect semua usable indexes
@@ -865,6 +866,115 @@ class StorageManager:
 
             print(f"updated {rows_affected} rows di tabel '{table_name}' (efficient index update!)")
             return rows_affected
+
+    def update_by_old_new_data(self, data_update: DataUpdate) -> int:
+        """Update rows dengan matching old_data ke new_data.
+        
+        Method sederhana untuk FRM: kasih old_data dan new_data,
+        method bakal traverse semua rows, kalo ketemu yang match,
+        langsung ganti ke new_data.
+        
+        Matching strategy:
+        1. Try match by PRIMARY KEY dulu
+        2. Kalo ga ketemu, fallback ke EXACT MATCH (semua field)
+        
+        Args:
+            data_update: DataUpdate object dengan table, old_data, new_data
+            
+        Returns:
+            int: Jumlah rows yang berhasil diupdate
+            
+        Example:
+            count = sm.update_by_old_new_data(
+                DataUpdate(
+                    table="users",
+                    old_data=[{"id": 1, "name": "Alice", "status": "inactive"}],
+                    new_data=[{"id": 1, "name": "Alice", "status": "active"}]
+                )
+            )
+            # Try match by id=1 first, kalo ga ada fallback ke exact match
+        """
+        table_name = data_update.table
+        old_data = data_update.old_data
+        new_data = data_update.new_data
+        
+        if table_name not in self.tables:
+            raise ValueError(f"Tabel '{table_name}' tidak ditemukan")
+            
+        if len(old_data) != len(new_data):
+            raise ValueError("old_data dan new_data harus sama panjangnya")
+            
+        if not old_data:
+            return 0
+            
+        table_file = self._get_table_file_path(table_name)
+        column_defs = self._get_column_definitions(table_name)
+        schema_names = [c.name for c in column_defs]
+        
+        # Cari primary key dari table
+        primary_keys = [col.name for col in column_defs if col.is_primary_key]
+        if not primary_keys:
+            # Fallback: kalo ga ada PK, pake kolom pertama sebagai identifier
+            primary_keys = [schema_names[0]]
+        
+        # Load semua rows
+        all_rows, _ = self._load_all_rows_with_schema(table_name)
+        
+        # Bikin 2 maps: by primary key dan by exact match
+        pk_map = {}  # primary key -> (old_row, new_row)
+        exact_map = {}  # exact match -> new_row
+        
+        for old_row, new_row in zip(old_data, new_data):
+            # Map by primary key
+            pk_values = tuple(old_row.get(pk) for pk in primary_keys)
+            pk_map[pk_values] = (old_row, new_row)
+            
+            # Map by exact match (fallback)
+            exact_key = tuple(sorted(old_row.items()))
+            exact_map[exact_key] = new_row
+        
+        # Traverse dan replace
+        new_rows = []
+        rows_updated = 0
+        updated_rows_info: List[Tuple[int, Dict[str, Any], Dict[str, Any]]] = []
+        matched_by_pk = 0
+        matched_by_exact = 0
+        
+        for record_id, row in enumerate(all_rows):
+            # Try 1: Match by primary key
+            row_pk = tuple(row.get(pk) for pk in primary_keys)
+            if row_pk in pk_map:
+                old_row, new_row = pk_map[row_pk]
+                new_rows.append(new_row.copy())
+                updated_rows_info.append((record_id, old_row, new_row))
+                rows_updated += 1
+                matched_by_pk += 1
+                continue
+            
+            # Try 2: Fallback ke exact match
+            row_key = tuple(sorted(row.items()))
+            if row_key in exact_map:
+                old_row = row.copy()
+                new_row = exact_map[row_key].copy()
+                new_rows.append(new_row)
+                updated_rows_info.append((record_id, old_row, new_row))
+                rows_updated += 1
+                matched_by_exact += 1
+                continue
+            
+            # No match, keep as is
+            new_rows.append(row)
+        
+        # Tulis balik kalo ada yang diupdate
+        if rows_updated > 0:
+            write_binary_table(table_file, new_rows, schema_names, self.block_size)
+            
+            # Update indexes efficiently
+            self._update_indexes_after_update(table_name, updated_rows_info)
+        
+        print(f"updated {rows_updated} rows di tabel '{table_name}' "
+              f"(by PK: {matched_by_pk}, by exact: {matched_by_exact})")
+        return rows_updated
 
 
 
