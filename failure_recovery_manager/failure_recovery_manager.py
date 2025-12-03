@@ -2,6 +2,9 @@ from .buffer import buffer, table
 from .log import actiontype, log
 from .recovery_criteria import RecoveryCriteria
 from .logFile import logFile
+from storage_manager.models import (
+    DataWrite 
+)
 import threading
 from typing import List
 from datetime import datetime
@@ -101,39 +104,119 @@ class FailureRecovery:
 
         pass
 
-    def _recover_transaction(self, transaction_id: int) -> None:
+    def _recover_transaction(self, transaction_id: int) -> List[DataWrite]:
         self._flush_mem_wal()
 
         l_list = self.logFile.get_logs()
 
-
+        dws = [] # datawrites to return
+        found_checkpoint = False
         for i in range(len(l_list) - 1, -1, -1):
-            print(i, end=" ")
             l = l_list[i]
+            if l.action == actiontype.checkpoint:
+                found_checkpoint= True
             if l.transaction_id == transaction_id:
                 if l.action == actiontype.write:
+                    if not found_checkpoint:
+                        continue
+
                     undo_log = log(
                         transaction_id=l.transaction_id,
                         action=actiontype.write,
-                        timestamp=datetime.now(), # TODO: check if this is correct?
+                        timestamp=datetime.now(),
                         old_data=l.new_data,
                         new_data=l.old_data,
                         table_name=l.table_name
                     )
                     self.logFile.write_log(undo_log)
-                    # TODO: DO THE UNDO TO THE BUFFER HERE
+                    
+                    datawrite_undo = l.to_datawrite_undo(pks=None)
+                    dws.append(datawrite_undo)
                 else: # start, commit, abort.
                     break
         abort_log = log(
             transaction_id=transaction_id,
             action=actiontype.abort,
-            timestamp=datetime.now(), # TODO: check if this is correct?
+            timestamp=datetime.now(),
             old_data={},
             new_data={}
         )
         self.logFile.write_log(abort_log)
+        return dws
     
-    def recover(self, criteria: RecoveryCriteria = None) -> None:
+    def recover_system_crash(self) -> List[DataWrite]:
+        self._flush_mem_wal()
+
+        l_list = self.logFile.get_logs()
+        dws = [] # datawrites to return
+
+        i = len(l_list) - 1
+        i_checkpoint = -1
+
+        # find checkpoint phase
+        while i >= 0:
+            l = l_list[i]
+            if l.action == actiontype.checkpoint:
+                i_checkpoint = i
+                break
+            i -= 1
+
+        if i_checkpoint == -1:
+            self.undo_list = []
+        else:
+            self.undo_list = l_list[i].old_data
+        i += 1
+
+        # redo phase
+        while i < len(l_list):
+            l = l_list[i]
+            if l.action == actiontype.write:
+                datawrite_redo = l.to_datawrite_redo(pks=None)
+                dws.append(datawrite_redo)
+            elif l.action == actiontype.start:
+                self.undo_list.append(l.transaction_id)
+            elif l.action == actiontype.commit or l.action == actiontype.abort:
+                self.undo_list.remove(l.transaction_id)
+
+            i += 1
+
+        i -= 1
+
+        # undo phase
+        while len(self.undo_list) > 0:
+            l = l_list[i]
+            if l.transaction_id in self.undo_list:
+                if l.action == actiontype.write:
+                    undo_log = log(
+                        transaction_id=l.transaction_id,
+                        action=actiontype.write,
+                        timestamp=datetime.now(),
+                        old_data=l.new_data,
+                        new_data=l.old_data,
+                        table_name=l.table_name
+                    )
+                    self.logFile.write_log(undo_log)
+                    
+                    datawrite_undo = l.to_datawrite_undo(pks=None)
+                    dws.append(datawrite_undo)
+                elif l.action == actiontype.start:
+                    self.undo_list.remove(l.transaction_id)
+
+                    abort_log = log(
+                        transaction_id=l.transaction_id,
+                        action=actiontype.abort,
+                        timestamp=datetime.now(),
+                        old_data={},
+                        new_data={}
+                    )
+                    self.logFile.write_log(abort_log)
+            
+            i -= 1
+        
+        return dws
+
+    
+    def recover(self, criteria: RecoveryCriteria = None) -> List[DataWrite]:
         '''
         Implemented so far: transactional recovery
         TODO: add recovery for system crash (?)
