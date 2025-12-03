@@ -4,8 +4,13 @@ Tests untuk MVTO, MV2PL, dan Snapshot Isolation dengan transaksi konkuren
 """
 
 import sys
+import io
 from typing import Dict, List, Any
 from datetime import datetime
+
+# Set stdout to use UTF-8 encoding to support ANSI color codes
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 # Assuming these imports work in your project structure
 # Adjust paths as needed based on your project structure
@@ -18,6 +23,13 @@ from ..enums import ActionType
 class MVCCTester:
     """Test runner untuk algoritma MVCC"""
     
+    # ANSI Color codes
+    COLOR_RESET = "\033[0m"
+    COLOR_ROLLBACK = "\033[93m"  # Yellow for rollback re-execution
+    COLOR_ABORT = "\033[91m"     # Red for abort operations
+    COLOR_SUCCESS = "\033[92m"   # Green for success
+    COLOR_FAIL = "\033[91m"      # Red for fail
+    
     def __init__(self, variant: str, isolation_policy: str = "FIRST_COMMITTER_WIN"):
         self.mvcc = MVCCAlgorithm(variant=variant, isolation_policy=isolation_policy)
         self.variant = variant
@@ -25,9 +37,15 @@ class MVCCTester:
         self.results = []
         self.execution_trace = [] # Menyimpan data untuk tabel simulasi
         self.step_counter = 0 # Tambahkan penghitung langkah unik per operasi
+        self.transaction_creation_count: Dict[int, int] = {}  # Track how many times each transaction is created
         
     def create_transaction(self, tid: int, trans_type: str = "UPDATE"):
         """Create a new transaction"""
+        # Track if this is a re-creation (rollback scenario)
+        if tid not in self.transaction_creation_count:
+            self.transaction_creation_count[tid] = 0
+        self.transaction_creation_count[tid] += 1
+        
         t = Transaction(transaction_id=tid)
         self.transactions[tid] = t
         self.mvcc.begin_transaction(t)
@@ -40,7 +58,7 @@ class MVCCTester:
            Setiap pemanggilan fungsi kini menghasilkan baris baru (unique op_num).
         """
         
-        current_step = {'step': op_num, 'T': {}}
+        current_step = {'step': op_num, 'T': {}, 'is_rollback': {}, 'is_abort': {}}
 
         # Memformat operasi dan pesan
         op_action = ""
@@ -55,17 +73,60 @@ class MVCCTester:
         
         message = response.message if hasattr(response, 'message') else ""
         
+        # Check if this transaction has been rolled back (check rollback_count from algorithm)
+        is_after_rollback = False
+        if tid in self.transactions:
+            t = self.transactions[tid]
+            if hasattr(self.mvcc, 'transaction_info') and t.transaction_id in self.mvcc.transaction_info:
+                trans_info = self.mvcc.transaction_info[t.transaction_id]
+                if hasattr(trans_info, 'rollback_count'):
+                    is_after_rollback = trans_info.rollback_count > 0
+        
+        # Check if this is a re-execution after abort (for Snapshot Isolation)
+        # Transaction was created more than once (indicates abort + re-creation)
+        is_reexecution = self.transaction_creation_count.get(tid, 1) > 1
+        
+        # Check if this operation triggered an internal rollback (MVTO auto-rollback)
+        # This is indicated by message containing "after rollback" or "new TS"
+        is_internal_rollback = "after rollback" in message and response.allowed
+        
+        # Check if this operation came from queue (MV2PL)
+        is_from_queue = "from queue" in message and response.allowed
+        
+        # Check if this is an abort operation (operation denied/failed or explicit ABORT)
+        is_abort = (not response.allowed and op_type in ['WRITE', 'COMMIT']) or op_type == 'ABORT'
+        
+        # Check if this is a blocked operation (MV2PL)
+        is_blocked = not response.allowed and "blocked waiting" in message
+        
         # Tambahkan operasi ke kolom transaksi yang bersangkutan
         current_step['T'][tid] = op_action
+        current_step['is_rollback'][tid] = is_after_rollback or is_internal_rollback or is_from_queue or is_reexecution
+        current_step['is_abort'][tid] = is_abort or is_blocked
         
         # Tambahkan penjelasan (untuk dicetak di kolom terpisah)
         current_step['Action dan Penjelasan'] = []
             
         status = "✓" if response.allowed else "✗"
+        explanation = ""
         if op_type == 'READ' and response.allowed and hasattr(response, 'value'):
-             current_step['Action dan Penjelasan'].append(f"{status} T{tid}: {message} (Value: {response.value})")
+             explanation = f"{status} T{tid}: {message} (Value: {response.value})"
         else:
-             current_step['Action dan Penjelasan'].append(f"{status} T{tid}: {message}")
+             explanation = f"{status} T{tid}: {message}"
+        
+        # Apply color coding:
+        # 1. RED for blocked/abort operations (write/commit denied or blocked)
+        # 2. YELLOW for rollback/queue operations:
+        #    - Transaction re-created after abort (manual rollback)
+        #    - Internal MVTO auto-rollback (message contains "after rollback")
+        #    - Operations executed after getting lock from queue (MV2PL)
+        #    - Re-execution after abort (Snapshot Isolation)
+        if is_abort or is_blocked:
+            explanation = f"{self.COLOR_ABORT}{explanation}{self.COLOR_RESET}"
+        elif is_after_rollback or is_internal_rollback or is_from_queue or is_reexecution:
+            explanation = f"{self.COLOR_ROLLBACK}{explanation}{self.COLOR_RESET}"
+        
+        current_step['Action dan Penjelasan'].append(explanation)
              
         self.execution_trace.append(current_step)
 
@@ -80,15 +141,61 @@ class MVCCTester:
         self._record_trace(self.step_counter, tid, 'READ', object_id=object_id, response=response)
         return response
     
-    def write(self, tid: int, object_id: str, value: Any):
-        """Execute write operation"""
+    def write(self, tid: int, object_id: str, value: Any, auto_reexecute: bool = True):
+        """Execute write operation
+        
+        Args:
+            tid: Transaction ID
+            object_id: Object to write
+            value: Value to write
+            auto_reexecute: If True, automatically re-execute on ABORT (for MVTO)
+        """
         t = self.transactions[tid]
         row = Row(object_id=object_id, table_name='test_table', data={'value': value})
-        # Note: self.mvcc.validate_write akan memicu error jika mvcc.py masih memanggil self.schedule
-        response = self.mvcc.validate_write(t, row)
+        response = self.mvcc.validate_write(t, row, auto_reexecute=auto_reexecute)
         
-        self.step_counter += 1 # INCREMENT STEP COUNTER
-        self._record_trace(self.step_counter, tid, 'WRITE', object_id=object_id, value=value, response=response)
+        # Handle cascading rollback recording for MVTO (if rollback occurred)
+        if self.variant == 'MVTO' and hasattr(response, 'cascaded_tids') and response.cascaded_tids:
+            # First record the ABORT
+            self.step_counter += 1
+            abort_response = type('Response', (), {'allowed': False, 'message': f'T{tid} ABORTED: needs rollback'})()
+            self._record_trace(self.step_counter, tid, 'WRITE', object_id=object_id, value=value, response=abort_response)
+            
+            # Algorithm already performed rollback and re-execution
+            # We only need to record cascading aborts for visualization
+            cascaded_tids = response.cascaded_tids
+            
+            # Handle cascading rollback - abort cascaded transactions (recursively)
+            all_cascaded = []
+            to_process = list(cascaded_tids)
+            
+            while to_process:
+                cascaded_tid = to_process.pop(0)
+                if cascaded_tid in all_cascaded:
+                    continue  # Already processed
+                
+                all_cascaded.append(cascaded_tid)
+                cascaded_t = self.transactions.get(cascaded_tid)
+                
+                if cascaded_t:
+                    # Record cascading abort
+                    self.step_counter += 1
+                    abort_response = type('Response', (), {'allowed': False, 'message': f'T{cascaded_tid} ABORTED: cascading rollback from T{tid}'})()
+                    self._record_trace(self.step_counter, cascaded_tid, 'ABORT', response=abort_response)
+                    
+                    # Rollback cascaded transaction and get its cascaded transactions
+                    _, nested_cascaded = self.mvcc.rollback_mvto_transaction(cascaded_t)
+                    # Add nested cascaded transactions to process
+                    to_process.extend(nested_cascaded)
+            
+            # Record successful re-execution (response.allowed will be True after re-execution)
+            self.step_counter += 1
+            self._record_trace(self.step_counter, tid, 'WRITE', object_id=object_id, value=value, response=response)
+        else:
+            # No rollback, just record normally
+            self.step_counter += 1
+            self._record_trace(self.step_counter, tid, 'WRITE', object_id=object_id, value=value, response=response)
+        
         return response
     
     def commit(self, tid: int):
@@ -138,8 +245,25 @@ class MVCCTester:
             row_output = f"{step:<5} "
             
             for tid in tx_ids:
-                op = row_data['T'].get(tid, "")
-                row_output += f"{op:<10}"
+                cell_value = row_data['T'].get(tid, '')
+                is_rollback = row_data.get('is_rollback', {}).get(tid, False)
+                is_abort = row_data.get('is_abort', {}).get(tid, False)
+                
+                # Add color to table cells:
+                # RED for abort operations, YELLOW for rollback re-execution
+                if cell_value:
+                    if is_abort:
+                        colored = f"{self.COLOR_ABORT}{cell_value}{self.COLOR_RESET}"
+                        padding = 10 - len(cell_value)
+                        row_output += colored + " " * padding
+                    elif is_rollback:
+                        colored = f"{self.COLOR_ROLLBACK}{cell_value}{self.COLOR_RESET}"
+                        padding = 10 - len(cell_value)
+                        row_output += colored + " " * padding
+                    else:
+                        row_output += f"{cell_value:<10}"
+                else:
+                    row_output += f"{cell_value:<10}"
             
             # Kolom Penjelasan
             explanation_str = " | ".join(row_data['Action dan Penjelasan'])
@@ -171,7 +295,7 @@ def test_mvto_case1():
     MVTO Test Case 1: Cascading Rollback Scenario
     """
     print("\n" + "#"*80)
-    print("# MVTO TEST CASE 1: Cascading Rollback")
+    print("# MVTO TEST CASE 1: Cascading Rollback with Auto Re-execution")
     print("#"*80)
     
     tester = MVCCTester("MVTO")
@@ -194,20 +318,29 @@ def test_mvto_case1():
     tester.read(7, 'C') 
     tester.write(3, 'D', 300)
     
-    tester.print_header("Phase 2: Triggering Rollback (T4)")
+    tester.print_header("Phase 2: Triggering ABORT + Immediate Rollback & Re-execution")
     
     tester.read(6, 'E')
-    tester.write(4, 'E', 400) # Rollback T4, Cascading T5
+    # This will:
+    # 1. Detect conflict → ABORT T4 (shown in RED)
+    # 2. Rollback T4 with new TS
+    # 3. Cascading ABORT T5 (shown in RED)
+    # 4. Rollback T5 with new TS
+    # 5. Immediately re-execute W4(E) with new TS (shown in YELLOW)
+    tester.write(4, 'E', 400, auto_reexecute=True)
     
-    tester.print_header("Phase 3: Re-execution after Rollback")
+    tester.print_header("Phase 3: Re-execution of Rolled Back Operations")
     
-    tester.create_transaction(4) # Re-begin T4
+    # T4 operations after rollback (shown in YELLOW)
     tester.write(4, 'B', 200)
-    tester.write(4, 'E', 400)
     
-    tester.create_transaction(5) # Re-begin T5
+    # T5 operations after rollback (shown in YELLOW)
     tester.write(5, 'C', 50) 
     tester.read(5, 'B')
+    
+    # T7 operations after rollback (shown in YELLOW) - re-execute from beginning
+    tester.read(7, 'A')
+    tester.read(7, 'C')
     
     tester.print_header("Phase 4: Final Operations and Commits")
     
@@ -230,14 +363,14 @@ def test_mvto_case2():
     MVTO Test Case 2: Multiple Rollbacks
     """
     print("\n" + "#"*80)
-    print("# MVTO TEST CASE 2: Multiple Rollbacks")
+    print("# MVTO TEST CASE 2: Multiple Rollbacks with Auto Re-execution")
     print("#"*80)
     
     tester = MVCCTester("MVTO")
     for i in range(1, 8):
         tester.create_transaction(i)
     
-    tester.print_header("Phase 1: Setup for First Rollback")
+    tester.print_header("Phase 1: Setup for First ABORT")
     
     tester.read(5, 'P') 
     tester.read(7, 'Q') 
@@ -245,28 +378,35 @@ def test_mvto_case2():
     tester.read(6, 'S') 
     tester.write(4, 'T', 40)
     
-    tester.print_header("Phase 2: First Rollback (T2)")
+    tester.print_header("Phase 2: First ABORT + Immediate Rollback & Re-execution (T2)")
     
-    tester.write(2, 'P', 20) # ROLLBACK T2
-    tester.create_transaction(2)
-    tester.write(2, 'P', 20)
+    # This will:
+    # 1. Detect conflict → ABORT T2 (RED)
+    # 2. Rollback T2 with new TS
+    # 3. Immediately re-execute W2(P) with new TS (YELLOW)
+    tester.write(2, 'P', 20, auto_reexecute=True)
     
-    tester.print_header("Phase 3: Setup for Second Rollback")
+    tester.print_header("Phase 3: Setup for Second ABORT")
     
     tester.read(1, 'Q') 
     tester.write(5, 'Q', 50)
     tester.read(7, 'R') 
     tester.read(4, 'P')
     
-    tester.print_header("Phase 4: Second Rollback (T3)")
+    tester.print_header("Phase 4: Second ABORT + Cascading ABORT & Re-execution (T3)")
     
-    tester.write(3, 'S', 30) # ROLLBACK T3, Cascading T7
+    # This will:
+    # 1. Detect conflict → ABORT T3 (RED)
+    # 2. Rollback T3 with new TS
+    # 3. Cascading ABORT T7 (RED) - because T7 read T3's write
+    # 4. Rollback T7 with new TS
+    # 5. Immediately re-execute W3(S) with new TS (YELLOW)
+    tester.write(3, 'S', 30, auto_reexecute=True)
     
-    tester.create_transaction(3) # Re-begin T3
+    # T3 operations after rollback (YELLOW)
     tester.write(3, 'R', 30)
-    tester.write(3, 'S', 30)
     
-    tester.create_transaction(7) # Re-begin T7
+    # T7 operations after rollback (YELLOW)
     tester.read(7, 'Q')
     tester.read(7, 'R')
     
