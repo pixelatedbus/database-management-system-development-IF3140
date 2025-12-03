@@ -41,6 +41,8 @@ def main():
         'test_join',
         'test_orderby',
         'test_dml',
+        'test_batch_update',
+        'test_update_comprehensive',
     ]
     
     results = {}

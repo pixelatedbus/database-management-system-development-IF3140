@@ -49,6 +49,8 @@ class AdapterFRM:
             old_data=None,
             new_data=None
         )
+        # Immediately flush to disk after BEGIN
+        self._flush_to_disk()
     
     def log_write(self, transaction_id: int, query: str, table_name: str, 
                   old_data=None, new_data=None) -> None:
@@ -61,6 +63,15 @@ class AdapterFRM:
             old_data=old_data,
             new_data=new_data
         )
+        # Immediately flush to disk after each write operation
+        self._flush_to_disk()
+    
+    def _flush_to_disk(self) -> None:
+        """Force immediate flush of WAL to disk"""
+        if self.frm.mem_wal:
+            for info in self.frm.mem_wal:
+                self.frm.logFile.write_log_execRes(info)
+            self.frm.mem_wal = []
     
     def log_commit(self, transaction_id: int) -> None:
         """Log transaction commit - this flushes WAL to disk"""

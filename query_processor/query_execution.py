@@ -608,15 +608,23 @@ class QueryExecution:
             self.ccm_adapter.log_object(transaction_id, table_name)
         
         try:
-            # STEP 1: READ
-            logger.info(f"[UPDATE] STEP 1: Reading matching rows...")
-            # Use storage adapter for reading
-            matching_rows = self.storage_adapter.read_data(
-                table_name=table_name,
-                columns=[], 
-                conditions=conditions,
-                transaction_id=transaction_id
+            # STEP 1: READ (with buffered operations applied)
+            logger.info(f"[UPDATE] STEP 1: Reading matching rows with buffered operations...")
+            # Read from storage
+            data_retrieval = DataRetrieval(
+                table=table_name,
+                column=[],
+                conditions=conditions
             )
+            storage_rows = self.storage_manager.read_block(data_retrieval)
+            
+            # Apply buffered operations to see uncommitted writes in this transaction
+            if transaction_id:
+                matching_rows = self._apply_buffered_operations(storage_rows, transaction_id, table_name)
+                logger.info(f"[UPDATE]    After applying buffer: {len(matching_rows)} row(s)")
+            else:
+                matching_rows = storage_rows
+            
             logger.info(f"[UPDATE]    Found {len(matching_rows)} matching row(s)")
             
             if not matching_rows:

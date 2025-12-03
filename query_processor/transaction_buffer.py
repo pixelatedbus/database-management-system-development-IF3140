@@ -61,13 +61,8 @@ class TransactionBuffer:
         )
         self.buffers[transaction_id].append(operation)
         
-        if table_name not in self.uncommitted_data[transaction_id]:
-            self.uncommitted_data[transaction_id][table_name] = []
-        
-        uncommitted_rows = self.uncommitted_data[transaction_id][table_name]
-        for i, row in enumerate(uncommitted_rows):
-            if self._matches_conditions(row, old_data):
-                uncommitted_rows[i] = new_data.copy()
+        # Note: uncommitted_data is mainly for INSERTs within transaction
+        # UPDATEs to existing rows are handled by _apply_buffered_operations during SELECT
         
         logger.info(f"[BUFFER] Buffered UPDATE on '{table_name}' for transaction {transaction_id}")
     

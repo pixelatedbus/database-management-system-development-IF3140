@@ -4,6 +4,7 @@ from storage_manager.models import (
     DataRetrieval, 
     DataWrite, 
     DataDeletion,
+    DataUpdate,
     ColumnDefinition,
     ForeignKey
 )
@@ -15,6 +16,7 @@ __all__ = [
     'DataRetrieval', 
     'DataWrite',
     'DataDeletion',
+    'DataUpdate',
     'ColumnDefinition',
     'ForeignKey'
 ]
@@ -135,6 +137,44 @@ class AdapterStorage:
             table_name: Name of the table to drop
         """
         return self.sm.drop_table(table_name)
+    
+    def batch_update_data(self, table_name, old_data_list, new_data_list, transaction_id=None):
+        """
+        Batch update data using old/new data matching (optimized for FRM/transactions).
+        
+        This method uses the storage manager's update_by_old_new_data which:
+        1. Matches rows by PRIMARY KEY first (efficient)
+        2. Falls back to exact match if no PK match
+        3. Performs all updates in one operation
+        
+        Args:
+            table_name: Name of the table to update
+            old_data_list: List of dictionaries representing old row states
+            new_data_list: List of dictionaries representing new row states
+            transaction_id: Optional transaction ID for concurrency control
+            
+        Returns:
+            Number of rows updated
+            
+        Example:
+            adapter.batch_update_data(
+                "users",
+                [{"id": 1, "status": "inactive"}],
+                [{"id": 1, "status": "active"}]
+            )
+        """
+        data_update = DataUpdate(
+            table=table_name,
+            old_data=old_data_list,
+            new_data=new_data_list
+        )
+        
+        # Try to pass transaction_id if supported, otherwise call without it
+        try:
+            return self.sm.update_by_old_new_data(data_update, transaction_id=transaction_id)
+        except TypeError:
+            # Fallback for storage managers that don't support transaction_id parameter
+            return self.sm.update_by_old_new_data(data_update)
     
     # Legacy methods for backward compatibility
     def storage_select(self, table_name, conds=None, projections=None):
