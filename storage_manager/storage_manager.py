@@ -412,7 +412,7 @@ class StorageManager:
         table_file = self._get_table_file_path(table_name)
         write_binary_table(table_file, [], schema_names, self.block_size)
 
-        print(f"✓ tabel '{table_name}' berhasil dibuat dengan {len(column_defs)} kolom")
+        print(f"[OK] tabel '{table_name}' berhasil dibuat dengan {len(column_defs)} kolom")
 
     def drop_table(self, table_name: str) -> None:
         if table_name not in self.tables:
@@ -515,7 +515,7 @@ class StorageManager:
         else:
             append_block_to_table(table_file, processed_rows, schema_names, self.block_size)
 
-        print(f"✓ inserted {len(rows)} rows ke tabel '{table_name}' (optimized batch insert)")
+        print(f"[OK] inserted {len(rows)} rows ke tabel '{table_name}' (optimized batch insert)")
 
     # ========== operasi utama ==========
 
