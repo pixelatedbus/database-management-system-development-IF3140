@@ -210,6 +210,22 @@ class DataDeletion:
 
 
 @dataclass
+class DataUpdate:
+    """Parameter untuk operasi update dengan tracking old/new data untuk FRM.
+    
+    Attributes:
+        table: Nama tabel yang akan diupdate
+        column: Daftar kolom yang akan diupdate
+        conditions: Daftar kondisi untuk menentukan row yang diupdate (AND logic)
+        new_value: Daftar nilai baru (harus sesuai urutan column)
+    """
+    table: str
+    column: List[str] = field(default_factory=list)
+    conditions: List[Condition] = field(default_factory=list)
+    new_value: List[Any] = field(default_factory=list)
+
+
+@dataclass
 class Statistic:
     """Statistik tabel untuk query optimization.
     
