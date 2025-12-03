@@ -75,7 +75,7 @@ def format_results(result):
 
 def run_transaction(qp, client_id, statements, sleep_time=5):
     print(f"[INFO] Transaction {client_id} scheduled. Sleeping {sleep_time} seconds before processing...")
-    time.sleep(10)
+    time.sleep(sleep_time)
     print(f"[INFO] Transaction {client_id} starting...")
 
     for query in statements:
