@@ -867,8 +867,7 @@ class StorageManager:
             print(f"updated {rows_affected} rows di tabel '{table_name}' (efficient index update!)")
             return rows_affected
 
-    def update_by_old_new_data(self, table_name: str, old_data: List[Dict[str, Any]], 
-                                 new_data: List[Dict[str, Any]]) -> int:
+    def update_by_old_new_data(self, data_update: DataUpdate) -> int:
         """Update rows dengan matching old_data ke new_data.
         
         Method sederhana untuk FRM: kasih old_data dan new_data,
@@ -880,19 +879,25 @@ class StorageManager:
         2. Kalo ga ketemu, fallback ke EXACT MATCH (semua field)
         
         Args:
-            table_name: Nama tabel
-            old_data: List of rows yang mau diganti (matching criteria)
-            new_data: List of rows pengganti (harus sama panjangnya dengan old_data)
+            data_update: DataUpdate object dengan table, old_data, new_data
             
         Returns:
             int: Jumlah rows yang berhasil diupdate
             
         Example:
-            old = [{"id": 1, "name": "Alice", "status": "inactive"}]
-            new = [{"id": 1, "name": "Alice", "status": "active"}]
-            count = sm.update_by_old_new_data("users", old, new)
+            count = sm.update_by_old_new_data(
+                DataUpdate(
+                    table="users",
+                    old_data=[{"id": 1, "name": "Alice", "status": "inactive"}],
+                    new_data=[{"id": 1, "name": "Alice", "status": "active"}]
+                )
+            )
             # Try match by id=1 first, kalo ga ada fallback ke exact match
         """
+        table_name = data_update.table
+        old_data = data_update.old_data
+        new_data = data_update.new_data
+        
         if table_name not in self.tables:
             raise ValueError(f"Tabel '{table_name}' tidak ditemukan")
             
