@@ -3,7 +3,9 @@ from datetime import datetime
 from typing import Dict, Optional, List
 from storage_manager.models import (
     Condition, 
-    DataWrite 
+    DataWrite,
+    DataDeletion,
+    DataUpdate
 )
 
 class actiontype(enumerate):
@@ -50,57 +52,59 @@ class log:
             "table_name":self.table_name
         }
         print(json.dumps(data, indent=4))
-
-    def to_datawrite_undo(self, pks: Optional[List[str]] = None) -> DataWrite:
-        if self.table_name is None:
-            raise ValueError("No table_name in log")
-
-        if self.old_data is None:
-            raise ValueError("no old_data in log")
-
-        columns = list(self.old_data.keys())
-        values = [self.old_data[c] for c in columns]
-
-        conditions: List[Condition] = []
-
-        # might be wrong
-        if pks:
-            for col in pks:
-                src_dict = self.new_data or self.old_data
-                if src_dict is None or col not in src_dict:
-                    raise ValueError(f"primary key {col} not in data")
-                conditions.append(Condition(col, "=", src_dict[col]))
-
-        return DataWrite(
-            table=self.table_name,
-            column=columns,
-            new_value=values,
-            conditions=conditions,
-        )
     
-    def to_datawrite_redo(self, pks: Optional[List[str]] = None) -> DataWrite:
-        if self.table_name is None:
-            raise ValueError("No table_name in log")
-
-        if self.new_data is None:
-            raise ValueError("no new_data in log")
-
-        columns = list(self.new_data.keys())
-        values = [self.new_data[c] for c in columns]
-
-        conditions: List[Condition] = []
-
-        # might be wrong
-        if pks:
-            for col in pks:
-                src_dict = self.new_data or self.new_data
-                if src_dict is None or col not in src_dict:
-                    raise ValueError(f"primary key {col} not in data")
-                conditions.append(Condition(col, "=", src_dict[col]))
-
-        return DataWrite(
-            table=self.table_name,
-            column=columns,
-            new_value=values,
-            conditions=conditions,
-        )
+    def to_data_undo(self) -> List[DataWrite | DataDeletion | DataUpdate]:
+        # anomaly
+        if len(self.old_data) == 0 and len(self.new_data) == 0:
+            return []
+        # insertion
+        elif len(self.old_data) == 0:
+            return [DataDeletion(
+                table = self.table_name,
+                conditions = [
+                    Condition(c, "=", row[c]) for c in row.keys()
+                ]
+            ) for row in self.new_data]
+        # deletion
+        elif len(self.new_data) == 0:
+            return [DataWrite(
+                table = self.table_name,
+                column = row.keys(),
+                conditions = [], # cause insert
+                new_value = [row[c] for c in row.keys()]
+            ) for row in self.old_data]
+        # update
+        else:
+            return [DataUpdate(
+                table = self.table_name,
+                old_data = self.new_data,
+                new_data = self.old_data
+            )]
+    
+    def to_data_redo(self):
+        # anomaly
+        if len(self.old_data) == 0 and len(self.new_data) == 0:
+            return []
+        # insertion
+        elif len(self.old_data) == 0:
+            return [DataWrite(
+                table = self.table_name,
+                column = row.keys(),
+                conditions = [], # cause insert
+                new_value = [row[c] for c in row.keys()]
+            ) for row in self.new_data]
+        # deletion
+        elif len(self.new_data) == 0:
+            return [DataDeletion(
+                table = self.table_name,
+                conditions = [
+                    Condition(c, "=", row[c]) for c in row.keys()
+                ]
+            ) for row in self.old_data]
+        # update
+        else:
+            return [DataUpdate(
+                table = self.table_name,
+                old_data = self.old_data,
+                new_data = self.new_data
+            )]
