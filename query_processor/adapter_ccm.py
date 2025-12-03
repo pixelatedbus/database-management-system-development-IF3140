@@ -19,7 +19,14 @@ class AdapterCCM:
         Args:
             algorithm (AlgorithmType): Algoritma yang akan digunakan (misal: LockBased).
         """
-        self.ccm = CCManager(algorithm=algorithm)
+        # Store log file in concurrency_control_manager directory
+        log_path = os.path.join(
+            os.path.dirname(__file__), 
+            '..', 
+            'concurrency_control_manager', 
+            'cc_log.txt'
+        )
+        self.ccm = CCManager(algorithm=algorithm, log_file=log_path)
 
     def begin_transaction(self) -> int:
         """

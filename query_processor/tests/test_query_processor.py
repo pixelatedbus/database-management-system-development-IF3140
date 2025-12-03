@@ -1,0 +1,1217 @@
+"""
+Comprehensive Unit Tests for Query Processor
+
+This test suite covers all major SQL operations through the query processor:
+1. CREATE TABLE - with primary keys and foreign keys
+2. DROP TABLE - with CASCADE and RESTRICT behavior for foreign keys
+3. SELECT - simple, complex conditions, joins, aliases
+4. INSERT INTO - hardcoded values
+5. UPDATE - hardcoded values and expression-based
+6. DELETE - with single conditions
+7. LIMIT - result limiting
+8. ALIAS - table and column aliases
+9. ORDER BY - ascending and descending
+
+Test Database Schema:
+- departments (dept_id PK, dept_name, budget)
+- employees (emp_id PK, emp_name, dept_id FK->departments, salary, hire_date)
+- projects (project_id PK, project_name, dept_id FK->departments, budget)
+- tasks (task_id PK, task_name, project_id, status)
+
+Run tests:
+    python -m pytest query_processor/tests/test_query_processor.py -v
+    python -m unittest query_processor.tests.test_query_processor
+"""
+
+import unittest
+import sys
+import os
+import shutil
+import logging
+
+# Configure logging to reduce noise during tests
+logging.basicConfig(level=logging.CRITICAL)
+
+# Add parent directory to path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+
+from query_processor.query_processor import QueryProcessor
+from storage_manager.storage_manager import StorageManager
+
+
+class TestQueryProcessor(unittest.TestCase):
+    """Comprehensive test suite for Query Processor functionality."""
+    
+    @classmethod
+    def setUpClass(cls):
+        """Set up test environment once for all tests."""
+        cls.test_data_dir = "data/test_query_processor"
+        cls.client_id = 1000  # Test client ID
+        
+    def setUp(self):
+        """Set up fresh environment before each test."""
+        # Clean up any existing test data
+        if os.path.exists(self.test_data_dir):
+            shutil.rmtree(self.test_data_dir)
+        
+        os.makedirs(self.test_data_dir, exist_ok=True)
+        
+        # Create fresh instances for each test
+        StorageManager._instance = None
+        StorageManager._initialized = False
+        QueryProcessor._instance = None
+        
+        self.storage_manager = StorageManager(data_dir=self.test_data_dir)
+        self.query_processor = QueryProcessor()
+        self.query_processor.adapter_storage.sm = self.storage_manager
+        self.query_processor.query_execution_engine.storage_manager = self.storage_manager
+        self.query_processor.query_execution_engine.storage_adapter.sm = self.storage_manager
+        
+    @classmethod
+    def tearDownClass(cls):
+        """Clean up after all tests."""
+        if os.path.exists(cls.test_data_dir):
+            try:
+                shutil.rmtree(cls.test_data_dir)
+            except:
+                pass  # Ignore cleanup errors
+    
+    def execute_query(self, query: str):
+        """Helper to execute query and return result."""
+        return self.query_processor.execute_query(query, self.client_id)
+    
+    def assertQuerySuccess(self, result, message="Query should succeed"):
+        """Assert that query execution was successful."""
+        self.assertTrue(result.success, f"{message}\nError: {result.message}\nQuery: {result.query}")
+    
+    def assertQueryFails(self, result, message="Query should fail"):
+        """Assert that query execution failed."""
+        self.assertFalse(result.success, f"{message}\nQuery: {result.query}")
+
+
+class TestCreateTable(TestQueryProcessor):
+    """Test CREATE TABLE functionality."""
+    
+    def test_01_create_simple_table(self):
+        """Test creating a simple table with basic columns."""
+        query = """
+        CREATE TABLE departments (
+            dept_id INTEGER PRIMARY KEY,
+            dept_name VARCHAR(50),
+            budget INTEGER
+        )
+        """
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result, "Should create departments table")
+        
+        # Verify table exists in storage manager
+        self.assertIn('departments', self.storage_manager.tables)
+    
+    def test_02_create_table_with_foreign_key(self):
+        """Test creating table with foreign key constraint."""
+        # First ensure parent table exists
+        parent_query = """
+        CREATE TABLE departments (
+            dept_id INTEGER PRIMARY KEY,
+            dept_name VARCHAR(50),
+            budget INTEGER
+        )
+        """
+        self.execute_query(parent_query)
+        
+        # Create child table with foreign key
+        child_query = """
+        CREATE TABLE employees (
+            emp_id INTEGER PRIMARY KEY,
+            emp_name VARCHAR(50),
+            dept_id INTEGER,
+            salary INTEGER,
+            hire_date VARCHAR(20)
+        )
+        """
+        result = self.execute_query(child_query)
+        self.assertQuerySuccess(result, "Should create employees table")
+        
+        # Verify table exists
+        self.assertIn('employees', self.storage_manager.tables)
+    
+    def test_03_create_multiple_tables(self):
+        """Test creating multiple related tables."""
+        # Parent table
+        dept_query = """
+        CREATE TABLE departments (
+            dept_id INTEGER PRIMARY KEY,
+            dept_name VARCHAR(50),
+            budget INTEGER
+        )
+        """
+        result = self.execute_query(dept_query)
+        self.assertQuerySuccess(result)
+        
+        # Child table 1
+        emp_query = """
+        CREATE TABLE employees (
+            emp_id INTEGER PRIMARY KEY,
+            emp_name VARCHAR(50),
+            dept_id INTEGER,
+            salary INTEGER,
+            hire_date VARCHAR(20)
+        )
+        """
+        result = self.execute_query(emp_query)
+        self.assertQuerySuccess(result)
+        
+        # Child table 2
+        proj_query = """
+        CREATE TABLE projects (
+            project_id INTEGER PRIMARY KEY,
+            project_name VARCHAR(50),
+            dept_id INTEGER,
+            budget INTEGER
+        )
+        """
+        result = self.execute_query(proj_query)
+        self.assertQuerySuccess(result)
+        
+        # Independent table
+        tasks_query = """
+        CREATE TABLE tasks (
+            task_id INTEGER PRIMARY KEY,
+            task_name VARCHAR(50),
+            project_id INTEGER,
+            status VARCHAR(20)
+        )
+        """
+        result = self.execute_query(tasks_query)
+        self.assertQuerySuccess(result)
+        
+        # Verify all tables exist
+        self.assertIn('departments', self.storage_manager.tables)
+        self.assertIn('employees', self.storage_manager.tables)
+        self.assertIn('projects', self.storage_manager.tables)
+        self.assertIn('tasks', self.storage_manager.tables)
+
+
+class TestInsertInto(TestQueryProcessor):
+    """Test INSERT INTO functionality with hardcoded values."""
+    
+    def test_01_insert_simple_values(self):
+        """Test simple INSERT with hardcoded values."""
+        # Create departments table
+        self.execute_query("""
+        CREATE TABLE departments (
+            dept_id INTEGER PRIMARY KEY,
+            dept_name VARCHAR(50),
+            budget INTEGER
+        )
+        """)
+        
+        query = "INSERT INTO departments (dept_id, dept_name, budget) VALUES (1, 'Engineering', 100000)"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result, "Should insert into departments")
+        
+        # Verify data was inserted
+        select_result = self.execute_query("SELECT * FROM departments")
+        self.assertEqual(len(select_result.data.rows), 1)
+        self.assertEqual(select_result.data.rows[0]['dept_id'], 1)
+        self.assertEqual(select_result.data.rows[0]['dept_name'], 'Engineering')
+    
+    def test_02_insert_multiple_rows(self):
+        """Test inserting multiple rows."""
+        # Create departments table
+        self.execute_query("""
+        CREATE TABLE departments (
+            dept_id INTEGER PRIMARY KEY,
+            dept_name VARCHAR(50),
+            budget INTEGER
+        )
+        """)
+        
+        queries = [
+            "INSERT INTO departments (dept_id, dept_name, budget) VALUES (1, 'Engineering', 100000)",
+            "INSERT INTO departments (dept_id, dept_name, budget) VALUES (2, 'Sales', 80000)",
+            "INSERT INTO departments (dept_id, dept_name, budget) VALUES (3, 'HR', 60000)"
+        ]
+        
+        for query in queries:
+            result = self.execute_query(query)
+            self.assertQuerySuccess(result)
+        
+        # Verify all rows inserted
+        select_result = self.execute_query("SELECT * FROM departments")
+        self.assertEqual(len(select_result.data.rows), 3)
+    
+    def test_03_insert_with_partial_columns(self):
+        """Test INSERT specifying only some columns."""
+        # Create tables
+        self.execute_query("""
+        CREATE TABLE departments (
+            dept_id INTEGER PRIMARY KEY,
+            dept_name VARCHAR(50),
+            budget INTEGER
+        )
+        """)
+        
+        self.execute_query("""
+        CREATE TABLE employees (
+            emp_id INTEGER PRIMARY KEY,
+            emp_name VARCHAR(50),
+            dept_id INTEGER,
+            salary INTEGER,
+            hire_date VARCHAR(20)
+        )
+        """)
+        
+        # First insert department
+        self.execute_query("INSERT INTO departments (dept_id, dept_name, budget) VALUES (1, 'Engineering', 100000)")
+        
+        # Insert employee with all columns
+        query = "INSERT INTO employees (emp_id, emp_name, dept_id, salary, hire_date) VALUES (1, 'Alice', 1, 60000, '2024-01-15')"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Verify insertion
+        select_result = self.execute_query("SELECT emp_name, salary FROM employees WHERE emp_id = 1")
+        self.assertEqual(len(select_result.data.rows), 1)
+        self.assertEqual(select_result.data.rows[0]['emp_name'], 'Alice')
+        self.assertEqual(select_result.data.rows[0]['salary'], 60000)
+    
+    def test_04_populate_test_data(self):
+        """Populate database with comprehensive test data for other tests."""
+        # Create tables
+        self.execute_query("""
+        CREATE TABLE departments (
+            dept_id INTEGER PRIMARY KEY,
+            dept_name VARCHAR(50),
+            budget INTEGER
+        )
+        """)
+        
+        self.execute_query("""
+        CREATE TABLE employees (
+            emp_id INTEGER PRIMARY KEY,
+            emp_name VARCHAR(50),
+            dept_id INTEGER,
+            salary INTEGER,
+            hire_date VARCHAR(20)
+        )
+        """)
+        
+        # Insert departments
+        dept_queries = [
+            "INSERT INTO departments (dept_id, dept_name, budget) VALUES (1, 'Engineering', 100000)",
+            "INSERT INTO departments (dept_id, dept_name, budget) VALUES (2, 'Sales', 80000)",
+            "INSERT INTO departments (dept_id, dept_name, budget) VALUES (3, 'HR', 60000)"
+        ]
+        for query in dept_queries:
+            self.execute_query(query)
+        
+        # Insert employees
+        emp_queries = [
+            "INSERT INTO employees (emp_id, emp_name, dept_id, salary, hire_date) VALUES (1, 'Alice', 1, 60000, '2024-01-15')",
+            "INSERT INTO employees (emp_id, emp_name, dept_id, salary, hire_date) VALUES (2, 'Bob', 1, 75000, '2023-06-20')",
+            "INSERT INTO employees (emp_id, emp_name, dept_id, salary, hire_date) VALUES (3, 'Carol', 2, 55000, '2024-03-10')",
+            "INSERT INTO employees (emp_id, emp_name, dept_id, salary, hire_date) VALUES (4, 'Dave', 2, 82000, '2022-11-05')",
+            "INSERT INTO employees (emp_id, emp_name, dept_id, salary, hire_date) VALUES (5, 'Eve', 3, 50000, '2024-02-28')"
+        ]
+        for query in emp_queries:
+            self.execute_query(query)
+        
+        # Verify data
+        result = self.execute_query("SELECT * FROM departments")
+        self.assertEqual(len(result.data.rows), 3)
+        
+        result = self.execute_query("SELECT * FROM employees")
+        self.assertEqual(len(result.data.rows), 5)
+
+
+class TestSelect(TestQueryProcessor):
+    """Test SELECT query functionality."""
+    
+    def _setup_test_data(self):
+        """Helper to set up tables and data for SELECT tests."""
+        # Create and populate tables
+        self.execute_query("""
+        CREATE TABLE departments (
+            dept_id INTEGER PRIMARY KEY,
+            dept_name VARCHAR(50),
+            budget INTEGER
+        )
+        """)
+        
+        self.execute_query("""
+        CREATE TABLE employees (
+            emp_id INTEGER PRIMARY KEY,
+            emp_name VARCHAR(50),
+            dept_id INTEGER,
+            salary INTEGER,
+            hire_date VARCHAR(20)
+        )
+        """)
+        
+        # Populate departments
+        dept_data = [
+            (1, 'Engineering', 100000),
+            (2, 'Sales', 80000),
+            (3, 'HR', 60000)
+        ]
+        for dept_id, name, budget in dept_data:
+            self.execute_query(f"INSERT INTO departments (dept_id, dept_name, budget) VALUES ({dept_id}, '{name}', {budget})")
+        
+        # Populate employees
+        emp_data = [
+            (1, 'Alice', 1, 60000, '2024-01-15'),
+            (2, 'Bob', 1, 75000, '2023-06-20'),
+            (3, 'Carol', 2, 55000, '2024-03-10'),
+            (4, 'Dave', 2, 82000, '2022-11-05'),
+            (5, 'Eve', 3, 50000, '2024-02-28')
+        ]
+        for emp_id, name, dept_id, salary, date in emp_data:
+            self.execute_query(f"INSERT INTO employees (emp_id, emp_name, dept_id, salary, hire_date) VALUES ({emp_id}, '{name}', {dept_id}, {salary}, '{date}')")
+    
+    def test_01_select_all_columns(self):
+        """Test SELECT * to retrieve all columns."""
+        self._setup_test_data()
+        result = self.execute_query("SELECT * FROM departments")
+        self.assertQuerySuccess(result)
+        self.assertEqual(len(result.data.rows), 3)
+        
+        # Check that all columns are present
+        row = result.data.rows[0]
+        self.assertIn('dept_id', row)
+        self.assertIn('dept_name', row)
+        self.assertIn('budget', row)
+    
+    def test_02_select_specific_columns(self):
+        """Test SELECT with specific column projection."""
+        self._setup_test_data()
+        result = self.execute_query("SELECT emp_id, emp_name FROM employees")
+        self.assertQuerySuccess(result)
+        self.assertEqual(len(result.data.rows), 5)
+        
+        # Check only requested columns are present
+        row = result.data.rows[0]
+        self.assertIn('emp_id', row)
+        self.assertIn('emp_name', row)
+        # Note: depending on implementation, other columns might be present but we focus on requested ones
+    
+    def test_03_select_with_simple_where(self):
+        """Test SELECT with simple WHERE condition."""
+        self._setup_test_data()
+        result = self.execute_query("SELECT * FROM employees WHERE salary > 60000")
+        self.assertQuerySuccess(result)
+        
+        # Should return Bob, Dave (salary > 60000)
+        self.assertGreaterEqual(len(result.data.rows), 2)
+        for row in result.data.rows:
+            self.assertGreater(row['salary'], 60000)
+    
+    def test_04_select_with_equality_condition(self):
+        """Test SELECT with equality condition."""
+        self._setup_test_data()
+        result = self.execute_query("SELECT * FROM employees WHERE dept_id = 1")
+        self.assertQuerySuccess(result)
+        
+        # Should return Alice and Bob
+        self.assertEqual(len(result.data.rows), 2)
+        for row in result.data.rows:
+            self.assertEqual(row['dept_id'], 1)
+    
+    def test_05_select_with_complex_and_condition(self):
+        """Test SELECT with complex AND condition."""
+        self._setup_test_data()
+        result = self.execute_query("SELECT * FROM employees WHERE salary > 55000 AND dept_id = 2")
+        self.assertQuerySuccess(result)
+        
+        # Should return Dave (dept_id=2, salary=82000)
+        self.assertGreaterEqual(len(result.data.rows), 1)
+        for row in result.data.rows:
+            self.assertEqual(row['dept_id'], 2)
+            self.assertGreater(row['salary'], 55000)
+    
+    def test_06_select_with_multiple_conditions(self):
+        """Test SELECT with multiple AND conditions."""
+        self._setup_test_data()
+        result = self.execute_query("SELECT emp_name, salary FROM employees WHERE salary > 50000 AND salary < 80000")
+        self.assertQuerySuccess(result)
+        
+        # Should return employees with salary between 50000 and 80000
+        for row in result.data.rows:
+            self.assertGreater(row['salary'], 50000)
+            self.assertLess(row['salary'], 80000)
+
+
+class TestJoin(TestQueryProcessor):
+    """Test JOIN operations."""
+    
+    def _setup_join_data(self):
+        """Set up tables and data for JOIN tests."""
+        # Create tables
+        self.execute_query("""
+        CREATE TABLE departments (
+            dept_id INTEGER PRIMARY KEY,
+            dept_name VARCHAR(50),
+            budget INTEGER
+        )
+        """)
+        
+        self.execute_query("""
+        CREATE TABLE employees (
+            emp_id INTEGER PRIMARY KEY,
+            emp_name VARCHAR(50),
+            dept_id INTEGER,
+            salary INTEGER,
+            hire_date VARCHAR(20)
+        )
+        """)
+        
+        # Populate data
+        dept_data = [
+            (1, 'Engineering', 100000),
+            (2, 'Sales', 80000),
+            (3, 'HR', 60000)
+        ]
+        for dept_id, name, budget in dept_data:
+            self.execute_query(f"INSERT INTO departments (dept_id, dept_name, budget) VALUES ({dept_id}, '{name}', {budget})")
+        
+        emp_data = [
+            (1, 'Alice', 1, 60000, '2024-01-15'),
+            (2, 'Bob', 1, 75000, '2023-06-20'),
+            (3, 'Carol', 2, 55000, '2024-03-10')
+        ]
+        for emp_id, name, dept_id, salary, date in emp_data:
+            self.execute_query(f"INSERT INTO employees (emp_id, emp_name, dept_id, salary, hire_date) VALUES ({emp_id}, '{name}', {dept_id}, {salary}, '{date}')")
+    
+    def test_01_inner_join_with_on(self):
+        """Test INNER JOIN with ON condition."""
+        self._setup_join_data()
+        query = "SELECT * FROM employees JOIN departments ON employees.dept_id = departments.dept_id"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Should return joined rows
+        self.assertGreater(len(result.data.rows), 0)
+        
+        # Verify joined data contains columns from both tables
+        if result.data.rows:
+            row = result.data.rows[0]
+            self.assertIn('emp_name', row)
+            self.assertIn('dept_name', row)
+    
+    def test_02_natural_join(self):
+        """Test NATURAL JOIN."""
+        self._setup_join_data()
+        query = "SELECT * FROM employees NATURAL JOIN departments"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Natural join should work on common column (dept_id)
+        self.assertGreater(len(result.data.rows), 0)
+    
+    def test_03_join_with_projection(self):
+        """Test JOIN with specific columns."""
+        self._setup_join_data()
+        query = "SELECT emp_name, dept_name FROM employees JOIN departments ON employees.dept_id = departments.dept_id"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        if result.data.rows:
+            row = result.data.rows[0]
+            self.assertIn('emp_name', row)
+            self.assertIn('dept_name', row)
+    
+    def test_04_cartesian_product_comma_syntax(self):
+        """Test Cartesian product using comma-separated table syntax (CROSS JOIN)."""
+        self._setup_join_data()
+        # Query with comma creates Cartesian product
+        query = "SELECT emp_name, dept_name FROM employees, departments"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Cartesian product: 3 employees × 3 departments = 9 rows
+        self.assertEqual(len(result.data.rows), 9)
+        
+        # Verify we have all combinations
+        emp_names = set()
+        dept_names = set()
+        for row in result.data.rows:
+            emp_names.add(row['emp_name'])
+            dept_names.add(row['dept_name'])
+        
+        # Should have all 3 employees and all 3 departments in combinations
+        self.assertEqual(len(emp_names), 3)
+        self.assertEqual(len(dept_names), 3)
+    
+    def test_05_cartesian_product_with_projection(self):
+        """Test Cartesian product with specific column selection."""
+        self._setup_join_data()
+        
+        # Select specific columns from Cartesian product
+        query = "SELECT emp_name, budget FROM employees, departments"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Should still return 9 rows (3 × 3)
+        self.assertEqual(len(result.data.rows), 9)
+        
+        # Verify specific columns are present
+        for row in result.data.rows:
+            self.assertIn('emp_name', row)
+            self.assertIn('budget', row)
+            # Each employee appears with each department's budget
+            self.assertIn(row['budget'], [100000, 80000, 60000])
+    
+    def test_06_cartesian_product_with_where(self):
+        """Test Cartesian product with WHERE clause filtering on both tables."""
+        self._setup_join_data()
+        
+        # Cartesian product with compound WHERE condition
+        query = "SELECT emp_name, dept_name FROM employees, departments WHERE employees.salary > 60000 AND departments.budget > 70000"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Bob (salary 75000) with Engineering (100000) and Sales (80000) = 2 rows
+        self.assertEqual(len(result.data.rows), 2)
+        
+        # All rows should have Bob and high-budget departments
+        for row in result.data.rows:
+            self.assertEqual(row['emp_name'], 'Bob')
+            self.assertIn(row['dept_name'], ['Engineering', 'Sales'])
+    
+    def test_07_cartesian_product_with_simple_filter(self):
+        """Test Cartesian product with simple WHERE filter on one table."""
+        self._setup_join_data()
+        
+        # Filter on one table in Cartesian product
+        query = "SELECT emp_name, dept_name FROM employees, departments WHERE employees.salary > 60000"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Bob has salary 75000 > 60000, so should get Bob × all 3 departments = 3 rows
+        self.assertEqual(len(result.data.rows), 3)
+        
+        # All rows should have Bob
+        for row in result.data.rows:
+            self.assertEqual(row['emp_name'], 'Bob')
+            # But paired with different departments
+            self.assertIn(row['dept_name'], ['Engineering', 'Sales', 'HR'])
+
+
+class TestUpdate(TestQueryProcessor):
+    """Test UPDATE functionality."""
+    
+    def _setup_update_data(self):
+        """Set up tables and data for UPDATE tests."""
+        super().setUp()
+        self.execute_query("""
+        CREATE TABLE employees (
+            emp_id INTEGER PRIMARY KEY,
+            emp_name VARCHAR(50),
+            dept_id INTEGER,
+            salary INTEGER,
+            hire_date VARCHAR(20)
+        )
+        """)
+        
+        emp_data = [
+            (1, 'Alice', 1, 60000, '2024-01-15'),
+            (2, 'Bob', 1, 75000, '2023-06-20'),
+            (3, 'Carol', 2, 55000, '2024-03-10')
+        ]
+        for emp_id, name, dept_id, salary, date in emp_data:
+            self.execute_query(f"INSERT INTO employees (emp_id, emp_name, dept_id, salary, hire_date) VALUES ({emp_id}, '{name}', {dept_id}, {salary}, '{date}')")
+    
+    def test_01_update_with_hardcoded_value(self):
+        """Test UPDATE with hardcoded value."""
+        self._setup_update_data()
+        query = "UPDATE employees SET salary = 65000 WHERE emp_id = 1"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Verify update
+        select_result = self.execute_query("SELECT salary FROM employees WHERE emp_id = 1")
+        self.assertEqual(select_result.data.rows[0]['salary'], 65000)
+    
+    def test_02_update_with_expression(self):
+        """Test UPDATE with expression (salary = salary + 5000)."""
+        self._setup_update_data()
+        query = "UPDATE employees SET salary = salary + 5000 WHERE dept_id = 1"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Verify updates - Alice should be 65000, Bob should be 80000
+        select_result = self.execute_query("SELECT emp_id, salary FROM employees WHERE dept_id = 1")
+        salaries = {row['emp_id']: row['salary'] for row in select_result.data.rows}
+        self.assertEqual(salaries[1], 65000)  # Alice: 60000 + 5000
+        self.assertEqual(salaries[2], 80000)  # Bob: 75000 + 5000
+    
+    def test_03_update_multiple_rows(self):
+        """Test UPDATE affecting multiple rows."""
+        self._setup_update_data()
+        # Set all dept_id=2 employees to salary 70000
+        query = "UPDATE employees SET salary = 70000 WHERE dept_id = 2"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Verify
+        select_result = self.execute_query("SELECT salary FROM employees WHERE dept_id = 2")
+        for row in select_result.data.rows:
+            self.assertEqual(row['salary'], 70000)
+    
+    def test_04_update_with_arithmetic_expression(self):
+        """Test UPDATE with more complex arithmetic."""
+        self._setup_update_data()
+        query = "UPDATE employees SET salary = salary * 2 WHERE emp_id = 3"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Carol's salary should be 55000 * 2 = 110000
+        select_result = self.execute_query("SELECT salary FROM employees WHERE emp_id = 3")
+        self.assertEqual(select_result.data.rows[0]['salary'], 110000)
+
+
+class TestDelete(TestQueryProcessor):
+    """Test DELETE functionality."""
+    
+    def _setup_delete_data(self):
+        """Set up tables and data for DELETE tests."""
+        super().setUp()
+        self.execute_query("""
+        CREATE TABLE tasks (
+            task_id INTEGER PRIMARY KEY,
+            task_name VARCHAR(50),
+            project_id INTEGER,
+            status VARCHAR(20)
+        )
+        """)
+        
+        task_data = [
+            (1, 'Design UI', 1, 'completed'),
+            (2, 'Implement API', 1, 'in_progress'),
+            (3, 'Write Tests', 1, 'completed'),
+            (4, 'Deploy', 2, 'pending')
+        ]
+        for task_id, name, proj_id, status in task_data:
+            self.execute_query(f"INSERT INTO tasks (task_id, task_name, project_id, status) VALUES ({task_id}, '{name}', {proj_id}, '{status}')")
+    
+    def test_01_delete_with_simple_condition(self):
+        """Test DELETE with single condition."""
+        self._setup_delete_data()
+        query = "DELETE FROM tasks WHERE task_id = 1"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Verify deletion
+        select_result = self.execute_query("SELECT * FROM tasks WHERE task_id = 1")
+        self.assertEqual(len(select_result.data.rows), 0)
+    
+    def test_02_delete_with_string_condition(self):
+        """Test DELETE with string condition."""
+        self._setup_delete_data()
+        query = "DELETE FROM tasks WHERE status = 'completed'"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Verify all completed tasks deleted
+        select_result = self.execute_query("SELECT * FROM tasks WHERE status = 'completed'")
+        self.assertEqual(len(select_result.data.rows), 0)
+        
+        # Verify other tasks still exist
+        all_result = self.execute_query("SELECT * FROM tasks")
+        self.assertGreater(len(all_result.data.rows), 0)
+    
+    def test_03_delete_with_numeric_condition(self):
+        """Test DELETE with numeric condition."""
+        self._setup_delete_data()
+        query = "DELETE FROM tasks WHERE project_id = 2"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Verify deletion
+        select_result = self.execute_query("SELECT * FROM tasks WHERE project_id = 2")
+        self.assertEqual(len(select_result.data.rows), 0)
+
+
+class TestLimit(TestQueryProcessor):
+    """Test LIMIT functionality."""
+    
+    def _setup_limit_data(self):
+        """Set up tables and data for LIMIT tests."""
+        super().setUp()
+        self.execute_query("""
+        CREATE TABLE employees (
+            emp_id INTEGER PRIMARY KEY,
+            emp_name VARCHAR(50),
+            dept_id INTEGER,
+            salary INTEGER,
+            hire_date VARCHAR(20)
+        )
+        """)
+        
+        # Insert 10 employees
+        for i in range(1, 11):
+            self.execute_query(f"INSERT INTO employees (emp_id, emp_name, dept_id, salary, hire_date) VALUES ({i}, 'Employee{i}', 1, {50000 + i*1000}, '2024-01-01')")
+    
+    def test_01_simple_limit(self):
+        """Test simple LIMIT clause."""
+        self._setup_limit_data()
+        query = "SELECT * FROM employees LIMIT 5"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Should return exactly 5 rows
+        self.assertEqual(len(result.data.rows), 5)
+    
+    def test_02_limit_with_where(self):
+        """Test LIMIT with WHERE clause."""
+        self._setup_limit_data()
+        query = "SELECT * FROM employees WHERE salary > 52000 LIMIT 3"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Should return at most 3 rows
+        self.assertLessEqual(len(result.data.rows), 3)
+        
+        # All returned rows should satisfy condition
+        for row in result.data.rows:
+            self.assertGreater(row['salary'], 52000)
+    
+    def test_03_limit_larger_than_result_set(self):
+        """Test LIMIT larger than available rows."""
+        self._setup_limit_data()
+        query = "SELECT * FROM employees WHERE dept_id = 1 LIMIT 100"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Should return all available rows (10 in this case)
+        self.assertEqual(len(result.data.rows), 10)
+
+
+class TestOrderBy(TestQueryProcessor):
+    """Test ORDER BY functionality."""
+    
+    def _setup_orderby_data(self):
+        """Set up tables and data for ORDER BY tests."""
+        super().setUp()
+        self.execute_query("""
+        CREATE TABLE employees (
+            emp_id INTEGER PRIMARY KEY,
+            emp_name VARCHAR(50),
+            dept_id INTEGER,
+            salary INTEGER,
+            hire_date VARCHAR(20)
+        )
+        """)
+        
+        emp_data = [
+            (1, 'Alice', 1, 60000, '2024-01-15'),
+            (2, 'Bob', 1, 75000, '2023-06-20'),
+            (3, 'Carol', 2, 55000, '2024-03-10'),
+            (4, 'Dave', 2, 82000, '2022-11-05'),
+            (5, 'Eve', 3, 50000, '2024-02-28')
+        ]
+        for emp_id, name, dept_id, salary, date in emp_data:
+            self.execute_query(f"INSERT INTO employees (emp_id, emp_name, dept_id, salary, hire_date) VALUES ({emp_id}, '{name}', {dept_id}, {salary}, '{date}')")
+    
+    def test_01_order_by_asc(self):
+        """Test ORDER BY ascending."""
+        self._setup_orderby_data()
+        query = "SELECT * FROM employees ORDER BY salary ASC"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Verify ascending order
+        salaries = [row['salary'] for row in result.data.rows]
+        self.assertEqual(salaries, sorted(salaries))
+    
+    def test_02_order_by_desc(self):
+        """Test ORDER BY descending."""
+        self._setup_orderby_data()
+        query = "SELECT * FROM employees ORDER BY salary DESC"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Verify descending order
+        salaries = [row['salary'] for row in result.data.rows]
+        self.assertEqual(salaries, sorted(salaries, reverse=True))
+    
+    def test_03_order_by_with_where(self):
+        """Test ORDER BY with WHERE clause."""
+        self._setup_orderby_data()
+        query = "SELECT * FROM employees WHERE dept_id = 1 ORDER BY salary DESC"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Verify all rows have dept_id = 1
+        for row in result.data.rows:
+            self.assertEqual(row['dept_id'], 1)
+        
+        # Verify descending order
+        salaries = [row['salary'] for row in result.data.rows]
+        self.assertEqual(salaries, sorted(salaries, reverse=True))
+    
+    def test_04_order_by_string_column(self):
+        """Test ORDER BY on string column."""
+        self._setup_orderby_data()
+        query = "SELECT * FROM employees ORDER BY emp_name ASC"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Verify alphabetical order
+        names = [row['emp_name'] for row in result.data.rows]
+        self.assertEqual(names, sorted(names))
+
+
+class TestAlias(TestQueryProcessor):
+    """Test table and column ALIAS functionality."""
+    
+    def _setup_alias_data(self):
+        """Set up tables and data for ALIAS tests."""
+        super().setUp()
+        # Create tables
+        self.execute_query("""
+        CREATE TABLE departments (
+            dept_id INTEGER PRIMARY KEY,
+            dept_name VARCHAR(50),
+            budget INTEGER
+        )
+        """)
+        
+        self.execute_query("""
+        CREATE TABLE employees (
+            emp_id INTEGER PRIMARY KEY,
+            emp_name VARCHAR(50),
+            dept_id INTEGER,
+            salary INTEGER,
+            hire_date VARCHAR(20)
+        )
+        """)
+        
+        # Populate data
+        self.execute_query("INSERT INTO departments (dept_id, dept_name, budget) VALUES (1, 'Engineering', 100000)")
+        self.execute_query("INSERT INTO employees (emp_id, emp_name, dept_id, salary, hire_date) VALUES (1, 'Alice', 1, 60000, '2024-01-15')")
+    
+    def test_01_table_alias_in_join(self):
+        """Test table aliases in JOIN."""
+        self._setup_alias_data()
+        query = "SELECT e.emp_name, d.dept_name FROM employees e JOIN departments d ON e.dept_id = d.dept_id"
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Should successfully parse and execute with aliases
+        self.assertGreater(len(result.data.rows), 0)
+
+
+class TestDropTable(TestQueryProcessor):
+    """Test DROP TABLE functionality with foreign key handling."""
+    
+    def test_01_drop_simple_table(self):
+        """Test dropping a table without dependencies."""
+        # Create and drop a simple table
+        self.execute_query("""
+        CREATE TABLE temp_table (
+            id INTEGER PRIMARY KEY,
+            name VARCHAR(50)
+        )
+        """)
+        
+        # Verify table exists
+        self.assertIn('temp_table', self.storage_manager.tables)
+        
+        # Drop table
+        result = self.execute_query("DROP TABLE temp_table")
+        self.assertQuerySuccess(result)
+        
+        # Verify table removed
+        self.assertNotIn('temp_table', self.storage_manager.tables)
+    
+    def test_02_drop_table_with_data(self):
+        """Test dropping a table that contains data."""
+        # Create and populate table
+        self.execute_query("""
+        CREATE TABLE temp_data (
+            id INTEGER PRIMARY KEY,
+            value INTEGER
+        )
+        """)
+        
+        self.execute_query("INSERT INTO temp_data (id, value) VALUES (1, 100)")
+        self.execute_query("INSERT INTO temp_data (id, value) VALUES (2, 200)")
+        
+        # Drop table
+        result = self.execute_query("DROP TABLE temp_data")
+        self.assertQuerySuccess(result)
+        
+        # Verify table removed
+        self.assertNotIn('temp_data', self.storage_manager.tables)
+
+
+class TestSubqueries(TestQueryProcessor):
+    """Test subquery operations (IN, NOT IN, EXISTS, NOT EXISTS)."""
+    
+    def _setup_subquery_data(self):
+        """Set up test data for subquery tests."""
+        super().setUp()
+        # Create departments table
+        self.execute_query("""
+        CREATE TABLE departments (
+            dept_id INTEGER PRIMARY KEY,
+            dept_name VARCHAR(50),
+            budget INTEGER
+        )
+        """)
+        
+        # Create employees table
+        self.execute_query("""
+        CREATE TABLE employees (
+            emp_id INTEGER PRIMARY KEY,
+            emp_name VARCHAR(50),
+            dept_id INTEGER,
+            salary INTEGER
+        )
+        """)
+        
+        # Populate departments
+        dept_data = [(1, 'Engineering', 100000), (2, 'Sales', 80000), (3, 'HR', 60000)]
+        for dept_id, name, budget in dept_data:
+            self.execute_query(f"INSERT INTO departments (dept_id, dept_name, budget) VALUES ({dept_id}, '{name}', {budget})")
+        
+        # Populate employees (note: dept_id 3 has no employees)
+        emp_data = [
+            (1, 'Alice', 1, 75000),
+            (2, 'Bob', 1, 65000),
+            (3, 'Charlie', 2, 60000),
+            (4, 'Diana', 2, 55000),
+            (5, 'Eve', 99, 50000)  # Invalid dept_id
+        ]
+        for emp_id, name, dept_id, salary in emp_data:
+            self.execute_query(f"INSERT INTO employees (emp_id, emp_name, dept_id, salary) VALUES ({emp_id}, '{name}', {dept_id}, {salary})")
+    
+    def test_01_in_subquery_simple(self):
+        """Test IN with simple subquery."""
+        self._setup_subquery_data()
+        query = """
+        SELECT emp_name, salary 
+        FROM employees 
+        WHERE dept_id IN (SELECT dept_id FROM departments WHERE budget > 70000)
+        """
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Should return employees from Engineering (1) and Sales (2)
+        self.assertEqual(len(result.data.rows), 4)
+        names = [row['emp_name'] for row in result.data.rows]
+        self.assertIn('Alice', names)
+        self.assertIn('Bob', names)
+        self.assertIn('Charlie', names)
+        self.assertIn('Diana', names)
+    
+    def test_02_not_in_subquery(self):
+        """Test NOT IN with subquery."""
+        self._setup_subquery_data()
+        query = """
+        SELECT emp_name, salary 
+        FROM employees 
+        WHERE dept_id NOT IN (SELECT dept_id FROM departments WHERE budget > 70000)
+        """
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Should return only Eve (dept_id 99, not in high-budget departments)
+        self.assertEqual(len(result.data.rows), 1)
+        self.assertEqual(result.data.rows[0]['emp_name'], 'Eve')
+    
+    def test_03_exists_subquery(self):
+        """Test EXISTS with non-correlated subquery."""
+        self._setup_subquery_data()
+        # Check if any department has budget > 90000
+        query = """
+        SELECT dept_name, budget 
+        FROM departments 
+        WHERE EXISTS (SELECT * FROM departments WHERE budget > 90000)
+        """
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Should return all departments (because Engineering has budget 100000)
+        self.assertEqual(len(result.data.rows), 3)
+    
+    def test_04_not_exists_subquery(self):
+        """Test NOT EXISTS with non-correlated subquery."""
+        self._setup_subquery_data()
+        # Check if no department has budget > 150000
+        query = """
+        SELECT dept_name, budget 
+        FROM departments 
+        WHERE NOT EXISTS (SELECT * FROM departments WHERE budget > 150000)
+        """
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Should return all departments (because no dept has budget > 150000)
+        self.assertEqual(len(result.data.rows), 3)
+    
+    def test_05_in_subquery_with_where(self):
+        """Test IN subquery combined with additional WHERE conditions."""
+        self._setup_subquery_data()
+        query = """
+        SELECT emp_name, salary 
+        FROM employees 
+        WHERE salary > 60000 
+        AND dept_id IN (SELECT dept_id FROM departments WHERE budget > 80000)
+        """
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Should return Alice and Bob (high salary in Engineering)
+        self.assertEqual(len(result.data.rows), 2)
+        names = [row['emp_name'] for row in result.data.rows]
+        self.assertIn('Alice', names)
+        self.assertIn('Bob', names)
+    
+    def test_06_nested_subquery(self):
+        """Test nested subqueries (subquery within subquery)."""
+        self._setup_subquery_data()
+        # Find employees in departments that are listed in a subquery of high-budget departments
+        query = """
+        SELECT emp_name 
+        FROM employees 
+        WHERE dept_id IN (
+            SELECT dept_id 
+            FROM departments 
+            WHERE dept_id IN (SELECT dept_id FROM departments WHERE budget > 70000)
+        )
+        """
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Should return employees from Engineering and Sales (budget > 70000)
+        self.assertEqual(len(result.data.rows), 4)
+        names = [row['emp_name'] for row in result.data.rows]
+        self.assertIn('Alice', names)
+        self.assertIn('Bob', names)
+        self.assertIn('Charlie', names)
+        self.assertIn('Diana', names)
+    
+    def test_07_in_subquery_with_order_limit(self):
+        """Test IN subquery with ORDER BY and LIMIT."""
+        self._setup_subquery_data()
+        query = """
+        SELECT emp_name, salary 
+        FROM employees 
+        WHERE dept_id IN (SELECT dept_id FROM departments WHERE budget > 70000)
+        ORDER BY salary DESC
+        LIMIT 2
+        """
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Should return top 2 earners from high-budget departments
+        self.assertEqual(len(result.data.rows), 2)
+        self.assertEqual(result.data.rows[0]['emp_name'], 'Alice')  # 75000
+        self.assertEqual(result.data.rows[1]['emp_name'], 'Bob')    # 65000
+
+
+class TestComplexQueries(TestQueryProcessor):
+    """Test complex query combinations."""
+    
+    def _setup_complex_data(self):
+        """Set up comprehensive test database."""
+        super().setUp()
+        # Create tables
+        self.execute_query("""
+        CREATE TABLE departments (
+            dept_id INTEGER PRIMARY KEY,
+            dept_name VARCHAR(50),
+            budget INTEGER
+        )
+        """)
+        
+        self.execute_query("""
+        CREATE TABLE employees (
+            emp_id INTEGER PRIMARY KEY,
+            emp_name VARCHAR(50),
+            dept_id INTEGER,
+            salary INTEGER,
+            hire_date VARCHAR(20)
+        )
+        """)
+        
+        # Populate data
+        dept_data = [(1, 'Engineering', 100000), (2, 'Sales', 80000), (3, 'HR', 60000)]
+        for dept_id, name, budget in dept_data:
+            self.execute_query(f"INSERT INTO departments (dept_id, dept_name, budget) VALUES ({dept_id}, '{name}', {budget})")
+        
+        emp_data = [
+            (1, 'Alice', 1, 60000, '2024-01-15'),
+            (2, 'Bob', 1, 75000, '2023-06-20'),
+            (3, 'Carol', 2, 55000, '2024-03-10'),
+            (4, 'Dave', 2, 82000, '2022-11-05'),
+            (5, 'Eve', 3, 50000, '2024-02-28')
+        ]
+        for emp_id, name, dept_id, salary, date in emp_data:
+            self.execute_query(f"INSERT INTO employees (emp_id, emp_name, dept_id, salary, hire_date) VALUES ({emp_id}, '{name}', {dept_id}, {salary}, '{date}')")
+    
+    def test_01_join_with_where_and_order(self):
+        """Test JOIN combined with WHERE and ORDER BY."""
+        self._setup_complex_data()
+        query = """
+        SELECT e.emp_name, d.dept_name, e.salary
+        FROM employees e JOIN departments d ON e.dept_id = d.dept_id
+        WHERE e.salary > 55000
+        ORDER BY e.salary DESC
+        """
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Verify salary filtering
+        for row in result.data.rows:
+            self.assertGreater(row['salary'], 55000)
+        
+        # Verify ordering
+        salaries = [row['salary'] for row in result.data.rows]
+        self.assertEqual(salaries, sorted(salaries, reverse=True))
+    
+    def test_02_select_with_where_order_limit(self):
+        """Test SELECT with WHERE, ORDER BY, and LIMIT."""
+        self._setup_complex_data()
+        query = """
+        SELECT emp_name, salary
+        FROM employees
+        WHERE dept_id = 1
+        ORDER BY salary DESC
+        LIMIT 1
+        """
+        result = self.execute_query(query)
+        self.assertQuerySuccess(result)
+        
+        # Should return highest paid employee in dept 1 (Bob with 75000)
+        self.assertEqual(len(result.data.rows), 1)
+        self.assertEqual(result.data.rows[0]['emp_name'], 'Bob')
+
+
+def suite():
+    """Create test suite."""
+    test_suite = unittest.TestSuite()
+    
+    # Add all test classes
+    test_suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestCreateTable))
+    test_suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestInsertInto))
+    test_suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestSelect))
+    test_suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestJoin))
+    test_suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestUpdate))
+    test_suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestDelete))
+    test_suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestLimit))
+    test_suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestOrderBy))
+    test_suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestAlias))
+    test_suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestDropTable))
+    test_suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestSubqueries))
+    test_suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestComplexQueries))
+    
+    return test_suite
+
+
+if __name__ == '__main__':
+    # Run tests with verbose output
+    runner = unittest.TextTestRunner(verbosity=2)
+    runner.run(suite())

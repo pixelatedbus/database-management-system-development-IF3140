@@ -210,6 +210,29 @@ class DataDeletion:
 
 
 @dataclass
+class DataUpdate:
+    """Parameter untuk operasi update_by_old_new_data untuk FRM.
+    
+    Simple update based on old/new data matching - no conditions needed!
+    
+    Attributes:
+        table: Nama tabel yang akan diupdate
+        old_data: List of rows yang mau diganti (matching criteria)
+        new_data: List of rows pengganti (harus sama panjangnya dengan old_data)
+    
+    Example:
+        DataUpdate(
+            table="users",
+            old_data=[{"id": 1, "name": "Alice", "status": "inactive"}],
+            new_data=[{"id": 1, "name": "Alice", "status": "active"}]
+        )
+    """
+    table: str
+    old_data: List[Dict[str, Any]] = field(default_factory=list)
+    new_data: List[Dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
 class Statistic:
     """Statistik tabel untuk query optimization.
     

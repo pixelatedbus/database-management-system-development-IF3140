@@ -105,17 +105,21 @@ class logFile:
                 r"transaction_id:(?P<transaction_id>\d+),\s*"
                 r"action:(?P<action>\d+),\s*"
                 r"timestamp:(?P<timestamp>[\d\s\.:_-]+),\s*"
-                r"old_data:(?P<old_data>\{[^}]*\}),\s*"
-                r"new_data:(?P<new_data>\{[^}]*\}),\s*"
-                r"table_name:(?P<table_name>.*?)[\s,]*\n?$"
+                r"old_data:(?P<old_data>(?:\{[^}]*\}|\[[^\]]*\]|None)),\s*"
+                r"new_data:(?P<new_data>(?:\{[^}]*\}|\[[^\]]*\]|None)),\s*"
+                r"table_name:(?P<table_name>.*?),?\s*$"
             )   
             
             for log_str in self.logFile_buffer:
-
-                match = parse_pattern.match(log_str)
+                # Strip whitespace and newlines for parsing
+                log_str_clean = log_str.strip()
+                
+                match = parse_pattern.match(log_str_clean)
 
                 if not match:
-                    raise ValueError(f"Log string format not recognized: {log_str}")
+                    print(f"DEBUG: Failed to parse: '{log_str_clean}'")
+                    print(f"DEBUG: repr: {repr(log_str_clean)}")
+                    raise ValueError(f"Log string format not recognized: {log_str_clean}")
 
                 data = match.groupdict()
 
@@ -131,12 +135,12 @@ class logFile:
                     data['timestamp'] = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 
-                # evaluate old/new_data into dictionary
+                # evaluate old/new_data into dictionary/list/None
                 try:
-                    data['old_data'] = literal_eval(data['old_data'])
-                    data['new_data'] = literal_eval(data['new_data'])
+                    data['old_data'] = None if data['old_data'] == 'None' else literal_eval(data['old_data'])
+                    data['new_data'] = None if data['new_data'] == 'None' else literal_eval(data['new_data'])
                 except (ValueError, SyntaxError) as e:
-                    print(f"Error evaluating dictionary data in log: {log_str}. Error: {e}")
+                    print(f"Error evaluating dictionary data in log: {log_str_clean}. Error: {e}")
                     print(f"Setting dictionary data empty")
                     data['old_data'] = {}
                     data['new_data'] = {}

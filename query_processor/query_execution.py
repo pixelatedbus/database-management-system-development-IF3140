@@ -608,15 +608,23 @@ class QueryExecution:
             self.ccm_adapter.log_object(transaction_id, table_name)
         
         try:
-            # STEP 1: READ
-            logger.info(f"[UPDATE] STEP 1: Reading matching rows...")
-            # Use storage adapter for reading
-            matching_rows = self.storage_adapter.read_data(
-                table_name=table_name,
-                columns=[], 
-                conditions=conditions,
-                transaction_id=transaction_id
+            # STEP 1: READ (with buffered operations applied)
+            logger.info(f"[UPDATE] STEP 1: Reading matching rows with buffered operations...")
+            # Read from storage
+            data_retrieval = DataRetrieval(
+                table=table_name,
+                column=[],
+                conditions=conditions
             )
+            storage_rows = self.storage_manager.read_block(data_retrieval)
+            
+            # Apply buffered operations to see uncommitted writes in this transaction
+            if transaction_id:
+                matching_rows = self._apply_buffered_operations(storage_rows, transaction_id, table_name)
+                logger.info(f"[UPDATE]    After applying buffer: {len(matching_rows)} row(s)")
+            else:
+                matching_rows = storage_rows
+            
             logger.info(f"[UPDATE]    Found {len(matching_rows)} matching row(s)")
             
             if not matching_rows:
@@ -1307,27 +1315,26 @@ class QueryExecution:
                 return node.childs[0].val
             return node.val
         elif node.type == "PROJECT":
-            # Parser wraps JOIN operands in PROJECT nodes (projection pushdown)
-            # The source is the last child
             source = node.childs[-1]
             return self.extract_table_name(source)
+        elif node.type == "FILTER":
+            source = node.childs[0]
+            return self.extract_table_name(source)
+        elif node.type == "SORT":
+            source = node.childs[-1]
+            return self.extract_table_name(source)
+        elif node.type == "LIMIT":
+            source = node.childs[-1]
+            return self.extract_table_name(source)
+        elif node.type == "JOIN":
+            left_table = self.extract_table_name(node.childs[0])
+            right_table = self.extract_table_name(node.childs[1])
+            return f"{left_table},{right_table}"
         else:
             raise ValueError(f"Cannot extract table name from node type {node.type}")
     
     def _apply_buffered_operations(self, storage_data: list[dict], 
                                     transaction_id: int, table_name: str) -> list[dict]:
-        """
-        Apply transaction's buffered operations on top of storage data.
-        This allows transaction to see its own uncommitted writes (Read Committed isolation).
-        
-        Args:
-            storage_data: Data from storage (committed baseline)
-            transaction_id: Current transaction ID
-            table_name: Table being read
-            
-        Returns:
-            Merged view: storage data + buffered operations applied
-        """
         if not transaction_id:
             return storage_data
         
@@ -1361,16 +1368,6 @@ class QueryExecution:
         return result
     
     def _row_matches_data(self, row: dict, target_data: dict) -> bool:
-        """
-        Check if a row matches target data (for finding rows affected by UPDATE/DELETE).
-        
-        Args:
-            row: Row to check
-            target_data: Target data to match against
-            
-        Returns:
-            True if all fields in target_data match corresponding fields in row
-        """
         if not target_data:
             return False
         
