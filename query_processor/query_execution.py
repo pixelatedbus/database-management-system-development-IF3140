@@ -921,19 +921,29 @@ class QueryExecution:
                 
                 elif constraint.type == "FOREIGN_KEY":
                     has_foreign_key = True
-                    # FOREIGN_KEY structure: FOREIGN_KEY -> REFERENCES(table_name) -> IDENTIFIER(column_name)
+                    # FOREIGN_KEY structure: FOREIGN_KEY -> REFERENCES(table_name) -> IDENTIFIER(column_name) [-> ON_DELETE] [-> ON_UPDATE]
                     references_node = constraint.childs[0]  # REFERENCES node
                     ref_table = references_node.val
                     ref_column = references_node.childs[0].val  # IDENTIFIER child
+                    
+                    # Extract ON DELETE and ON UPDATE actions from remaining children
+                    on_delete = "RESTRICT"  # default
+                    on_update = "RESTRICT"  # default
+                    
+                    for child in constraint.childs[1:]:
+                        if child.type == "ON_DELETE":
+                            on_delete = child.val
+                        elif child.type == "ON_UPDATE":
+                            on_update = child.val
                     
                     foreign_keys.append(ForeignKey(
                         column=col_name,
                         references_table=ref_table,
                         references_column=ref_column,
-                        on_delete="RESTRICT",
-                        on_update="RESTRICT"
+                        on_delete=on_delete,
+                        on_update=on_update
                     ))
-                    logger.info(f"[CREATE TABLE]   - {col_name} {data_type_str} FOREIGN KEY REFERENCES {ref_table}({ref_column})")
+                    logger.info(f"[CREATE TABLE]   - {col_name} {data_type_str} FOREIGN KEY REFERENCES {ref_table}({ref_column}) ON DELETE {on_delete} ON UPDATE {on_update}")
                 else:
                     logger.info(f"[CREATE TABLE]   - {col_name} {data_type_str}")
             else:

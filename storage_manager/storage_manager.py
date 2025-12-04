@@ -1026,6 +1026,9 @@ class StorageManager:
         rows_to_delete: List[Dict[str, Any]],
         action_type: str = 'delete'
     ) -> None:
+        # First pass: validate all constraints before making any changes
+        actions_to_perform = []
+        
         for child_table, meta in self.tables.items():
             for fk in meta.get("foreign_keys", []):
                 if fk["references_table"] != parent_table:
@@ -1055,28 +1058,46 @@ class StorageManager:
                 if not affected_child_rows:
                     continue
                 
-                if on_delete == "CASCADE":
-                    print(f"  CASCADE: menghapus {len(affected_child_rows)} child rows dari '{child_table}'")
-                    self._cascade_delete_child_rows(child_table, affected_child_rows)
-                    
-                elif on_delete == "SET NULL":
-                    print(f"  SET NULL: mengupdate {len(affected_child_rows)} child rows di '{child_table}'")
-                    self._set_null_child_rows(child_table, affected_child_rows, fk_column)
-                    
-                elif on_delete in ["RESTRICT", "NO ACTION"]:
+                # Validate constraints first
+                if on_delete == "RESTRICT" or on_delete == "NO ACTION":
                     raise ValueError(
                         f"Cannot delete from '{parent_table}': "
                         f"{len(affected_child_rows)} child record(s) exist in '{child_table}' "
                         f"(foreign key constraint on column '{fk_column}'). "
                         f"Action: {on_delete}"
                     )
-                
+                elif on_delete == "SET NULL":
+                    # Validate that column is nullable BEFORE making changes
+                    child_columns = self._get_column_definitions(child_table)
+                    fk_col_def = next((c for c in child_columns if c.name == fk_column), None)
+                    
+                    if fk_col_def and not fk_col_def.is_nullable:
+                        raise ValueError(
+                            f"Cannot SET NULL on '{child_table}.{fk_column}': "
+                            f"column is NOT NULL"
+                        )
+                    # Queue the action
+                    actions_to_perform.append(('SET_NULL', child_table, affected_child_rows, fk_column))
+                    
+                elif on_delete == "CASCADE":
+                    # Queue the action
+                    actions_to_perform.append(('CASCADE', child_table, affected_child_rows, fk_column))
+                    
                 else:
                     raise ValueError(
                         f"Cannot delete from '{parent_table}': "
                         f"foreign key constraint exists in '{child_table}' "
                         f"(unknown ON DELETE action: {on_delete})"
                     )
+        
+        # Second pass: perform all queued actions (after all validations passed)
+        for action_type, child_table, affected_rows, fk_column in actions_to_perform:
+            if action_type == 'CASCADE':
+                print(f"  CASCADE: menghapus {len(affected_rows)} child rows dari '{child_table}'")
+                self._cascade_delete_child_rows(child_table, affected_rows)
+            elif action_type == 'SET_NULL':
+                print(f"  SET NULL: mengupdate {len(affected_rows)} child rows di '{child_table}'")
+                self._set_null_child_rows(child_table, affected_rows, fk_column)
 
 
     def _cascade_delete_child_rows(
@@ -1121,6 +1142,7 @@ class StorageManager:
         child_rows_to_update: List[Dict[str, Any]],
         fk_column: str
     ) -> None:
+        """Set FK column to NULL in child rows (validation already done)."""
         all_child_rows = self._load_table_rows(child_table)
         
         rows_to_update_set = {
@@ -1141,15 +1163,7 @@ class StorageManager:
             else:
                 new_rows.append(row)
         
-        child_columns = self._get_column_definitions(child_table)
-        fk_col_def = next((c for c in child_columns if c.name == fk_column), None)
-        
-        if fk_col_def and not fk_col_def.is_nullable:
-            raise ValueError(
-                f"Cannot SET NULL on '{child_table}.{fk_column}': "
-                f"column is NOT NULL"
-            )
-        
+        # Update indexes and save
         self._update_indexes_after_update(child_table, updated_rows_info)
         self._save_table_rows(child_table, new_rows)
 

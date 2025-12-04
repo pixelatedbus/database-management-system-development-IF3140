@@ -761,7 +761,7 @@ class TestUpdate(TestQueryProcessor):
 
 
 class TestDelete(TestQueryProcessor):
-    """Test DELETE functionality."""
+    """Test DELETE functionality including referential integrity with ON DELETE actions."""
     
     def _setup_delete_data(self):
         """Set up tables and data for DELETE tests."""
@@ -997,6 +997,245 @@ class TestDelete(TestQueryProcessor):
         # Verify parent unaffected
         proj_check = self.execute_query("SELECT * FROM projects WHERE proj_id = 1")
         self.assertEqual(len(proj_check.data.rows), 1)
+    
+    def test_08_delete_with_on_delete_restrict(self):
+        """Test DELETE with ON DELETE RESTRICT - prevents deletion when children exist."""
+        super().setUp()
+        # Create parent and child with RESTRICT
+        self.execute_query("""
+        CREATE TABLE departments (
+            dept_id INTEGER PRIMARY KEY,
+            dept_name VARCHAR(50)
+        )
+        """)
+        
+        self.execute_query("""
+        CREATE TABLE employees (
+            emp_id INTEGER PRIMARY KEY,
+            emp_name VARCHAR(50),
+            dept_id INTEGER FOREIGN KEY REFERENCES departments(dept_id) ON DELETE RESTRICT
+        )
+        """)
+        
+        # Insert test data
+        self.execute_query("INSERT INTO departments (dept_id, dept_name) VALUES (1, 'Engineering')")
+        self.execute_query("INSERT INTO departments (dept_id, dept_name) VALUES (2, 'Sales')")
+        self.execute_query("INSERT INTO employees (emp_id, emp_name, dept_id) VALUES (1, 'Alice', 1)")
+        self.execute_query("INSERT INTO employees (emp_id, emp_name, dept_id) VALUES (2, 'Bob', 1)")
+        
+        # Try to delete parent - should FAIL
+        result = self.execute_query("DELETE FROM departments WHERE dept_id = 1")
+        self.assertQueryFails(result, "Should not allow deleting parent with children (RESTRICT)")
+        
+        # Verify parent still exists
+        select_result = self.execute_query("SELECT * FROM departments WHERE dept_id = 1")
+        self.assertEqual(len(select_result.data.rows), 1)
+        
+        # Verify children still exist
+        emp_result = self.execute_query("SELECT * FROM employees WHERE dept_id = 1")
+        self.assertEqual(len(emp_result.data.rows), 2)
+        
+        # Delete without children should succeed
+        result = self.execute_query("DELETE FROM departments WHERE dept_id = 2")
+        self.assertQuerySuccess(result, "Should allow deleting parent without children")
+    
+    def test_09_delete_with_on_delete_cascade(self):
+        """Test DELETE with ON DELETE CASCADE - automatically deletes child rows."""
+        super().setUp()
+        # Create parent and child with CASCADE
+        self.execute_query("""
+        CREATE TABLE customers (
+            cust_id INTEGER PRIMARY KEY,
+            cust_name VARCHAR(50)
+        )
+        """)
+        
+        self.execute_query("""
+        CREATE TABLE orders (
+            order_id INTEGER PRIMARY KEY,
+            cust_id INTEGER FOREIGN KEY REFERENCES customers(cust_id) ON DELETE CASCADE,
+            amount INTEGER
+        )
+        """)
+        
+        # Insert test data
+        self.execute_query("INSERT INTO customers (cust_id, cust_name) VALUES (1, 'John')")
+        self.execute_query("INSERT INTO customers (cust_id, cust_name) VALUES (2, 'Jane')")
+        self.execute_query("INSERT INTO orders (order_id, cust_id, amount) VALUES (1, 1, 100)")
+        self.execute_query("INSERT INTO orders (order_id, cust_id, amount) VALUES (2, 1, 200)")
+        self.execute_query("INSERT INTO orders (order_id, cust_id, amount) VALUES (3, 2, 150)")
+        
+        # Delete parent - should CASCADE to children
+        result = self.execute_query("DELETE FROM customers WHERE cust_id = 1")
+        self.assertQuerySuccess(result, "Should allow deleting parent (CASCADE)")
+        
+        # Verify parent deleted
+        cust_result = self.execute_query("SELECT * FROM customers WHERE cust_id = 1")
+        self.assertEqual(len(cust_result.data.rows), 0)
+        
+        # Verify children also deleted (CASCADE)
+        order_result = self.execute_query("SELECT * FROM orders WHERE cust_id = 1")
+        self.assertEqual(len(order_result.data.rows), 0, "Child rows should be deleted (CASCADE)")
+        
+        # Verify other customer and orders still exist
+        cust_result = self.execute_query("SELECT * FROM customers WHERE cust_id = 2")
+        self.assertEqual(len(cust_result.data.rows), 1)
+        order_result = self.execute_query("SELECT * FROM orders WHERE cust_id = 2")
+        self.assertEqual(len(order_result.data.rows), 1)
+    
+    def test_10_delete_with_on_delete_cascade_multi_level(self):
+        """Test CASCADE with multi-level foreign key hierarchy."""
+        super().setUp()
+        # Create 3-level hierarchy with CASCADE
+        self.execute_query("""
+        CREATE TABLE companies (
+            company_id INTEGER PRIMARY KEY,
+            company_name VARCHAR(50)
+        )
+        """)
+        
+        self.execute_query("""
+        CREATE TABLE departments (
+            dept_id INTEGER PRIMARY KEY,
+            dept_name VARCHAR(50),
+            company_id INTEGER FOREIGN KEY REFERENCES companies(company_id) ON DELETE CASCADE
+        )
+        """)
+        
+        self.execute_query("""
+        CREATE TABLE employees (
+            emp_id INTEGER PRIMARY KEY,
+            emp_name VARCHAR(50),
+            dept_id INTEGER FOREIGN KEY REFERENCES departments(dept_id) ON DELETE CASCADE
+        )
+        """)
+        
+        # Insert test data
+        self.execute_query("INSERT INTO companies (company_id, company_name) VALUES (1, 'TechCorp')")
+        self.execute_query("INSERT INTO departments (dept_id, dept_name, company_id) VALUES (1, 'Engineering', 1)")
+        self.execute_query("INSERT INTO departments (dept_id, dept_name, company_id) VALUES (2, 'Sales', 1)")
+        self.execute_query("INSERT INTO employees (emp_id, emp_name, dept_id) VALUES (1, 'Alice', 1)")
+        self.execute_query("INSERT INTO employees (emp_id, emp_name, dept_id) VALUES (2, 'Bob', 1)")
+        self.execute_query("INSERT INTO employees (emp_id, emp_name, dept_id) VALUES (3, 'Charlie', 2)")
+        
+        # Delete top-level parent
+        result = self.execute_query("DELETE FROM companies WHERE company_id = 1")
+        self.assertQuerySuccess(result, "Should cascade delete through all levels")
+        
+        # Verify all data cascaded deleted
+        comp_result = self.execute_query("SELECT * FROM companies")
+        self.assertEqual(len(comp_result.data.rows), 0)
+        
+        dept_result = self.execute_query("SELECT * FROM departments")
+        self.assertEqual(len(dept_result.data.rows), 0, "Departments should cascade delete")
+        
+        emp_result = self.execute_query("SELECT * FROM employees")
+        self.assertEqual(len(emp_result.data.rows), 0, "Employees should cascade delete")
+    
+    def test_11_delete_with_on_delete_set_null(self):
+        """Test DELETE with ON DELETE SET NULL - sets FK to NULL when parent deleted."""
+        super().setUp()
+        # Create parent and child with SET NULL
+        self.execute_query("""
+        CREATE TABLE managers (
+            mgr_id INTEGER PRIMARY KEY,
+            mgr_name VARCHAR(50)
+        )
+        """)
+        
+        self.execute_query("""
+        CREATE TABLE employees (
+            emp_id INTEGER PRIMARY KEY,
+            emp_name VARCHAR(50),
+            mgr_id INTEGER FOREIGN KEY REFERENCES managers(mgr_id) ON DELETE SET NULL
+        )
+        """)
+        
+        # Insert test data
+        self.execute_query("INSERT INTO managers (mgr_id, mgr_name) VALUES (1, 'Boss')")
+        self.execute_query("INSERT INTO managers (mgr_id, mgr_name) VALUES (2, 'Supervisor')")
+        self.execute_query("INSERT INTO employees (emp_id, emp_name, mgr_id) VALUES (1, 'Alice', 1)")
+        self.execute_query("INSERT INTO employees (emp_id, emp_name, mgr_id) VALUES (2, 'Bob', 1)")
+        self.execute_query("INSERT INTO employees (emp_id, emp_name, mgr_id) VALUES (3, 'Charlie', 2)")
+        
+        # Delete parent
+        result = self.execute_query("DELETE FROM managers WHERE mgr_id = 1")
+        self.assertQuerySuccess(result, "Should allow deleting parent (SET NULL)")
+        
+        # Verify parent deleted
+        mgr_result = self.execute_query("SELECT * FROM managers WHERE mgr_id = 1")
+        self.assertEqual(len(mgr_result.data.rows), 0)
+        
+        # Verify children exist but FK is NULL
+        emp_result = self.execute_query("SELECT * FROM employees WHERE emp_id IN (1, 2)")
+        self.assertEqual(len(emp_result.data.rows), 2, "Child rows should still exist")
+        
+        for row in emp_result.data.rows:
+            self.assertIsNone(row.get('mgr_id'), f"FK should be NULL for emp_id={row['emp_id']}")
+        
+        # Verify other manager and employee unaffected
+        mgr_result = self.execute_query("SELECT * FROM managers WHERE mgr_id = 2")
+        self.assertEqual(len(mgr_result.data.rows), 1)
+        emp_result = self.execute_query("SELECT * FROM employees WHERE emp_id = 3")
+        self.assertEqual(len(emp_result.data.rows), 1)
+        self.assertEqual(emp_result.data.rows[0]['mgr_id'], 2)
+    
+    def test_12_delete_with_mixed_cascade_and_restrict(self):
+        """Test table with some children using CASCADE and others using RESTRICT."""
+        super().setUp()
+        # Parent table
+        self.execute_query("""
+        CREATE TABLE projects (
+            proj_id INTEGER PRIMARY KEY,
+            proj_name VARCHAR(50)
+        )
+        """)
+        
+        # Child 1: CASCADE
+        self.execute_query("""
+        CREATE TABLE tasks (
+            task_id INTEGER PRIMARY KEY,
+            task_name VARCHAR(50),
+            proj_id INTEGER FOREIGN KEY REFERENCES projects(proj_id) ON DELETE CASCADE
+        )
+        """)
+        
+        # Child 2: RESTRICT
+        self.execute_query("""
+        CREATE TABLE milestones (
+            milestone_id INTEGER PRIMARY KEY,
+            milestone_name VARCHAR(50),
+            proj_id INTEGER FOREIGN KEY REFERENCES projects(proj_id) ON DELETE RESTRICT
+        )
+        """)
+        
+        # Insert data
+        self.execute_query("INSERT INTO projects (proj_id, proj_name) VALUES (1, 'Project Alpha')")
+        self.execute_query("INSERT INTO tasks (task_id, task_name, proj_id) VALUES (1, 'Task 1', 1)")
+        self.execute_query("INSERT INTO milestones (milestone_id, milestone_name, proj_id) VALUES (1, 'Milestone 1', 1)")
+        
+        # Try to delete parent - should FAIL because of RESTRICT
+        result = self.execute_query("DELETE FROM projects WHERE proj_id = 1")
+        self.assertQueryFails(result, "Should fail due to RESTRICT even with CASCADE children")
+        
+        # Verify all data unchanged
+        proj_result = self.execute_query("SELECT * FROM projects WHERE proj_id = 1")
+        self.assertEqual(len(proj_result.data.rows), 1)
+        task_result = self.execute_query("SELECT * FROM tasks WHERE proj_id = 1")
+        self.assertEqual(len(task_result.data.rows), 1)
+        milestone_result = self.execute_query("SELECT * FROM milestones WHERE proj_id = 1")
+        self.assertEqual(len(milestone_result.data.rows), 1)
+        
+        # Delete RESTRICT child first
+        self.execute_query("DELETE FROM milestones WHERE milestone_id = 1")
+        
+        # Now deletion should succeed and CASCADE
+        result = self.execute_query("DELETE FROM projects WHERE proj_id = 1")
+        self.assertQuerySuccess(result, "Should succeed after removing RESTRICT child")
+        
+        # Verify CASCADE worked
+        task_result = self.execute_query("SELECT * FROM tasks WHERE proj_id = 1")
+        self.assertEqual(len(task_result.data.rows), 0, "Tasks should cascade delete")
 
 
 class TestLimit(TestQueryProcessor):
