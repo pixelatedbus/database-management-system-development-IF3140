@@ -19,19 +19,16 @@ client_counter_lock = threading.Lock()
 
 
 def handle_client(conn, addr, client_id):
-    """Handle individual client connection"""
     logging.info(f"Client {client_id} connected from {addr}")
     
     try:
         while True:
-            # Receive length prefix (4 bytes)
             length_bytes = conn.recv(4)
             if not length_bytes:
                 break
             
             request_length = int.from_bytes(length_bytes, 'big')
             
-            # Receive full request
             data = b''
             while len(data) < request_length:
                 chunk = conn.recv(min(4096, request_length - len(data)))
@@ -45,7 +42,6 @@ def handle_client(conn, addr, client_id):
             request_str = data.decode('utf-8')
             logging.info(f"Client {client_id} sent: {request_str[:100]}...")
             
-            # Parse request
             try:
                 request = json.loads(request_str)
                 query = request.get('query', '')
@@ -56,10 +52,8 @@ def handle_client(conn, addr, client_id):
                         'message': 'No query provided'
                     }
                 else:
-                    # Execute query
                     result = processor.execute_query(query, client_id)
                     
-                    # Format response
                     response = {
                         'success': result.success,
                         'message': result.message,
@@ -80,7 +74,6 @@ def handle_client(conn, addr, client_id):
                     'message': f'Error: {str(e)}'
                 }
             
-            # Send response back to client with length prefix
             response_bytes = json.dumps(response).encode('utf-8')
             conn.sendall(len(response_bytes).to_bytes(4, 'big') + response_bytes)
     
@@ -92,7 +85,6 @@ def handle_client(conn, addr, client_id):
 
 
 def main():
-    """Main server function"""
     global client_counter
     
     print("=" * 70)

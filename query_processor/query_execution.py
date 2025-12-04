@@ -330,7 +330,7 @@ class QueryExecution:
         source_data = self.execute_node(source, transaction_id)
         
         if not source_data:
-            print("[FILTER] No data from source")
+            # [FILTER] No data from source
             return []
         
         filtered_data = []
@@ -361,7 +361,7 @@ class QueryExecution:
         source_data = self.execute_node(source, transaction_id)
         
         if not source_data:
-            print("[SORT] No data to sort")
+            # [SORT] No data to sort
             return []
         
         logger.info(f"[SORT] Sorting by '{column_name}' {direction}")
@@ -436,7 +436,7 @@ class QueryExecution:
         Value: alias name
         """
         alias_name = query_tree.val
-        print(f"\n[ALIAS] Applying alias '{alias_name}'")
+        # [ALIAS] Applying alias '{alias_name}'
         
         source = query_tree.childs[0]
         return self.execute_node(source, transaction_id)
@@ -780,7 +780,7 @@ class QueryExecution:
         Execute DELETE_QUERY node
         Structure: DELETE_QUERY with children: [RELATION, FILTER?]
         """
-        print(f"\n[DELETE] Executing DELETE statement...")
+        # [DELETE] Executing DELETE statement...
         
         if len(query_tree.childs) < 1:
             raise ValueError("DELETE requires RELATION")
@@ -855,7 +855,7 @@ class QueryExecution:
     
     # TODO: implement transaction management with ccm
     def execute_transaction(self, query_tree: QueryTree, transaction_id: int) -> None:
-        print(f"\n[TRANSACTION] Executing BEGIN TRANSACTION...")
+        # [TRANSACTION] Executing BEGIN TRANSACTION...
         logger.info(f"[TRANSACTION] -> CCM: Start transaction")
         
         # Execute all statements in transaction
@@ -870,7 +870,7 @@ class QueryExecution:
     
     # TODO: TEStING!!!! DAN INTEGRASIIN LEBIH BAIK
     def execute_create_table(self, query_tree: QueryTree, transaction_id: int) -> None:
-        print(f"\n[CREATE TABLE] Executing CREATE TABLE statement...")
+        # [CREATE TABLE] Executing CREATE TABLE statement...
         
         if len(query_tree.childs) < 2:
             raise ValueError("CREATE TABLE requires table name and column definitions")

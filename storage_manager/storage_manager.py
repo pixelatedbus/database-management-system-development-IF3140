@@ -1016,7 +1016,7 @@ class StorageManager:
         self._save_table_rows(table_name, rows_to_keep)
 
         deleted_count = len(deleted_record_ids)
-        print(f"dihapus {deleted_count} baris dari tabel '{table_name}' (with FK handling)")
+        # Deleted {deleted_count} rows from '{table_name}'
         return deleted_count
 
 
@@ -1093,10 +1093,10 @@ class StorageManager:
         # Second pass: perform all queued actions (after all validations passed)
         for action_type, child_table, affected_rows, fk_column in actions_to_perform:
             if action_type == 'CASCADE':
-                print(f"  CASCADE: menghapus {len(affected_rows)} child rows dari '{child_table}'")
+                # CASCADE: deleting {len(affected_rows)} child rows from '{child_table}'
                 self._cascade_delete_child_rows(child_table, affected_rows)
             elif action_type == 'SET_NULL':
-                print(f"  SET NULL: mengupdate {len(affected_rows)} child rows di '{child_table}'")
+                # SET NULL: updating {len(affected_rows)} child rows in '{child_table}'
                 self._set_null_child_rows(child_table, affected_rows, fk_column)
 
 
