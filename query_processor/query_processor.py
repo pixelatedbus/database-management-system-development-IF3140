@@ -205,7 +205,7 @@ class QueryProcessor:
                 if isinstance(result_rows, list):
                     result_data = Rows(result_rows)
                 else:
-                    result_data = result_rows or Rows([])
+                    result_data = Rows([])
                 
                 # AUTO-COMMIT: Immediately commit single-query transaction
                 if not in_explicit_transaction:
