@@ -28,7 +28,7 @@ class FailureRecovery:
                     cls._instance = super(FailureRecovery, cls).__new__(cls)
         return cls._instance
 
-    def __init__(self, wal_size=50):
+    def __init__(self, wal_size=10):
         
         # singleton check if init or not
         if getattr(self, "_initialized", False):
@@ -168,6 +168,13 @@ class FailureRecovery:
     def recover_system_crash(self) -> List[DataWrite | DataDeletion | DataUpdate]:
         # Flush current memory logs first (just in case but its probably empty anyways)
         self._flush_mem_wal()
+
+        # Find and load most recent log files for recovery
+        try:
+            self.logFile.find_most_recent_logs()
+        except FileNotFoundError as e:
+            # No log files found - clean start
+            return []
 
         l_list = self.logFile.get_logs()
         data_execs = [] # datawrites to return
