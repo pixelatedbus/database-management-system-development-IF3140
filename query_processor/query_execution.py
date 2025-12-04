@@ -61,7 +61,49 @@ class QueryExecution:
         self.optimizer_adapter = AdapterOptimizer()
         
         # Track limit values per transaction for thread safety
-        self.limit = {} 
+        self.limit = {}
+    
+    def _validate_with_retry(self, transaction_id: int, table_name: str, action_type: str, max_wait_time: float = 30.0):
+        """
+        Helper method to validate access with retry logic for waiting transactions.
+        
+        Args:
+            transaction_id: Transaction ID
+            table_name: Table to access
+            action_type: 'read' or 'write'
+            max_wait_time: Maximum time to wait in seconds
+            
+        Raises:
+            TransactionAbortedException: If transaction is aborted or timeout
+        """
+        import time
+        wait_interval = 0.1  # seconds
+        total_waited = 0
+        
+        while total_waited < max_wait_time:
+            response = self.ccm_adapter.validate_action(transaction_id, table_name, action_type)
+            
+            if response.allowed:
+                # Log the object access
+                self.ccm_adapter.log_object(transaction_id, table_name)
+                return  # Success
+            
+            # Check if waiting or aborted
+            if hasattr(response, 'waiting') and response.waiting:
+                logger.info(f"[CCM] Transaction {transaction_id} (Older) must wait for lock on {table_name}.")
+                time.sleep(wait_interval)
+                total_waited += wait_interval
+            else:
+                # Transaction was aborted
+                logger.info(f"[CCM] denied {action_type.upper()} access: {response.message}")
+                msg_lower = response.message.lower()
+                if "aborted" in msg_lower or "died" in msg_lower:
+                    raise TransactionAbortedException(transaction_id, response.message)
+                raise TransactionAbortedException(transaction_id, response.message)
+        
+        # Timeout waiting for lock
+        logger.error(f"[CCM] Transaction {transaction_id} timed out waiting for lock on {table_name}")
+        raise TransactionAbortedException(transaction_id, f"Timeout waiting for lock on {table_name}") 
     
     # for select and join methods
     def _get_execution_method(self, node: QueryTree) -> str:
@@ -118,16 +160,7 @@ class QueryExecution:
             
             # Validate READ access with CCM
             if self.ccm_adapter and transaction_id:
-                response = self.ccm_adapter.validate_action(transaction_id, table_name, 'read')
-                if not response.allowed:
-                    logger.info(f"[PROJECT] CCM denied READ access: {response.message}")
-                    # Check if transaction was aborted (deadlock prevention: Wait-Die)
-                    msg_lower = response.message.lower()
-                    if "aborted" in msg_lower or "died" in msg_lower:
-                        raise TransactionAbortedException(transaction_id, response.message)
-                    return []
-                # Log the object access
-                self.ccm_adapter.log_object(transaction_id, table_name)
+                self._validate_with_retry(transaction_id, table_name, 'read')
             
             if query_tree.val == "*":
                 logger.info(f"[PROJECT] SELECT * from '{table_name}' (optimized - direct storage call)")
@@ -263,16 +296,7 @@ class QueryExecution:
 
             # Validate READ access with CCM
             if self.ccm_adapter and transaction_id:
-                response = self.ccm_adapter.validate_action(transaction_id, table_name, 'read')
-                if not response.allowed:
-                    logger.info(f"[FILTER] CCM denied READ access: {response.message}")
-                    # Check if transaction was aborted (deadlock prevention: Wait-Die)
-                    msg_lower = response.message.lower()
-                    if "aborted" in msg_lower or "died" in msg_lower:
-                        raise TransactionAbortedException(transaction_id, response.message)
-                    return []
-                # Log the object access
-                self.ccm_adapter.log_object(transaction_id, table_name)
+                self._validate_with_retry(transaction_id, table_name, 'read')
 
             # Pushdown if possible            
             try:
@@ -380,16 +404,7 @@ class QueryExecution:
         
         # Validate READ access with CCM
         if self.ccm_adapter and transaction_id:
-            response = self.ccm_adapter.validate_action(transaction_id, table_name, 'read')
-            if not response.allowed:
-                logger.info(f"[RELATION] CCM denied READ access: {response.message}")
-                # Check if transaction was aborted (deadlock prevention: Wait-Die)
-                msg_lower = response.message.lower()
-                if "aborted" in msg_lower or "died" in msg_lower:
-                    raise TransactionAbortedException(transaction_id, response.message)
-                return []
-            # Log the object access
-            self.ccm_adapter.log_object(transaction_id, table_name)
+            self._validate_with_retry(transaction_id, table_name, 'read')
         
         # Call storage manager to read all rows
         # TODO: Implement different access methods (hash_index, btree_index) when available
@@ -596,16 +611,7 @@ class QueryExecution:
         
         # Validate WRITE access with CCM
         if self.ccm_adapter and transaction_id:
-            response = self.ccm_adapter.validate_action(transaction_id, table_name, 'write')
-            if not response.allowed:
-                logger.info(f"[UPDATE] CCM denied WRITE access: {response.message}")
-                # Check if transaction was aborted (deadlock prevention: Wait-Die)
-                msg_lower = response.message.lower()
-                if "aborted" in msg_lower or "died" in msg_lower:
-                    raise TransactionAbortedException(transaction_id, response.message)
-                return 0
-            # Log the object access
-            self.ccm_adapter.log_object(transaction_id, table_name)
+            self._validate_with_retry(transaction_id, table_name, 'write')
         
         try:
             # STEP 1: READ (with buffered operations applied)
@@ -733,16 +739,7 @@ class QueryExecution:
         
         # Validate WRITE access with CCM
         if self.ccm_adapter and transaction_id:
-            response = self.ccm_adapter.validate_action(transaction_id, table_name, 'write')
-            if not response.allowed:
-                logger.info(f"[INSERT] CCM denied WRITE access: {response.message}")
-                # Check if transaction was aborted (deadlock prevention: Wait-Die)
-                msg_lower = response.message.lower()
-                if "aborted" in msg_lower or "died" in msg_lower:
-                    raise TransactionAbortedException(transaction_id, response.message)
-                return 0
-            # Log the object access
-            self.ccm_adapter.log_object(transaction_id, table_name)
+            self._validate_with_retry(transaction_id, table_name, 'write')
         
         try:
             # Prepare new data for FRM logging
@@ -811,16 +808,7 @@ class QueryExecution:
         
         # Validate WRITE access with CCM
         if self.ccm_adapter and transaction_id:
-            response = self.ccm_adapter.validate_action(transaction_id, table_name, 'write')
-            if not response.allowed:
-                logger.info(f"[DELETE] CCM denied WRITE access: {response.message}")
-                # Check if transaction was aborted (deadlock prevention: Wait-Die)
-                msg_lower = response.message.lower()
-                if "aborted" in msg_lower or "died" in msg_lower:
-                    raise TransactionAbortedException(transaction_id, response.message)
-                return 0
-            # Log the object access
-            self.ccm_adapter.log_object(transaction_id, table_name)
+            self._validate_with_retry(transaction_id, table_name, 'write')
         
         try:
             # Read rows before deletion for FRM logging

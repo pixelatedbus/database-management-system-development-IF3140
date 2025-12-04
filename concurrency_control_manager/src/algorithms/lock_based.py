@@ -338,7 +338,8 @@ class LockBasedAlgorithm(ConcurrencyAlgorithm):
         elif lock_status == LockResultStatus.WAITING:
             return AlgorithmResponse(
                 allowed=False, 
-                message=f"Transaction {t.transaction_id} (Older) must wait for lock on {obj.object_id}."
+                message=f"Transaction {t.transaction_id} (Older) must wait for lock on {obj.object_id}.",
+                waiting=True
             )
             
         elif lock_status == LockResultStatus.ABORTED:
