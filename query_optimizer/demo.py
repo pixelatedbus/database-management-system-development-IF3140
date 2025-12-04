@@ -406,7 +406,12 @@ def demo_parse():
     examples = [
         "SELECT id, name FROM users",
         "SELECT * FROM orders WHERE amount > 1000",
-        "SELECT a.id, b.name FROM a JOIN b ON a.id = b.a_id WHERE a.x > 5"
+        "SELECT a.id, b.name FROM a JOIN b ON a.id = b.a_id WHERE a.x > 5",
+        "SELECT u.name, o.total FROM users u JOIN orders o ON u.id = o.user_id WHERE u.age > 25",
+        "SELECT * FROM employees WHERE salary BETWEEN 50000 AND 100000",
+        "SELECT u.name FROM users u WHERE u.status IN ('active', 'premium', 'trial')",
+        "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER FOREIGN KEY REFERENCES users(id), total FLOAT, status VARCHAR(50));",
+        "SELECT u.name, o.total, p.name FROM users u JOIN orders o ON u.id = o.user_id JOIN products p ON o.product_id = p.id WHERE u.city = 'Jakarta' AND o.total > 500000"
     ]
 
     for sql in examples:
