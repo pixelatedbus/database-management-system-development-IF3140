@@ -97,7 +97,6 @@ class CostCalculator:
     
     def _cost_project(self, node: QueryTree) -> CostResult:
 
-        # Child terakhir adalah source data
         if not node.childs:
             return CostResult(io_cost=0.0)
         
@@ -112,8 +111,10 @@ class CostCalculator:
         source = node.childs[0]
         condition = node.childs[1]
         
-        if source.type == "RELATION":
-            table_name = source.val
+        relation_node = self._extract_relation_node(source)
+        
+        if relation_node:
+            table_name = relation_node.val
             if table_name in self.statistics:
                 stats = self.statistics[table_name]
                 
@@ -124,12 +125,15 @@ class CostCalculator:
         
         source_cost = self.get_cost(source)
         
+        subquery_cost = self._cost_subqueries_in_condition(condition)
+        
         selectivity = self._estimate_selectivity(condition, source)
         
-        # Cost tetap sama (pipelined), tapi cardinality berkurang
+        total_io_cost = source_cost.io_cost + subquery_cost.io_cost
+        
         return CostResult(
-            io_cost=source_cost.io_cost,
-            cpu_cost=source_cost.cpu_cost,
+            io_cost=total_io_cost,
+            cpu_cost=source_cost.cpu_cost + subquery_cost.cpu_cost,
             estimated_cardinality=int(source_cost.estimated_cardinality * selectivity),
             estimated_blocks=int(math.ceil(source_cost.estimated_blocks * selectivity))
         )
@@ -138,7 +142,6 @@ class CostCalculator:
 
         node_type = condition.type
         
-        # Comparison operators
         if node_type == "COMPARISON":
             op = condition.val
             if op == "=":
@@ -251,21 +254,22 @@ class CostCalculator:
 
         is_equijoin, left_col, right_col = self._is_equijoin(condition)
         
-        if is_equijoin and right_node.type == "RELATION":
-            right_table = right_node.val
+        left_relation = self._extract_relation_node(left_node)
+        right_relation = self._extract_relation_node(right_node)
+        
+        if is_equijoin and right_relation:
+            right_table = right_relation.val
             if right_table in self.statistics:
                 right_stats = self.statistics[right_table]
                 
-                # Cek apakah right_col punya index
                 if right_col in right_stats.indexes:
                     index_info = right_stats.indexes[right_col]
-                    # Gunakan Index Nested Loop Join
                     return self._cost_index_nested_loop_join(
                         left_cost, right_stats, index_info, right_col
                     )
         
-        if is_equijoin and left_node.type == "RELATION":
-            left_table = left_node.val
+        if is_equijoin and left_relation:
+            left_table = left_relation.val
             if left_table in self.statistics:
                 left_stats = self.statistics[left_table]
                 
@@ -274,13 +278,15 @@ class CostCalculator:
                     return self._cost_index_nested_loop_join(
                         right_cost, left_stats, index_info, left_col
                     )
+
+        if is_equijoin:
+            bnlj_cost = self._cost_block_nested_loop_join(left_cost, right_cost)
+            hash_join_cost = self._cost_hash_join(left_cost, right_cost)
+            
+            min_cost = min(bnlj_cost, hash_join_cost, key=lambda x: x.io_cost)
+            return min_cost
         
-        bnlj_cost = self._cost_block_nested_loop_join(left_cost, right_cost)
-        hash_join_cost = self._cost_hash_join(left_cost, right_cost)
-        
-        if hash_join_cost.io_cost < bnlj_cost.io_cost:
-            return hash_join_cost
-        return bnlj_cost
+        return self._cost_block_nested_loop_join(left_cost, right_cost)
     
     def _cost_cross_product(self, left_cost: CostResult, right_cost: CostResult) -> CostResult:
         io_cost = left_cost.io_cost + right_cost.io_cost
@@ -411,6 +417,46 @@ class CostCalculator:
         for child in node.childs:
             child_cost = self.get_cost(child)
             total_cost = total_cost + child_cost
+        
+        return total_cost
+
+    def _cost_subqueries_in_condition(self, condition: QueryTree) -> CostResult:
+
+        total_cost = CostResult(io_cost=0.0)
+        
+        node_type = condition.type
+        
+        if node_type in ["IN_EXPR", "NOT_IN_EXPR"]:
+            if len(condition.childs) >= 2:
+                list_or_subquery = condition.childs[1]
+                
+                if list_or_subquery.type == "PROJECT":
+                    subquery_cost = self.get_cost(list_or_subquery)
+                    
+
+                    materialization_cost = subquery_cost.estimated_blocks * self.WRITE_COST
+                    total_cost = total_cost + subquery_cost
+                    total_cost.io_cost += materialization_cost
+        
+        elif node_type in ["EXISTS_EXPR", "NOT_EXISTS_EXPR"]:
+            if len(condition.childs) >= 1:
+                subquery = condition.childs[0]
+                subquery_cost = self.get_cost(subquery)
+                
+
+                total_cost.io_cost += subquery_cost.io_cost * 0.5
+                total_cost.cpu_cost += subquery_cost.cpu_cost * 0.5
+        
+        elif node_type == "COMPARISON":
+            for child in condition.childs:
+                if child.type == "PROJECT": 
+                    subquery_cost = self.get_cost(child)
+                    total_cost = total_cost + subquery_cost
+        
+        elif node_type == "OPERATOR":
+            for child in condition.childs:
+                child_subquery_cost = self._cost_subqueries_in_condition(child)
+                total_cost = total_cost + child_subquery_cost
         
         return total_cost
     
@@ -578,6 +624,8 @@ class CostCalculator:
                                      index_info: dict, join_column: str) -> CostResult:
 
         index_type = index_info.get("type")
+        # katanya pake nested join aja TODO
+        index_type = "nested"
         n_outer = outer_cost.estimated_cardinality
         
         outer_scan_cost = outer_cost.io_cost
@@ -712,5 +760,29 @@ class CostCalculator:
                 table_name = self._extract_table_name(child)
                 if table_name:
                     return table_name
+        
+        return None
+    
+    def _extract_relation_node(self, node: QueryTree) -> Optional[QueryTree]:
+        if node is None:
+            return None
+            
+        if node.type == "RELATION":
+            return node
+        
+        if node.type == "ALIAS" and node.childs:
+            return self._extract_relation_node(node.childs[0])
+        
+        if node.type == "FILTER" and node.childs:
+            return self._extract_relation_node(node.childs[0])
+        
+        if node.type == "JOIN":
+            return None
+        
+        if node.type == "PROJECT" and node.childs:
+            return self._extract_relation_node(node.childs[-1])
+        
+        if node.childs:
+            return self._extract_relation_node(node.childs[0])
         
         return None
