@@ -386,27 +386,62 @@ def demo_optimized():
     print_separator("DEMO 10: OPTIMIZE (Compare with/without GA)")
     
     from query_optimizer.optimization_engine import OptimizationEngine
+    from query_optimizer.query_check import check_query
 
     engine = OptimizationEngine()
 
-    sql = "SELECT * FROM orders WHERE amount > 1000 * 2 AND status = 'pending'"
+    sql = """
+    SELECT u.name, prod.name, o.total 
+    FROM users u 
+    JOIN profiles prof ON u.id = prof.user_id 
+    JOIN orders o ON u.id = o.user_id 
+    JOIN products prod ON o.product_id = prod.id 
+    WHERE u.email LIKE '%@gmail.com' 
+    AND prod.category = 'Electronics' 
+    AND o.total > 100000 
+    AND prof.bio IS NOT NULL
+    """
     print_separator(f"Parsing and optimizing: {sql}")
     parsed = engine.parse_query(sql)
 
     print("Original Query Tree:")
     print(parsed.query_tree.tree())
+    
+    print("\n Validating original query tree...")
+    try:
+        check_query(parsed.query_tree)
+        print("  Original query tree is valid")
+    except Exception as e:
+        print(f"  Validation failed: {e}")
+        raise
 
     print_separator("Optimize without Genetic Algorithm (deterministic rules only)")
     optimized_no_ga = engine.optimize_query(parsed, use_genetic=False)
     print(optimized_no_ga.query_tree.tree())
     cost_no_ga = engine.get_cost(optimized_no_ga)
     print(f"\nEstimated cost (no GA): {cost_no_ga:.2f}")
+    
+    print("\n Validating optimized query tree (no GA)...")
+    try:
+        check_query(optimized_no_ga.query_tree)
+        print("  Optimized query tree (no GA) is valid")
+    except Exception as e:
+        print(f"  Validation failed: {e}")
+        raise
 
     print_separator("Optimize with Genetic Algorithm")
-    optimized_ga = engine.optimize_query(parsed, use_genetic=True, population_size=10, generations=5)
+    optimized_ga = engine.optimize_query(parsed, use_genetic=True, population_size=10, generations=5, elitism=0)
     print(optimized_ga.query_tree.tree())
     cost_ga = engine.get_cost(optimized_ga)
     print(f"\nEstimated cost (with GA): {cost_ga:.2f}")
+    
+    print("\n Validating optimized query tree (with GA)...")
+    try:
+        check_query(optimized_ga.query_tree)
+        print("  Optimized query tree (with GA) is valid")
+    except Exception as e:
+        print(f"  Validation failed: {e}")
+        raise
     
     print_separator("DEMO 10 COMPLETED")
     print("\nComparison:")
@@ -526,8 +561,10 @@ def demo_genetic_with_rules():
 
     for i, (p1, p2) in enumerate(demo_pairs):
         print(f"\n################ PASANGAN KE-{i+1} ################")
-        print(f"Parent A (Cost: {p1.fitness}) Params: {p1.operation_params}")
-        print(f"Parent B (Cost: {p2.fitness}) Params: {p2.operation_params}")
+        print(f"Parent A (Cost: {p1.fitness})")
+        print_params(p1.operation_params)
+        print(f"Parent B (Cost: {p2.fitness})")
+        print_params(p2.operation_params)
         
         c1, c2 = optimizer_helper._crossover(p1, p2, query)
         
