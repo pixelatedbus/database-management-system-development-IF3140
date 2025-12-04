@@ -56,7 +56,10 @@ class TestTokenizer(unittest.TestCase):
         
         tokenizer = Tokenizer(query)
         
+        # Skip SELECT token
+        tokenizer.get_next_token()
         
+        # Now the next token should be the invalid '$col'
         with self.assertRaises(SyntaxError) as cm:
             tokenizer.get_next_token()
         
