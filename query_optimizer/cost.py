@@ -424,13 +424,13 @@ class CostCalculator:
 
         total_cost = CostResult(io_cost=0.0)
         
-        node_type = condition.node_type
+        node_type = condition.type
         
         if node_type in ["IN_EXPR", "NOT_IN_EXPR"]:
             if len(condition.childs) >= 2:
                 list_or_subquery = condition.childs[1]
                 
-                if list_or_subquery.node_type == "PROJECT":
+                if list_or_subquery.type == "PROJECT":
                     subquery_cost = self.get_cost(list_or_subquery)
                     
 
@@ -449,7 +449,7 @@ class CostCalculator:
         
         elif node_type == "COMPARISON":
             for child in condition.childs:
-                if child.node_type == "PROJECT": 
+                if child.type == "PROJECT": 
                     subquery_cost = self.get_cost(child)
                     total_cost = total_cost + subquery_cost
         
