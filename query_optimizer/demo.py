@@ -28,7 +28,53 @@ MOCK_METADATA = {
 
 def use_mock_metadata(func):
     def wrapper(*args, **kwargs):
-        with patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA):
+        from storage_manager.models import Statistic
+        from query_optimizer.optimization_engine import OptimizationEngine
+        
+        # Setup mock statistics for demo tables
+        def setup_mock_statistics(engine):
+            engine.statistics['users'] = Statistic(
+                n_r=10000,
+                b_r=1000,
+                l_r=200,
+                f_r=10,
+                V_a_r={'id': 10000, 'name': 9500, 'email': 10000, 'age': 50, 'city': 100},
+                indexes={}
+            )
+            engine.statistics['profiles'] = Statistic(
+                n_r=8000,
+                b_r=800,
+                l_r=150,
+                f_r=10,
+                V_a_r={'id': 8000, 'user_id': 8000, 'bio': 7500, 'verified': 2},
+                indexes={}
+            )
+            engine.statistics['orders'] = Statistic(
+                n_r=50000,
+                b_r=5000,
+                l_r=180,
+                f_r=10,
+                V_a_r={'id': 50000, 'user_id': 9000, 'amount': 1000, 'total': 2000, 'product_id': 150, 'status': 5},
+                indexes={}
+            )
+            engine.statistics['products'] = Statistic(
+                n_r=500,
+                b_r=50,
+                l_r=250,
+                f_r=10,
+                V_a_r={'id': 500, 'name': 500, 'category': 15, 'price': 450},
+                indexes={}
+            )
+            engine.cost_calculator.statistics = engine.statistics
+        
+        # Patch both metadata and OptimizationEngine.__init__
+        original_init = OptimizationEngine.__init__
+        def patched_init(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)
+            setup_mock_statistics(self)
+        
+        with patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA), \
+             patch.object(OptimizationEngine, '__init__', patched_init):
             return func(*args, **kwargs)
     return wrapper
 
