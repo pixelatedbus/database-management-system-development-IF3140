@@ -3,9 +3,21 @@ __pycache__/
 *$py.class
 *.so
 .Python
+.pytest_cache/
+.mypy_cache/
+.coverage
+.coverage.*
 
 venv/
 env/
 ENV/
+.venv/
 query_optimizer/lokal/
 .vscode/
+query_optimizer/__pycache__/
+.idea/
+.vs/
+dist/
+build/
+*.egg-info/
+*.log

@@ -7,6 +7,7 @@ Menggunakan parameter umum berdasarkan tipe operasi:
 - join_params: Parameter untuk join operations (Rule 4 - Push selection into joins)
 - join_child_params: Parameter untuk join commutativity (Rule 5 - Swap join children)
 - join_associativity_params: Parameter untuk join associativity (Rule 6 - Reassociate nested joins)
+- join_method_params: Parameter untuk join method selection (nested_loop vs hash)
 
 Struktur params menggunakan format:
 {
@@ -65,7 +66,7 @@ from query_optimizer.optimization_engine import ParsedQuery
 import random
 
 
-OperationType = Literal['filter_params', 'join_params', 'join_child_params', 'join_associativity_params']
+OperationType = Literal['filter_params', 'join_params', 'join_child_params', 'join_associativity_params', 'join_method_params']
 
 
 class RuleParamsManager:
@@ -294,6 +295,62 @@ class RuleParamsManager:
             copy_func=copy_associativity_params,
             mutate_func=mutate_associativity_params,
             validate_func=validate_associativity_params
+        )
+
+        # Join method selection (nested_loop vs hash)
+        def analyze_join_methods(query: ParsedQuery) -> dict[int, Any]:
+            """Find all JOIN nodes for method selection.
+            
+            Returns:
+                Dict[join_id, metadata]
+                metadata = {
+                    'current_method': str,
+                    'available_methods': list[str]
+                }
+            """
+            result = {}
+            def walk(node):
+                if node.type == "JOIN":
+                    result[node.id] = {
+                        'current_method': node.method,
+                        'available_methods': ['nested_loop', 'hash']
+                    }
+                for child in node.childs:
+                    walk(child)
+            
+            walk(query.query_tree)
+            return result
+        
+        def generate_join_method(metadata: dict) -> str:
+            """Generate random join method.
+            
+            Args:
+                metadata: JOIN node metadata with available methods
+            
+            Returns:
+                str: 'nested_loop' or 'hash'
+            """
+            return random.choice(metadata['available_methods'])
+        
+        def copy_join_method(params: str) -> str:
+            """Copy join method params."""
+            return params
+        
+        def mutate_join_method(params: str) -> str:
+            """Mutate join method by switching to the other method."""
+            return 'hash' if params == 'nested_loop' else 'nested_loop'
+        
+        def validate_join_method(params: str) -> bool:
+            """Validate join method params."""
+            return params in ['nested_loop', 'hash']
+        
+        self.register_operation(
+            operation_name='join_method_params',
+            analyze_func=analyze_join_methods,
+            generate_func=generate_join_method,
+            copy_func=copy_join_method,
+            mutate_func=mutate_join_method,
+            validate_func=validate_join_method
         )
 
 
