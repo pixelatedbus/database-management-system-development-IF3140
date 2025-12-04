@@ -921,9 +921,10 @@ class QueryExecution:
                 
                 elif constraint.type == "FOREIGN_KEY":
                     has_foreign_key = True
-                    # FOREIGN_KEY contains: [REFERENCES(table), IDENTIFIER(column)]
-                    ref_table = constraint.childs[0].val
-                    ref_column = constraint.childs[1].val
+                    # FOREIGN_KEY structure: FOREIGN_KEY -> REFERENCES(table_name) -> IDENTIFIER(column_name)
+                    references_node = constraint.childs[0]  # REFERENCES node
+                    ref_table = references_node.val
+                    ref_column = references_node.childs[0].val  # IDENTIFIER child
                     
                     foreign_keys.append(ForeignKey(
                         column=col_name,

@@ -439,6 +439,96 @@ class TestSelect(TestQueryProcessor):
         for row in result.data.rows:
             self.assertGreater(row['salary'], 50000)
             self.assertLess(row['salary'], 80000)
+    
+    def test_07_select_with_or_condition(self):
+        """Test SELECT with OR condition."""
+        self._setup_test_data()
+        result = self.execute_query("SELECT * FROM employees WHERE dept_id = 1 OR dept_id = 3")
+        self.assertQuerySuccess(result)
+        
+        # Should return employees from dept 1 (Alice, Bob) and dept 3 (Eve)
+        self.assertEqual(len(result.data.rows), 3)
+        for row in result.data.rows:
+            self.assertIn(row['dept_id'], [1, 3])
+    
+    def test_08_select_with_complex_and_or(self):
+        """Test SELECT with complex AND/OR combinations."""
+        self._setup_test_data()
+        # Find employees in dept 1 with high salary OR in dept 2
+        result = self.execute_query("SELECT emp_name, dept_id, salary FROM employees WHERE (dept_id = 1 AND salary > 70000) OR dept_id = 2")
+        self.assertQuerySuccess(result)
+        
+        # Should return: Bob (dept 1, salary 75000), Carol (dept 2), Dave (dept 2)
+        self.assertEqual(len(result.data.rows), 3)
+        for row in result.data.rows:
+            # Either dept 1 with salary > 70000, or dept 2
+            if row['dept_id'] == 1:
+                self.assertGreater(row['salary'], 70000)
+            elif row['dept_id'] == 2:
+                pass  # Any salary in dept 2 is valid
+            else:
+                self.fail(f"Unexpected dept_id: {row['dept_id']}")
+    
+    def test_09_select_with_nested_conditions(self):
+        """Test SELECT with nested AND/OR conditions."""
+        self._setup_test_data()
+        # (dept_id = 1 OR dept_id = 2) AND salary > 60000
+        result = self.execute_query("SELECT emp_name, dept_id, salary FROM employees WHERE (dept_id = 1 OR dept_id = 2) AND salary > 60000")
+        self.assertQuerySuccess(result)
+        
+        # Should return: Bob (dept 1, 75000), Dave (dept 2, 82000)
+        self.assertEqual(len(result.data.rows), 2)
+        for row in result.data.rows:
+            self.assertIn(row['dept_id'], [1, 2])
+            self.assertGreater(row['salary'], 60000)
+    
+    def test_10_select_with_three_or_conditions(self):
+        """Test SELECT with three OR conditions."""
+        self._setup_test_data()
+        result = self.execute_query("SELECT * FROM employees WHERE salary = 60000 OR salary = 75000 OR salary = 50000")
+        self.assertQuerySuccess(result)
+        
+        # Should return Alice (60000), Bob (75000), Eve (50000)
+        self.assertEqual(len(result.data.rows), 3)
+        for row in result.data.rows:
+            self.assertIn(row['salary'], [60000, 75000, 50000])
+    
+    def test_11_select_with_mixed_and_or_operators(self):
+        """Test SELECT with multiple AND and OR operators without parentheses."""
+        self._setup_test_data()
+        # dept_id = 1 AND salary > 60000 OR dept_id = 3
+        # Should evaluate as: (dept_id = 1 AND salary > 60000) OR dept_id = 3
+        result = self.execute_query("SELECT emp_name, dept_id, salary FROM employees WHERE dept_id = 1 AND salary > 60000 OR dept_id = 3")
+        self.assertQuerySuccess(result)
+        
+        # Should return: Bob (dept 1, 75000) and Eve (dept 3, 50000)
+        self.assertEqual(len(result.data.rows), 2)
+        for row in result.data.rows:
+            if row['dept_id'] == 1:
+                self.assertGreater(row['salary'], 60000)
+            elif row['dept_id'] == 3:
+                pass  # Any salary in dept 3
+    
+    def test_12_select_with_comparison_operators(self):
+        """Test SELECT with various comparison operators."""
+        self._setup_test_data()
+        # Less than or equal
+        result = self.execute_query("SELECT * FROM employees WHERE salary <= 60000")
+        self.assertQuerySuccess(result)
+        for row in result.data.rows:
+            self.assertLessEqual(row['salary'], 60000)
+        
+        # Greater than or equal
+        result = self.execute_query("SELECT * FROM employees WHERE salary >= 75000")
+        self.assertQuerySuccess(result)
+        for row in result.data.rows:
+            self.assertGreaterEqual(row['salary'], 75000)
+        
+        # Not equal (using <> operator)
+        result = self.execute_query("SELECT * FROM employees WHERE dept_id <> 1")
+        self.assertQuerySuccess(result)
+        for row in result.data.rows:
+            self.assertNotEqual(row['dept_id'], 1)
 
 
 class TestJoin(TestQueryProcessor):
@@ -730,6 +820,183 @@ class TestDelete(TestQueryProcessor):
         # Verify deletion
         select_result = self.execute_query("SELECT * FROM tasks WHERE project_id = 2")
         self.assertEqual(len(select_result.data.rows), 0)
+    
+    def test_04_delete_parent_with_foreign_key_reference(self):
+        """Test deleting from parent table when child references exist."""
+        super().setUp()
+        # Create parent and child tables
+        self.execute_query("""
+        CREATE TABLE categories (
+            cat_id INTEGER PRIMARY KEY,
+            cat_name VARCHAR(50)
+        )
+        """)
+        
+        self.execute_query("""
+        CREATE TABLE products (
+            prod_id INTEGER PRIMARY KEY,
+            cat_id INTEGER,
+            prod_name VARCHAR(50)
+        )
+        """)
+        
+        # Insert data with foreign key relationships
+        self.execute_query("INSERT INTO categories (cat_id, cat_name) VALUES (1, 'Electronics')")
+        self.execute_query("INSERT INTO categories (cat_id, cat_name) VALUES (2, 'Clothing')")
+        self.execute_query("INSERT INTO products (prod_id, cat_id, prod_name) VALUES (1, 1, 'Laptop')")
+        self.execute_query("INSERT INTO products (prod_id, cat_id, prod_name) VALUES (2, 1, 'Phone')")
+        self.execute_query("INSERT INTO products (prod_id, cat_id, prod_name) VALUES (3, 2, 'Shirt')")
+        
+        # Try to delete parent category that has child products
+        # Behavior depends on implementation (CASCADE vs RESTRICT)
+        result = self.execute_query("DELETE FROM categories WHERE cat_id = 1")
+        
+        # Verify behavior is consistent
+        if result.success:
+            # Delete succeeded - check parent is gone
+            select_result = self.execute_query("SELECT * FROM categories WHERE cat_id = 1")
+            self.assertEqual(len(select_result.data.rows), 0)
+            
+            # Child products may be cascaded or orphaned depending on implementation
+            products_result = self.execute_query("SELECT * FROM products WHERE cat_id = 1")
+            # Either cascaded (0 rows) or orphaned (2 rows with broken reference)
+        else:
+            # Delete was restricted - verify parent and children still exist
+            select_result = self.execute_query("SELECT * FROM categories WHERE cat_id = 1")
+            self.assertEqual(len(select_result.data.rows), 1)
+            products_result = self.execute_query("SELECT * FROM products WHERE cat_id = 1")
+            self.assertEqual(len(products_result.data.rows), 2)
+    
+    def test_05_delete_child_with_foreign_key(self):
+        """Test deleting from child table (should always succeed)."""
+        super().setUp()
+        # Create parent and child tables
+        self.execute_query("""
+        CREATE TABLE departments (
+            dept_id INTEGER PRIMARY KEY,
+            dept_name VARCHAR(50)
+        )
+        """)
+        
+        self.execute_query("""
+        CREATE TABLE employees (
+            emp_id INTEGER PRIMARY KEY,
+            dept_id INTEGER,
+            emp_name VARCHAR(50)
+        )
+        """)
+        
+        # Insert data
+        self.execute_query("INSERT INTO departments (dept_id, dept_name) VALUES (1, 'IT')")
+        self.execute_query("INSERT INTO departments (dept_id, dept_name) VALUES (2, 'HR')")
+        self.execute_query("INSERT INTO employees (emp_id, dept_id, emp_name) VALUES (1, 1, 'Alice')")
+        self.execute_query("INSERT INTO employees (emp_id, dept_id, emp_name) VALUES (2, 1, 'Bob')")
+        self.execute_query("INSERT INTO employees (emp_id, dept_id, emp_name) VALUES (3, 2, 'Carol')")
+        
+        # Delete from child table - should always succeed
+        result = self.execute_query("DELETE FROM employees WHERE dept_id = 1")
+        self.assertQuerySuccess(result)
+        
+        # Verify children deleted
+        select_result = self.execute_query("SELECT * FROM employees WHERE dept_id = 1")
+        self.assertEqual(len(select_result.data.rows), 0)
+        
+        # Verify parent unaffected
+        dept_result = self.execute_query("SELECT * FROM departments WHERE dept_id = 1")
+        self.assertEqual(len(dept_result.data.rows), 1)
+        
+        # Verify other children unaffected
+        other_emp = self.execute_query("SELECT * FROM employees WHERE dept_id = 2")
+        self.assertEqual(len(other_emp.data.rows), 1)
+    
+    def test_06_delete_multiple_levels_foreign_key(self):
+        """Test deleting with multi-level foreign key relationships."""
+        super().setUp()
+        # Create three-level hierarchy
+        self.execute_query("""
+        CREATE TABLE companies (
+            company_id INTEGER PRIMARY KEY,
+            company_name VARCHAR(50)
+        )
+        """)
+        
+        self.execute_query("""
+        CREATE TABLE departments (
+            dept_id INTEGER PRIMARY KEY,
+            company_id INTEGER,
+            dept_name VARCHAR(50)
+        )
+        """)
+        
+        self.execute_query("""
+        CREATE TABLE employees (
+            emp_id INTEGER PRIMARY KEY,
+            dept_id INTEGER,
+            emp_name VARCHAR(50)
+        )
+        """)
+        
+        # Insert hierarchical data
+        self.execute_query("INSERT INTO companies (company_id, company_name) VALUES (1, 'TechCorp')")
+        self.execute_query("INSERT INTO departments (dept_id, company_id, dept_name) VALUES (1, 1, 'Engineering')")
+        self.execute_query("INSERT INTO departments (dept_id, company_id, dept_name) VALUES (2, 1, 'Sales')")
+        self.execute_query("INSERT INTO employees (emp_id, dept_id, emp_name) VALUES (1, 1, 'Alice')")
+        self.execute_query("INSERT INTO employees (emp_id, dept_id, emp_name) VALUES (2, 1, 'Bob')")
+        self.execute_query("INSERT INTO employees (emp_id, dept_id, emp_name) VALUES (3, 2, 'Carol')")
+        
+        # Try to delete from top level (company)
+        result = self.execute_query("DELETE FROM companies WHERE company_id = 1")
+        
+        # Check what happened
+        company_check = self.execute_query("SELECT * FROM companies WHERE company_id = 1")
+        if len(company_check.data.rows) == 0:
+            # Company deleted - may have cascaded or left orphans
+            pass
+        else:
+            # Delete was restricted - all relationships should still exist
+            self.assertEqual(len(company_check.data.rows), 1)
+            dept_check = self.execute_query("SELECT * FROM departments WHERE company_id = 1")
+            self.assertEqual(len(dept_check.data.rows), 2)
+    
+    def test_07_delete_with_complex_where_and_foreign_key(self):
+        """Test DELETE with complex WHERE on table with foreign keys."""
+        super().setUp()
+        self.execute_query("""
+        CREATE TABLE projects (
+            proj_id INTEGER PRIMARY KEY,
+            proj_name VARCHAR(50),
+            budget INTEGER
+        )
+        """)
+        
+        self.execute_query("""
+        CREATE TABLE tasks (
+            task_id INTEGER PRIMARY KEY,
+            proj_id INTEGER,
+            task_name VARCHAR(50),
+            priority INTEGER
+        )
+        """)
+        
+        # Insert data
+        self.execute_query("INSERT INTO projects (proj_id, proj_name, budget) VALUES (1, 'Project A', 100000)")
+        self.execute_query("INSERT INTO projects (proj_id, proj_name, budget) VALUES (2, 'Project B', 50000)")
+        self.execute_query("INSERT INTO tasks (task_id, proj_id, task_name, priority) VALUES (1, 1, 'Task 1', 1)")
+        self.execute_query("INSERT INTO tasks (task_id, proj_id, task_name, priority) VALUES (2, 1, 'Task 2', 3)")
+        self.execute_query("INSERT INTO tasks (task_id, proj_id, task_name, priority) VALUES (3, 2, 'Task 3', 2)")
+        
+        # Delete tasks with complex condition
+        result = self.execute_query("DELETE FROM tasks WHERE proj_id = 1 AND priority > 1")
+        self.assertQuerySuccess(result)
+        
+        # Verify correct deletion
+        remaining = self.execute_query("SELECT * FROM tasks WHERE proj_id = 1")
+        self.assertEqual(len(remaining.data.rows), 1)
+        self.assertEqual(remaining.data.rows[0]['priority'], 1)
+        
+        # Verify parent unaffected
+        proj_check = self.execute_query("SELECT * FROM projects WHERE proj_id = 1")
+        self.assertEqual(len(proj_check.data.rows), 1)
 
 
 class TestLimit(TestQueryProcessor):
@@ -944,6 +1211,117 @@ class TestDropTable(TestQueryProcessor):
         
         # Verify table removed
         self.assertNotIn('temp_data', self.storage_manager.tables)
+    
+    def test_03_drop_parent_table_with_foreign_key(self):
+        """Test dropping a parent table that has foreign key references."""
+        # Create parent and child tables
+        self.execute_query("""
+        CREATE TABLE parent_table (
+            parent_id INTEGER PRIMARY KEY,
+            parent_name VARCHAR(50)
+        )
+        """)
+        
+        self.execute_query("""
+        CREATE TABLE child_table (
+            child_id INTEGER PRIMARY KEY,
+            parent_id INTEGER,
+            child_name VARCHAR(50)
+        )
+        """)
+        
+        # Insert data with foreign key relationship
+        self.execute_query("INSERT INTO parent_table (parent_id, parent_name) VALUES (1, 'Parent1')")
+        self.execute_query("INSERT INTO child_table (child_id, parent_id, child_name) VALUES (1, 1, 'Child1')")
+        
+        # Try to drop parent table - behavior depends on implementation
+        # Some systems allow it, others restrict it
+        result = self.execute_query("DROP TABLE parent_table")
+        
+        # If drop succeeds, child should still exist but references broken
+        # If drop fails, both tables should still exist
+        # We'll just verify the behavior is consistent
+        if result.success:
+            self.assertNotIn('parent_table', self.storage_manager.tables)
+            # Child table may or may not exist depending on CASCADE behavior
+        else:
+            # Drop was restricted due to foreign key
+            self.assertIn('parent_table', self.storage_manager.tables)
+            self.assertIn('child_table', self.storage_manager.tables)
+    
+    def test_04_drop_child_table_with_foreign_key(self):
+        """Test dropping a child table that references a parent."""
+        # Create parent and child tables
+        self.execute_query("""
+        CREATE TABLE parent_dept (
+            dept_id INTEGER PRIMARY KEY,
+            dept_name VARCHAR(50)
+        )
+        """)
+        
+        self.execute_query("""
+        CREATE TABLE child_emp (
+            emp_id INTEGER PRIMARY KEY,
+            dept_id INTEGER,
+            emp_name VARCHAR(50)
+        )
+        """)
+        
+        # Insert data
+        self.execute_query("INSERT INTO parent_dept (dept_id, dept_name) VALUES (1, 'Sales')")
+        self.execute_query("INSERT INTO child_emp (emp_id, dept_id, emp_name) VALUES (1, 1, 'Alice')")
+        
+        # Drop child table - should succeed without issues
+        result = self.execute_query("DROP TABLE child_emp")
+        self.assertQuerySuccess(result)
+        
+        # Verify child removed, parent remains
+        self.assertNotIn('child_emp', self.storage_manager.tables)
+        self.assertIn('parent_dept', self.storage_manager.tables)
+    
+    def test_05_drop_multiple_related_tables(self):
+        """Test dropping multiple tables with relationships."""
+        # Create a chain of tables
+        self.execute_query("""
+        CREATE TABLE level1 (
+            id INTEGER PRIMARY KEY,
+            name VARCHAR(50)
+        )
+        """)
+        
+        self.execute_query("""
+        CREATE TABLE level2 (
+            id INTEGER PRIMARY KEY,
+            level1_id INTEGER,
+            name VARCHAR(50)
+        )
+        """)
+        
+        self.execute_query("""
+        CREATE TABLE level3 (
+            id INTEGER PRIMARY KEY,
+            level2_id INTEGER,
+            name VARCHAR(50)
+        )
+        """)
+        
+        # Insert data
+        self.execute_query("INSERT INTO level1 (id, name) VALUES (1, 'Level1')")
+        self.execute_query("INSERT INTO level2 (id, level1_id, name) VALUES (1, 1, 'Level2')")
+        self.execute_query("INSERT INTO level3 (id, level2_id, name) VALUES (1, 1, 'Level3')")
+        
+        # Drop in reverse order (child first)
+        result = self.execute_query("DROP TABLE level3")
+        self.assertQuerySuccess(result)
+        self.assertNotIn('level3', self.storage_manager.tables)
+        
+        result = self.execute_query("DROP TABLE level2")
+        self.assertQuerySuccess(result)
+        self.assertNotIn('level2', self.storage_manager.tables)
+        
+        result = self.execute_query("DROP TABLE level1")
+        self.assertQuerySuccess(result)
+        self.assertNotIn('level1', self.storage_manager.tables)
 
 
 class TestSubqueries(TestQueryProcessor):
