@@ -75,11 +75,13 @@ class FailureRecovery:
                 if is_commit:
                     for infos in self.mem_wal:
                         self.logFile.write_log_execRes(infos)
+                    self.mem_wal = []
                 
                 # handles if mem_wal is over the determined log size
                 elif len(self.mem_wal) > self.wal_size:
                     for infos in self.mem_wal:
                         self.logFile.write_log_execRes(infos)
+                    self.mem_wal = []
                 
                 # to be more efficient, we can also insert the transaction ID into the undo list
                 if not is_commit:
