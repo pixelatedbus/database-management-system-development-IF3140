@@ -35,12 +35,13 @@ class MVCCTester:
     RESET = '\033[0m'
     BOLD = '\033[1m'
     
-    def __init__(self, algorithm_name, isolation_policy="FIRST_COMMITTER_WIN"):
+    def __init__(self, algorithm_name, isolation_policy="FIRST_COMMITTER_WIN", verbose=True):
         """
         Initialize tester with specified algorithm
         Args:
             algorithm_name: "MVTO", "MV2PL", "Snapshot_FCW", or "Snapshot_FUW"
             isolation_policy: For Snapshot variants - "FIRST_COMMITTER_WIN" or "FIRST_UPDATER_WIN"
+            verbose: If True, print detailed operation logs. If False, silent mode.
         """
         # Map test names to MVCC variant names
         variant_map = {
@@ -62,6 +63,7 @@ class MVCCTester:
         self.mvcc = MVCCAlgorithm(variant=variant, isolation_policy=isolation_policy)
         self.algorithm_name = algorithm_name
         self.variant = variant  # Store variant for conditional logic
+        self.verbose = verbose  # Control output verbosity
         self.transactions: Dict[int, Transaction] = {}
         self.execution_trace = []
         self.step_counter = 0
@@ -77,7 +79,8 @@ class MVCCTester:
         t = Transaction(transaction_id=tid)
         self.transactions[tid] = t
         self.mvcc.begin_transaction(t)
-        print(f"{self.CYAN}Creating Transaction T{tid}{self.RESET}")
+        if self.verbose:
+            print(f"{self.CYAN}Creating Transaction T{tid}{self.RESET}")
         return t
     
     def _record_trace(self, op_num: int, tid: int, op_type: str, object_id: str = None, value: Any = None, response: Any = None):
@@ -170,7 +173,8 @@ class MVCCTester:
         
         message = result.message or ""
         
-        print(f"{color}{operation}: {status} - {message}{self.RESET}")
+        if self.verbose:
+            print(f"{color}{operation}: {status} - {message}{self.RESET}")
         
         return result
         
@@ -231,7 +235,8 @@ class MVCCTester:
         operation = f"W{tid}({item})"
         message = result.message or ""
         
-        print(f"{color}{operation}: {status} - {message}{self.RESET}")
+        if self.verbose:
+            print(f"{color}{operation}: {status} - {message}{self.RESET}")
         
         return result
         
@@ -265,18 +270,22 @@ class MVCCTester:
         color = self.GREEN if result.allowed else self.RED
         message = result.message or ""
         
-        print(f"{color}{operation}: {status} - {message}{self.RESET}")
+        if self.verbose:
+            print(f"{color}{operation}: {status} - {message}{self.RESET}")
         
         return result
         
     def print_header(self, text):
         """Print formatted section header"""
-        print(f"\n{self.BOLD}{self.BLUE}{'='*70}{self.RESET}")
-        print(f"{self.BOLD}{self.BLUE}{text:^70}{self.RESET}")
-        print(f"{self.BOLD}{self.BLUE}{'='*70}{self.RESET}\n")
+        if self.verbose:
+            print(f"\n{self.BOLD}{self.BLUE}{'='*70}{self.RESET}")
+            print(f"{self.BOLD}{self.BLUE}{text:^70}{self.RESET}")
+            print(f"{self.BOLD}{self.BLUE}{'='*70}{self.RESET}\n")
         
     def print_execution_table(self):
         """Print execution trace in table format like test_mvcc.py"""
+        if not self.verbose:
+            return
         if not self.transactions:
             return
 
@@ -325,6 +334,8 @@ class MVCCTester:
             
     def print_data_versions(self):
         """Tampilkan semua versi data item jika tersedia"""
+        if not self.verbose:
+            return
         if hasattr(self.mvcc, 'data_versions') and self.mvcc.data_versions:
             print(f"\n{self.BOLD}{'='*80}{self.RESET}")
             print(f"{self.BOLD}DATA ITEM VERSIONS (Final State):{self.RESET}")
@@ -359,6 +370,8 @@ class MVCCTester:
                         
     def print_transaction_summary(self):
         """Print summary of all transactions"""
+        if not self.verbose:
+            return
         print(f"\n{self.BOLD}TRANSACTION SUMMARY:{self.RESET}")
         print(f"{'TID':<8} {'Status':<15}")
         print("-" * 40)
