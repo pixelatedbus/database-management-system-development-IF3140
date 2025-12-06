@@ -28,7 +28,53 @@ MOCK_METADATA = {
 
 def use_mock_metadata(func):
     def wrapper(*args, **kwargs):
-        with patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA):
+        from storage_manager.models import Statistic
+        from query_optimizer.optimization_engine import OptimizationEngine
+        
+        # Setup mock statistics for demo tables
+        def setup_mock_statistics(engine):
+            engine.statistics['users'] = Statistic(
+                n_r=10000,
+                b_r=1000,
+                l_r=200,
+                f_r=10,
+                V_a_r={'id': 10000, 'name': 9500, 'email': 10000, 'age': 50, 'city': 100},
+                indexes={}
+            )
+            engine.statistics['profiles'] = Statistic(
+                n_r=8000,
+                b_r=800,
+                l_r=150,
+                f_r=10,
+                V_a_r={'id': 8000, 'user_id': 8000, 'bio': 7500, 'verified': 2},
+                indexes={}
+            )
+            engine.statistics['orders'] = Statistic(
+                n_r=50000,
+                b_r=5000,
+                l_r=180,
+                f_r=10,
+                V_a_r={'id': 50000, 'user_id': 9000, 'amount': 1000, 'total': 2000, 'product_id': 150, 'status': 5},
+                indexes={}
+            )
+            engine.statistics['products'] = Statistic(
+                n_r=500,
+                b_r=50,
+                l_r=250,
+                f_r=10,
+                V_a_r={'id': 500, 'name': 500, 'category': 15, 'price': 450},
+                indexes={}
+            )
+            engine.cost_calculator.statistics = engine.statistics
+        
+        # Patch both metadata and OptimizationEngine.__init__
+        original_init = OptimizationEngine.__init__
+        def patched_init(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)
+            setup_mock_statistics(self)
+        
+        with patch('query_optimizer.query_check.get_metadata', return_value=MOCK_METADATA), \
+             patch.object(OptimizationEngine, '__init__', patched_init):
             return func(*args, **kwargs)
     return wrapper
 
@@ -360,7 +406,12 @@ def demo_parse():
     examples = [
         "SELECT id, name FROM users",
         "SELECT * FROM orders WHERE amount > 1000",
-        "SELECT a.id, b.name FROM a JOIN b ON a.id = b.a_id WHERE a.x > 5"
+        "SELECT a.id, b.name FROM a JOIN b ON a.id = b.a_id WHERE a.x > 5",
+        "SELECT u.name, o.total FROM users u JOIN orders o ON u.id = o.user_id WHERE u.age > 25",
+        "SELECT * FROM employees WHERE salary BETWEEN 50000 AND 100000",
+        "SELECT u.name FROM users u WHERE u.status IN ('active', 'premium', 'trial')",
+        "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER FOREIGN KEY REFERENCES users(id), total FLOAT, status VARCHAR(50));",
+        "SELECT u.name, o.total, p.name FROM users u JOIN orders o ON u.id = o.user_id JOIN products p ON o.product_id = p.id WHERE u.city = 'Jakarta' AND o.total > 500000"
     ]
 
     for sql in examples:

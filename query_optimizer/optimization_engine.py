@@ -106,7 +106,6 @@ class OptimizationEngine:
                 generations=generations,
                 mutation_rate=mutation_rate,
                 elitism=elitism or 2,
-                # fitness_func=fitness_func or self._default_fitness_func
             )
             
             optimized_tree, history = ga.optimize(query_tree)
