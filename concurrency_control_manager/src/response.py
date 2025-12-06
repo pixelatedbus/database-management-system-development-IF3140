@@ -11,7 +11,8 @@ class Response(Protocol):
     value: any
 
 class AlgorithmResponse:
-    def __init__(self, allowed: bool, message: str, value: any = None):
+    def __init__(self, allowed: bool, message: str, value: any = None, waiting: bool = False):
         self.allowed = allowed
         self.message = message
         self.value = value
+        self.waiting = waiting  # True if transaction should wait and retry
