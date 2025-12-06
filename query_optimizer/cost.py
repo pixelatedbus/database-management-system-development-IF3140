@@ -39,11 +39,33 @@ class CostCalculator:
 
         self.statistics = statistics
         
-        self.SEQUENTIAL_IO_COST = 1.0
-        self.RANDOM_IO_COST = 1.5
-        self.WRITE_COST = 2.0
+        default_config = {
+        'sequential_io_cost': 1.0,
+        'random_io_cost': 1.5,
+        'write_cost': 2.0,
         
-        self.CPU_COST_PER_TUPLE = 0.0
+        'cpu_per_tuple': 0.01,
+        'cpu_per_comparison': 0.001,
+        'cpu_per_hash': 0.005,
+        'cpu_per_sort_compare': 0.002,
+        
+        'cpu_weight': 0.05,
+        
+        'memory_blocks': 100,
+        'sort_memory_blocks': 10
+    }
+    
+        self.config = default_config
+        
+        self.SEQUENTIAL_IO_COST = self.config['sequential_io_cost']
+        self.RANDOM_IO_COST = self.config['random_io_cost']
+        self.WRITE_COST = self.config['write_cost']
+        
+        self.CPU_PER_TUPLE = self.config['cpu_per_tuple']
+        self.CPU_PER_COMPARISON = self.config['cpu_per_comparison']
+        self.CPU_PER_HASH = self.config['cpu_per_hash']
+        self.CPU_PER_SORT_COMPARE = self.config['cpu_per_sort_compare']
+        self.CPU_WEIGHT = self.config['cpu_weight']
     
     def get_cost(self, query_tree: QueryTree) -> CostResult:
 
@@ -88,21 +110,37 @@ class CostCalculator:
         
         io_cost = stats.b_r * self.SEQUENTIAL_IO_COST
         
+        cpu_cost = stats.n_r * self.CPU_PER_TUPLE
+        
         return CostResult(
             io_cost=io_cost,
-            cpu_cost=stats.n_r * self.CPU_COST_PER_TUPLE,
+            cpu_cost=cpu_cost,
             estimated_cardinality=stats.n_r,
             estimated_blocks=stats.b_r
         )
     
     def _cost_project(self, node: QueryTree) -> CostResult:
-
-        # Child terakhir adalah source data
         if not node.childs:
-            return CostResult(io_cost=0.0)
+            return CostResult(io_cost=0.0, cpu_cost=0.0)
         
         source = node.childs[-1]
-        return self.get_cost(source)
+        source_cost = self.get_cost(source)
+        
+        n_tuples = source_cost.estimated_cardinality
+        
+        if node.val == "*":
+            num_cols = 5  # asumsi rata" kolom tiap tabel ada 5
+        else:
+            num_cols = max(1, len(node.childs) - 1)
+        
+        projection_cpu = n_tuples * num_cols * self.CPU_PER_TUPLE * 0.1
+        
+        return CostResult(
+            io_cost=source_cost.io_cost,
+            cpu_cost=source_cost.cpu_cost + projection_cpu,
+            estimated_cardinality=source_cost.estimated_cardinality,
+            estimated_blocks=source_cost.estimated_blocks
+        )
     
     def _cost_filter(self, node: QueryTree) -> CostResult:
 
@@ -112,8 +150,10 @@ class CostCalculator:
         source = node.childs[0]
         condition = node.childs[1]
         
-        if source.type == "RELATION":
-            table_name = source.val
+        relation_node = self._extract_relation_node(source)
+        
+        if relation_node:
+            table_name = relation_node.val
             if table_name in self.statistics:
                 stats = self.statistics[table_name]
                 
@@ -123,13 +163,23 @@ class CostCalculator:
                     return self._cost_index_scan(table_name, stats, index_info)
         
         source_cost = self.get_cost(source)
-        
+        subquery_cost = self._cost_subqueries_in_condition(
+            condition, 
+            outer_cardinality=source_cost.estimated_cardinality
+        )
         selectivity = self._estimate_selectivity(condition, source)
         
-        # Cost tetap sama (pipelined), tapi cardinality berkurang
+        condition_cpu = self._calculate_condition_cpu_cost(
+            condition, 
+            source_cost.estimated_cardinality
+        )
+        
+        total_io_cost = source_cost.io_cost + subquery_cost.io_cost
+        total_cpu_cost = source_cost.cpu_cost + subquery_cost.cpu_cost + condition_cpu
+        
         return CostResult(
-            io_cost=source_cost.io_cost,
-            cpu_cost=source_cost.cpu_cost,
+            io_cost=total_io_cost,
+            cpu_cost=total_cpu_cost,
             estimated_cardinality=int(source_cost.estimated_cardinality * selectivity),
             estimated_blocks=int(math.ceil(source_cost.estimated_blocks * selectivity))
         )
@@ -138,7 +188,6 @@ class CostCalculator:
 
         node_type = condition.type
         
-        # Comparison operators
         if node_type == "COMPARISON":
             op = condition.val
             if op == "=":
@@ -237,11 +286,14 @@ class CostCalculator:
         """Cost untuk natural join (block nested loop join)."""
         io_cost = left_cost.io_cost + right_cost.io_cost
         io_cost += left_cost.estimated_blocks * right_cost.estimated_blocks
+        cpu_cost = left_cost.cpu_cost + right_cost.cpu_cost
         
         estimated_card = int(math.sqrt(left_cost.estimated_cardinality * right_cost.estimated_cardinality))
+        cpu_cost += estimated_card * self.CPU_PER_COMPARISON * 2
         
         return CostResult(
             io_cost=io_cost,
+            cpu_cost= cpu_cost,
             estimated_cardinality=estimated_card,
             estimated_blocks=int(math.ceil(estimated_card / 10))
         )
@@ -251,21 +303,22 @@ class CostCalculator:
 
         is_equijoin, left_col, right_col = self._is_equijoin(condition)
         
-        if is_equijoin and right_node.type == "RELATION":
-            right_table = right_node.val
+        left_relation = self._extract_relation_node(left_node)
+        right_relation = self._extract_relation_node(right_node)
+        
+        if is_equijoin and right_relation:
+            right_table = right_relation.val
             if right_table in self.statistics:
                 right_stats = self.statistics[right_table]
                 
-                # Cek apakah right_col punya index
                 if right_col in right_stats.indexes:
                     index_info = right_stats.indexes[right_col]
-                    # Gunakan Index Nested Loop Join
                     return self._cost_index_nested_loop_join(
                         left_cost, right_stats, index_info, right_col
                     )
         
-        if is_equijoin and left_node.type == "RELATION":
-            left_table = left_node.val
+        if is_equijoin and left_relation:
+            left_table = left_relation.val
             if left_table in self.statistics:
                 left_stats = self.statistics[left_table]
                 
@@ -274,22 +327,29 @@ class CostCalculator:
                     return self._cost_index_nested_loop_join(
                         right_cost, left_stats, index_info, left_col
                     )
+
+        if is_equijoin:
+            bnlj_cost = self._cost_block_nested_loop_join(left_cost, right_cost)
+            hash_join_cost = self._cost_hash_join(left_cost, right_cost)
+            
+            min_cost = min(bnlj_cost, hash_join_cost, key=lambda x: x.io_cost)
+            return min_cost
         
-        bnlj_cost = self._cost_block_nested_loop_join(left_cost, right_cost)
-        hash_join_cost = self._cost_hash_join(left_cost, right_cost)
-        
-        if hash_join_cost.io_cost < bnlj_cost.io_cost:
-            return hash_join_cost
-        return bnlj_cost
+        return self._cost_block_nested_loop_join(left_cost, right_cost)
     
     def _cost_cross_product(self, left_cost: CostResult, right_cost: CostResult) -> CostResult:
         io_cost = left_cost.io_cost + right_cost.io_cost
         io_cost += left_cost.estimated_blocks * right_cost.estimated_blocks
+
+        num_pairs = left_cost.estimated_cardinality * right_cost.estimated_cardinality
+        cpu_cost = left_cost.cpu_cost + right_cost.cpu_cost
+        cpu_cost += num_pairs * self.CPU_PER_TUPLE
         
         estimated_card = left_cost.estimated_cardinality * right_cost.estimated_cardinality
         
         return CostResult(
             io_cost=io_cost,
+            cpu_cost=cpu_cost,
             estimated_cardinality=estimated_card,
             estimated_blocks=int(math.ceil(estimated_card / 10))
         )
@@ -305,17 +365,28 @@ class CostCalculator:
         b_r = source_cost.estimated_blocks
         M = 10  # Asumsi 10 blocks memory buffer (bisa di-config)
         
+        n_tuples = source_cost.estimated_cardinality
+        b_r = source_cost.estimated_blocks
+        M = self.config['sort_memory_blocks']
+        
         if b_r <= M:
             io_cost = source_cost.io_cost + (2 * b_r)
         else:
-            # External merge sort
             num_passes = math.ceil(math.log(b_r / M, M - 1)) if b_r > M else 0
             io_cost = source_cost.io_cost + (2 * b_r * (num_passes + 1))
         
+        if n_tuples > 0:
+            sort_cpu = n_tuples * math.log2(max(2, n_tuples)) * self.CPU_PER_SORT_COMPARE
+        else:
+            sort_cpu = 0.0
+        
+        total_cpu = source_cost.cpu_cost + sort_cpu
+        
         return CostResult(
             io_cost=io_cost,
-            estimated_cardinality=source_cost.estimated_cardinality,
-            estimated_blocks=source_cost.estimated_blocks
+            cpu_cost=total_cpu,
+            estimated_cardinality=n_tuples,
+            estimated_blocks=b_r
         )
     
     def _cost_limit(self, node: QueryTree) -> CostResult:
@@ -413,6 +484,61 @@ class CostCalculator:
             total_cost = total_cost + child_cost
         
         return total_cost
+
+    def _cost_subqueries_in_condition(self, condition: QueryTree, 
+                                   outer_cardinality: int = 1) -> CostResult:
+
+        total_cost = CostResult(io_cost=0.0)
+        
+        node_type = condition.type
+
+        if node_type in ["IN_EXPR", "NOT_IN_EXPR"]:
+            if len(condition.childs) >= 2:
+                list_or_subquery = condition.childs[1]
+                
+
+                if list_or_subquery.type == "PROJECT":
+
+                    subquery_cost = self.get_cost(list_or_subquery)
+
+                    materialization_cost = subquery_cost.estimated_blocks * self.WRITE_COST
+                    
+                    total_cost = total_cost + subquery_cost
+                    total_cost.io_cost += materialization_cost
+        
+
+        elif node_type in ["EXISTS_EXPR", "NOT_EXISTS_EXPR"]:
+            if len(condition.childs) >= 1:
+                subquery = condition.childs[0]
+                subquery_cost = self.get_cost(subquery)
+                
+
+                per_tuple_cost = subquery_cost.io_cost * 0.5
+                
+                # Total cost = execute untuk semua outer tuples
+                total_execution_cost = outer_cardinality * per_tuple_cost
+                
+                total_cost.io_cost += total_execution_cost
+                total_cost.cpu_cost += outer_cardinality * subquery_cost.cpu_cost * 0.5
+
+        elif node_type == "COMPARISON":
+            for child in condition.childs:
+                if child.type == "PROJECT":
+
+                    subquery_cost = self.get_cost(child)
+                    total_cost = total_cost + subquery_cost
+        
+
+        elif node_type == "OPERATOR":
+            for child in condition.childs:
+
+                child_subquery_cost = self._cost_subqueries_in_condition(
+                    child, outer_cardinality
+                )
+                total_cost = total_cost + child_subquery_cost
+        
+        return total_cost
+
     
     # Helper methods
     
@@ -518,7 +644,6 @@ class CostCalculator:
         index_type = index_info["type"]
         selectivity = index_info["selectivity"]
         operator = index_info["operator"]
-        print(index_info)
         
         estimated_tuples = int(stats.n_r * selectivity)
         estimated_blocks = max(1, int(math.ceil(estimated_tuples / stats.f_r)))
@@ -567,9 +692,17 @@ class CostCalculator:
                 estimated_blocks=stats.b_r
             )
         
+        if index_info["type"] == "hash":
+            cpu_cost = self.CPU_PER_HASH
+        else:  #
+            height = index_info.get("height", 3)
+            cpu_cost = height * self.CPU_PER_COMPARISON
+        
+        cpu_cost += estimated_tuples * self.CPU_PER_TUPLE
+        
         return CostResult(
             io_cost=total_io_cost,
-            cpu_cost=estimated_tuples * self.CPU_COST_PER_TUPLE,
+            cpu_cost=cpu_cost,
             estimated_cardinality=estimated_tuples,
             estimated_blocks=estimated_blocks
         )
@@ -578,6 +711,8 @@ class CostCalculator:
                                      index_info: dict, join_column: str) -> CostResult:
 
         index_type = index_info.get("type")
+        # katanya pake nested join aja TODO
+        index_type = "nested"
         n_outer = outer_cost.estimated_cardinality
         
         outer_scan_cost = outer_cost.io_cost
@@ -610,45 +745,54 @@ class CostCalculator:
                 CostResult(io_cost=inner_stats.b_r, estimated_cardinality=inner_stats.n_r, 
                           estimated_blocks=inner_stats.b_r))
         
-        join_selectivity = 1.0 / max(
-            inner_stats.V_a_r.get(join_column, 100),
-            100
-        )
+        n_outer = outer_cost.estimated_cardinality
+        cpu_cost = outer_cost.cpu_cost
+        
+        if index_info.get("type") == "hash":
+            cpu_cost += n_outer * self.CPU_PER_HASH
+        else:  # btree
+            height = index_info.get("height", 3)
+            cpu_cost += n_outer * height * self.CPU_PER_COMPARISON
+        
+        join_selectivity = 1.0 / max(inner_stats.V_a_r.get(join_column, 100), 100)
         estimated_output = int(outer_cost.estimated_cardinality * inner_stats.n_r * join_selectivity)
+        cpu_cost += estimated_output * self.CPU_PER_TUPLE
+        
         estimated_output_blocks = int(math.ceil(estimated_output / inner_stats.f_r))
         
         return CostResult(
             io_cost=total_io_cost,
+            cpu_cost=cpu_cost,
             estimated_cardinality=estimated_output,
             estimated_blocks=estimated_output_blocks
         )
     
     def _cost_block_nested_loop_join(self, left_cost: CostResult, 
-                                     right_cost: CostResult) -> CostResult:
-
+                                    right_cost: CostResult) -> CostResult:
         read_outer_cost = left_cost.io_cost
-        
-
         write_outer_cost = left_cost.estimated_blocks * self.WRITE_COST
-        
         nested_cost = left_cost.estimated_blocks * right_cost.estimated_blocks * self.SEQUENTIAL_IO_COST
         
         total_io_cost = read_outer_cost + write_outer_cost + nested_cost
         
+        num_comparisons = left_cost.estimated_cardinality * right_cost.estimated_cardinality
+        cpu_cost = left_cost.cpu_cost + right_cost.cpu_cost
+        cpu_cost += num_comparisons * self.CPU_PER_COMPARISON
+        
         selectivity = 0.1
-        estimated_card = int(left_cost.estimated_cardinality * right_cost.estimated_cardinality * selectivity)
+        estimated_card = int(num_comparisons * selectivity)
+        cpu_cost += estimated_card * self.CPU_PER_TUPLE
         
         return CostResult(
             io_cost=total_io_cost,
+            cpu_cost=cpu_cost,
             estimated_cardinality=estimated_card,
             estimated_blocks=int(math.ceil(estimated_card / 10))
         )
     
     def _cost_hash_join(self, left_cost: CostResult, right_cost: CostResult) -> CostResult:
-
-        M = 100  # Memory buffer size (blocks) - bisa di-config
+        M = self.config['memory_blocks']
         
-
         if left_cost.estimated_blocks <= right_cost.estimated_blocks:
             build_cost = left_cost
             probe_cost = right_cost
@@ -660,20 +804,60 @@ class CostCalculator:
             io_cost = build_cost.io_cost
             io_cost += build_cost.estimated_blocks * self.WRITE_COST
             io_cost += probe_cost.io_cost
-            
         else:
             partitioning_cost = 2 * (build_cost.estimated_blocks + probe_cost.estimated_blocks)
             join_cost = build_cost.estimated_blocks + probe_cost.estimated_blocks
             io_cost = (partitioning_cost + join_cost) * self.SEQUENTIAL_IO_COST
         
+        build_tuples = build_cost.estimated_cardinality
+        hash_cpu = build_tuples * self.CPU_PER_HASH
+        
+        probe_tuples = probe_cost.estimated_cardinality
+        probe_cpu = probe_tuples * self.CPU_PER_HASH
+        
         selectivity = 0.1
         estimated_card = int(left_cost.estimated_cardinality * right_cost.estimated_cardinality * selectivity)
+        output_cpu = estimated_card * self.CPU_PER_TUPLE
+        
+        total_cpu = build_cost.cpu_cost + probe_cost.cpu_cost
+        total_cpu += hash_cpu + probe_cpu + output_cpu
         
         return CostResult(
             io_cost=io_cost,
+            cpu_cost=total_cpu,
             estimated_cardinality=estimated_card,
             estimated_blocks=int(math.ceil(estimated_card / 10))
         )
+
+    
+    def _calculate_condition_cpu_cost(self, condition: QueryTree, num_tuples: int) -> float:
+
+        node_type = condition.type
+        
+        if node_type == "COMPARISON":
+            return num_tuples * self.CPU_PER_COMPARISON
+        
+        elif node_type == "OPERATOR":
+            op = condition.val
+            if op in ["AND", "OR"]:
+                total = 0.0
+                for child in condition.childs:
+                    total += self._calculate_condition_cpu_cost(child, num_tuples)
+                return total
+            elif op == "NOT":
+                if condition.childs:
+                    return self._calculate_condition_cpu_cost(condition.childs[0], num_tuples)
+        
+        elif node_type in ["LIKE_EXPR", "BETWEEN_EXPR"]:
+            return num_tuples * self.CPU_PER_COMPARISON * 2
+        
+        elif node_type in ["IN_EXPR", "NOT_IN_EXPR"]:
+            return num_tuples * self.CPU_PER_HASH
+        
+        elif node_type in ["IS_NULL_EXPR", "IS_NOT_NULL_EXPR"]:
+            return num_tuples * self.CPU_PER_COMPARISON * 0.5
+        
+        return num_tuples * self.CPU_PER_COMPARISON
     
     def _is_equijoin(self, condition: QueryTree) -> Tuple[bool, Optional[str], Optional[str]]:
         if condition.type == "COMPARISON" and condition.val == "=":
@@ -712,5 +896,29 @@ class CostCalculator:
                 table_name = self._extract_table_name(child)
                 if table_name:
                     return table_name
+        
+        return None
+    
+    def _extract_relation_node(self, node: QueryTree) -> Optional[QueryTree]:
+        if node is None:
+            return None
+            
+        if node.type == "RELATION":
+            return node
+        
+        if node.type == "ALIAS" and node.childs:
+            return self._extract_relation_node(node.childs[0])
+        
+        if node.type == "FILTER" and node.childs:
+            return self._extract_relation_node(node.childs[0])
+        
+        if node.type == "JOIN":
+            return None
+        
+        if node.type == "PROJECT" and node.childs:
+            return self._extract_relation_node(node.childs[-1])
+        
+        if node.childs:
+            return self._extract_relation_node(node.childs[0])
         
         return None

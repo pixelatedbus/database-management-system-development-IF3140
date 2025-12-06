@@ -8,14 +8,18 @@ Query Optimizer adalah modul yang bertanggung jawab untuk mengoptimalkan query S
 
 ### Fitur Utama
 
-- **SQL Parser**: Mengubah SQL string menjadi Query Tree representation
-- **Deterministic Rules**: Rule 3 (projection elimination), Rule 7 (filter pushdown), Rule 8 (projection over joins)
-- **Non-Deterministic Rules**: Rule 1 (filter cascading), Rule 2 (filter reordering), Rule 4 (push selection into joins)
-- **Genetic Algorithm Optimizer**: Optimasi query menggunakan unified filter params dan join params
-- **Query Tree Manipulation**: Transformasi dan manipulasi struktur query tree
-- **Cost Estimation**: Estimasi cost eksekusi query
-- **Unified Filter Params**: Format `list[int | list[int]]` menggabungkan reordering dan cascading
-- **Join Params**: Format `bool` untuk merge decision (FILTER ke JOIN)
+- **SQL Parser**: Parse SQL → Query Tree
+- **Deterministic Rules**: Rule 3 (projection elimination), Rule 7 (filter pushdown), Rule 8 (projection over joins) — selalu dijalankan sebelum GA
+- **Non-deterministic Rules (GA-driven)**: Rule 1 (filter cascading/reordering), Rule 2 (filter reordering), Rule 4 (push selection into joins), Rule 5 (join commutativity), Rule 6 (join associativity)
+- **Genetic Algorithm Optimizer**: GA meng-explore parameter space terpisah per-operation (`filter_params`, `join_params`, `join_child_params`, `join_associativity_params`, `join_method_params`)
+- **Join Method Shuffling**: GA dapat memilih metode eksekusi JOIN per node (`nested_loop` atau `hash`)
+- **Query Tree Manipulation**: Transformasi struktur dengan preservasi node ID
+- **Cost Estimation**: Model cost berbasis statistik (block/tupel, indeks, selectivity)
+
+**Notes:**
+
+- `filter_params` dan `join_params` sering diperlakukan sebagai _coupled_ dalam crossover untuk menjaga konsistensi
+- `join_child_params`, `join_associativity_params`, dan `join_method_params` diperlakukan sebagai operasi independen
 
 ### Komponen Utama
 
@@ -28,25 +32,28 @@ query_optimizer/
 ├── optimization_engine.py    # Main optimization engine
 ├── genetic_optimizer.py      # Genetic Algorithm with unified params
 ├── rule_params_manager.py    # Unified parameter management
-├── rule_1.py                 # Filter cascading (non-deterministic)
-├── rule_2.py                 # Filter reordering (non-deterministic)
-├── rule_3.py                 # Projection elimination (deterministic)
-├── rule_4.py                 # Push selection into joins (non-deterministic)
-├── rule_7.py                 # Filter pushdown over join (deterministic)
-├── rule_8.py                 # Projection over join (deterministic)
+├── cost.py                   # Cost estimation model
 ├── demo.py                   # Demo program
+├── rule/                     # Optimization rules
+│   ├── rule_1_2.py           # Filter cascading & reordering (non-deterministic)
+│   ├── rule_3.py             # Projection elimination (deterministic)
+│   ├── rule_4.py             # Push selection into joins (non-deterministic)
+│   ├── rule_5.py             # Join commutativity (non-deterministic)
+│   ├── rule_6.py             # Join associativity (non-deterministic)
+│   ├── rule_7.py             # Filter pushdown over join (deterministic)
+│   └── rule_8.py             # Projection over join (deterministic)
 └── tests/                    # Unit tests
     ├── test_tokenizer.py
     ├── test_parser.py
     ├── test_check.py
-    ├── test_rule_1.py
-    ├── test_rule_2.py
+    ├── test_rule_1_2.py
     ├── test_rule_4.py
+    ├── test_rule_5.py
+    ├── test_rule_6.py
     ├── test_rule_7.py
     ├── test_rule_8.py
     ├── test_rule_deterministik.py
     ├── test_genetic.py
-    ├── test_integration_rules.py
     └── integration.py
 ```
 
@@ -67,125 +74,35 @@ cd database-management-system-development-IF3140
 
 ### 2.2 Running Demo
 
-Demo program menyediakan 9 mode:
+Demo program supports per-rule scenarios and broader demos. Use `python -m query_optimizer.demo N` (or `N.S` for specific scenario):
 
-**Demo 1: Basic Parsing**
+**Demo Numbers:**
 
-```bash
-python -m query_optimizer.demo 1
+- `1` — Rule 1 (filter cascading scenarios)
+- `2` — Rule 2 (filter reordering scenarios)
+- `3` — Rule 3 (projection elimination)
+- `4` — Rule 7 (filter pushdown over joins)
+- `5` — Rule 8 (projection over joins)
+- `6` — Rule 6 (join associativity): reassociation, semantic validation, natural joins
+- `7` — Rule 4 (push selection into joins)
+- `8` — Rule 5 (join commutativity) and GA exploration
+- `9` — Parsing & utility demos
+- `10` — All demos runner
+- `11` — GA internals demo (step-by-step)
+- `12` — Full/combined runs
+
+**Examples:**
+
+```powershell
+python -m query_optimizer.demo 6        # Rule 6 associativity scenarios
+python -m query_optimizer.demo 11       # GA internals (init, crossover, mutation)
+python -m query_optimizer.demo 10       # Run broad demo sequence
 ```
 
-Output:
-- Parse multiple SQL queries
-- Display query tree structure
+**Notes:**
 
-**Demo 2: Basic Optimization Comparison**
-
-```bash
-python -m query_optimizer.demo 2
-```
-
-Output:
-- Compare optimization with/without GA
-- Show cost difference
-
-**Demo 3: Rule 3 - Projection Elimination (Deterministic)**
-
-```bash
-python -m query_optimizer.demo 3
-```
-
-Output:
-- Demonstrates nested projection elimination
-- Shows before/after tree structure
-- Explains Rule 3 is applied ONCE before GA
-- PROJECT count reduction
-
-**Demo 4: Rule 7 - Filter Pushdown over Join (Deterministic)**
-
-```bash
-python -m query_optimizer.demo 4
-```
-
-Output:
-- Demonstrates FILTER → JOIN pattern detection
-- Shows filter pushdown to left/right/both sides
-- Explains benefit: reduced data before join
-- FILTER count increase (closer to source)
-
-**Demo 5: Rule 8 - Projection over Join (Deterministic)**
-
-```bash
-python -m query_optimizer.demo 5
-```
-
-Output:
-- Demonstrates PROJECT → JOIN pattern detection
-- Shows projection pushdown to join children
-- Explains benefit: reduced tuple width before join
-- PROJECT count increase (child projections added)
-- Each relation only projects needed columns
-
-**Demo 6: Rule 1 - Filter Cascading (Non-deterministic)**
-
-```bash
-python -m query_optimizer.demo 6
-```
-
-Output:
-- Filter cascading transformation
-- Mixed cascade orders (unified format)
-- Uncascade back to AND structure
-- Random order generation
-
-**Demo 7: Rule 4 - Push Selection into Joins (Non-deterministic)**
-
-```bash
-python -m query_optimizer.demo 7
-```
-
-Output:
-- FILTER-JOIN pattern detection
-- Compare merge vs separate decisions
-- Cost comparison for both options
-- GA finds optimal decision automatically
-- Shows interaction with Rule 1+2 optimization
-
-**Demo 8: Genetic Algorithm with All Rules (1, 2, 4)**
-
-```bash
-python -m query_optimizer.demo 8
-```
-
-Output:
-- Full genetic optimization (Rule 3 → Rule 7 → Rule 8 → GA)
-- Includes join_params (Rule 4) and filter_params (Rule 1+2)
-- Original query tree & cost
-- Optimized query tree & cost
-- Improvement statistics
-- Best solution showing all parameter types
-- Evolution progress per generation
-
-**Demo 9: Rule 2 - Filter Reordering (Non-deterministic)**
-
-```bash
-python -m query_optimizer.demo 9
-```
-
-Output:
-- AND condition reordering
-- Multiple reorder strategies
-- Preserves tree structure
-
-**Demo 10: Run All Demos**
-
-```bash
-python -m query_optimizer.demo 10
-```
-
-Output:
-- Execute all demos sequentially (Rule 3 → Rule 7 → Rule 8 → Rule 1 → Rule 2 → GA)
-- Comprehensive showcase of all features
+- Some demos use mocked metadata (demo wrappers patch metadata where needed)
+- Use `python -m query_optimizer.demo` with no args to see help and scenario indices
 
 ### 2.3 Programmatic Usage
 
@@ -228,36 +145,6 @@ optimized = engine.optimize_query(
 
 print("Original cost:", engine.get_cost(query))
 print("Optimized cost:", engine.get_cost(optimized))
-```
-
-#### Custom Fitness Function
-
-```python
-from query_optimizer.optimization_engine import OptimizationEngine, ParsedQuery
-
-def custom_fitness(query: ParsedQuery) -> float:
-    """
-    Custom fitness function.
-    Return: float (lower is better)
-    """
-    # Implement your own cost calculation
-    # Example: count number of filters
-    filter_count = len(query.query_tree.find_nodes_by_type("FILTER"))
-    return float(filter_count * 50)
-
-engine = OptimizationEngine()
-query = engine.parse_query("SELECT * FROM users WHERE age > 25 AND status = 'active'")
-
-# Use custom fitness function
-# Deterministic rules (3, 7, 8) tetap dijalankan di awal, kemudian GA dengan custom fitness
-optimized = engine.optimize_query(
-    query,
-    population_size=30,
-    generations=50,
-    fitness_func=custom_fitness  # Use custom function
-)
-
-print(f"Optimized with custom fitness: {custom_fitness(optimized)}")
 ```
 
 ### 2.4 Running Tests
@@ -476,379 +363,74 @@ Lihat **[Parse_Query.md](doc/Parse_Query.md)** untuk detail lengkap grammar dan 
 
 ### 3.3 Optimization Pipeline
 
-Optimasi query dilakukan dalam 2 tahap:
+Optimasi query dilakukan dalam dua tahap:
 
-#### Phase 1: Deterministic Rules (Always Applied)
+**Phase 1 — Deterministic preprocessing** (applied once):
 
-Rules yang selalu menghasilkan improvement dan diterapkan sekali:
+- Rule 3: Projection elimination
+- Rule 7: Filter pushdown over join
+- Rule 8: Projection pushdown over join
 
-1. **Rule 3: Projection Elimination** - Eliminasi nested projection
-2. **Rule 7: Filter Pushdown over Join** - Push filter mendekati data source
-3. **Rule 8: Projection over Join** - Push projection ke join children
+**Phase 2 — GA parameter exploration** (non-deterministic rules):
 
-```
-Original Query
-      ↓
-   Rule 3 (eliminasi projection)
-      ↓
-   Rule 7 (pushdown filter)
-      ↓
-   Rule 8 (pushdown projection)
-      ↓
-Phase 2: Genetic Algorithm
-```
+- Rule 1 & 2: Filter cascading/reordering (`filter_params`)
+- Rule 4: Push selection into joins (`join_params`)
+- Rule 5: Join commutativity (`join_child_params`)
+- Rule 6: Join associativity (`join_associativity_params`)
+- Join method selection (`join_method_params`)
 
-#### Phase 2: Genetic Algorithm (Parameter Space Exploration)
+**GA transformation order in `_apply_transformations()`:**
 
-Rules dengan parameter space yang dioptimasi oleh GA:
-
-- **Rule 1: Filter Cascading** - Order dan grouping dari filter conditions
-- **Rule 2: Filter Reordering** - Permutasi AND conditions  
-- **Rule 4: Push Selection into Joins** - Merge decision untuk FILTER-JOIN patterns
+1. Apply `filter_params` and `join_params` (Rule 1 & 4)
+2. Apply `join_associativity_params` (Rule 6)
+3. Apply `join_child_params` (Rule 5)
+4. Apply `join_method_params` (set `node.method` per JOIN)
 
 ### 3.4 Genetic Algorithm Implementation
 
-Genetic Algorithm adalah metode optimasi yang terinspirasi dari evolusi biologis untuk mengeksplorasi parameter space dari Rule 1 dan Rule 2.
+GA explores parameter space for non-deterministic rules.
 
-#### Core Concepts
-
-**Individual (Kromosom)**
-
-Setiap individual merepresentasikan kombinasi parameter untuk Rule 1 dan Rule 2:
+**Individual (Kromosom):**
 
 ```python
 class Individual:
-    operation_params: dict[str, dict[int, Any]]  # Unified parameters
-    query: ParsedQuery                            # Query hasil (after Rule 3,7,8 + GA params)
-    fitness: float                                # Cost (semakin rendah semakin baik)
+    operation_params: dict[str, dict[int, Any]]
+    # e.g. {
+    #   'filter_params': { <filter_node_id>: params },
+    #   'join_params': { <filter_node_id>: True|False },
+    #   'join_child_params': { <join_node_id>: [left_id, right_id] },
+    #   'join_associativity_params': { <pattern_root_id>: 'left'|'right'|'none' },
+    #   'join_method_params': { <join_node_id>: 'nested_loop'|'hash' }
+    # }
+    query: ParsedQuery  # cached transformed query
+    fitness: float
 ```
 
-Contoh (Unified Format):
+**Key GA operations:**
 
-```python
-Individual(
-    operation_params={
-        'filter_params': {
-            42: [2, [0, 1]]  # Unified: reorder to [2,0,1] + cascade: 2 single, [0,1] grouped
-        }
-    },
-    fitness=220.0
-)
+- **Initialization**: `RuleParamsManager.analyze_*` + `generate_*` per operation type
+- **Crossover**: coupled ops (`filter_params` + `join_params`) inherited as group; independent ops (`join_method_params`, `join_child_params`, `join_associativity_params`) combined per-node
+- **Mutation**: delegates to `RuleParamsManager.mutate_<op>` for valid mutations
+- **Evaluation**: lazy application of parameters to base query (deterministic rules first), then cost via `OptimizationEngine.get_cost()`
 
-Penjelasan unified format:
-- [2, [0, 1]] = order [cond2, cond0, cond1] dengan cond2 single filter, [cond0,cond1] grouped
-- int = condition cascade sebagai single filter
-- list[int] = conditions stay grouped dalam AND operator
-```
+**Notes:**
 
-**Population**
+- Adding new operation requires registration in `rule_params_manager.py` (analyze/generate/copy/mutate/validate) and application in `_apply_transformations()`
+- `join_method_params` applied at end: each JOIN node gets `node.method = params[join_id]`
 
-Kumpulan individu (kromosom) yang merepresentasikan solusi berbeda:
+### 3.5 Optimization Rules Summary
 
-```
-Population (size=50):
-├── Individual 1: filter_params={42: [0,1,2]}, fitness=250
-├── Individual 2: filter_params={42: [2,[0,1]]}, fitness=230
-├── Individual 3: filter_params={42: [1,0,2]}, fitness=240
-└── ... (47 more individuals)
-```
+**Deterministic rules** (Rule 3, 7, 8): applied once before GA — projection elimination, filter pushdown, projection pushdown.
 
-#### Genetic Algorithm Workflow
+**Non-deterministic rules** (GA-driven):
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│ 0. PREPROCESSING (Outside GA)                               │
-│    • Apply Rule 3 (projection elimination)                  │
-│    • Apply Rule 7 (filter pushdown)                         │
-│    • Apply Rule 8 (projection over join)                    │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 1. INITIALIZATION                                           │
-│    • Analyze query for AND operators                        │
-│    • Generate random population:                            │
-│      - Random unified filter_params (reorder + cascade)     │
-│      - Each individual has unique params combination        │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 2. EVALUATION                                               │
-│    • Calculate fitness for each individual                  │
-│    • Sort population by fitness (best first)                │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 3. SELECTION (Tournament)                                   │
-│    • Select 3 random individuals                            │
-│    • Choose best as parent                                  │
-│    • Repeat for parent 2                                    │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 4. CROSSOVER (Uniform Crossover)                            │
-│    • Combine unified filter_params from parents             │
-│    • Each param type inherited from random parent           │
-│    • Create 2 offspring                                     │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 5. MUTATION                                                 │
-│    • Mutate unified params (swap/group/ungroup)             │
-│    • Combines permutation and grouping mutations            │
-│    • Probability: mutation_rate                             │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 6. ELITISM                                                  │
-│    • Keep N best individuals from previous generation       │
-│    • Fill rest with offspring                               │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-                 ┌───────┴───────┐
-                 │ More gens?    │
-                 └───┬───────┬───┘
-                 Yes │       │ No
-                     │       │
-                     ▼       ▼
-                 [Loop]  [Return Best]
-```
+- **Rule 1 & 2** (`filter_params`): format `list[int | list[int]]` — urutan dan grouping conditions. Contoh: `[2, [0,1]]` = apply condition 2 first, then grouped AND of 0 and 1
+- **Rule 4** (`join_params`): `{filter_node_id: bool}` — True = merge FILTER into JOIN (INNER JOIN), False = keep separate
+- **Rule 5** (`join_child_params`): `{join_node_id: [left_id, right_id]}` — reorders join children (commutativity)
+- **Rule 6** (`join_associativity_params`): `{pattern_root_id: 'left'|'right'|'none'}` — controls reassociation for (A ⋈ B) ⋈ C patterns; semantic checks validate theta-join attribute references
+- **Join methods** (`join_method_params`): `{join_node_id: 'nested_loop'|'hash'}` — selects execution algorithm per JOIN; GA explores independently
 
-### 3.5 Optimization Rules Detail
-
-Optimization rules mengimplementasikan equivalency rules untuk query transformation.
-
-#### Rule 3: Projection Elimination (Deterministic)
-
-**Equivalency:**  
-`PROJECT_1(PROJECT_2(Source))` ≡ `PROJECT_1(Source)`
-
-**Timing:** Rule 3 dijalankan **SEKALI di awal** proses optimasi (sebelum genetic algorithm), tidak diikutkan dalam iterasi GA.
-
-**Purpose:** Mengeliminasi nested projection yang redundant. Outer projection mengambil alih inner projection.
-
-**Transformation:**
-```
-Before:
-PROJECT(name, age)
-└── PROJECT(*)
-    └── RELATION(users)
-
-After:
-PROJECT(name, age)
-└── RELATION(users)
-```
-
-**Implementation:**
-- Executed in `optimize_query()` before genetic algorithm
-- Not included in GA parameter space
-- Deterministic (no variations)
-
-#### Rule 7: Filter Pushdown over Join (Deterministic)
-
-**Equivalency:**  
-`FILTER(JOIN(R, S), cond)` → `JOIN(FILTER(R, cond_R), FILTER(S, cond_S))`
-
-**Timing:** Applied **ONCE** after Rule 3, before Rule 8.
-
-**Purpose:** Push filter conditions closer to data sources to reduce join size.
-
-**Transformation:**
-```
-Before:
-FILTER
-├── JOIN
-│   ├── RELATION(users)
-│   └── RELATION(profiles)
-└── AND
-    ├── users.age > 18
-    └── profiles.verified = true
-
-After:
-JOIN
-├── FILTER
-│   ├── RELATION(users)
-│   └── users.age > 18
-└── FILTER
-    ├── RELATION(profiles)
-    └── profiles.verified = true
-```
-
-**Benefits:**
-- Reduces data volume before expensive join operation
-- Each table filtered independently with relevant conditions
-- Can push to left, right, or both sides depending on condition references
-
-**Implementation:**
-- Pattern detection: finds FILTER → JOIN structures
-- Condition analysis: determines which filters reference which tables
-- Push strategy: left/right/both/none based on table references
-- Executed deterministically before GA
-
-#### Rule 8: Projection over Join (Deterministic)
-
-**Equivalency:**  
-`PROJECT(cols, JOIN(R, S))` → `PROJECT(cols', JOIN(PROJECT(R_cols), PROJECT(S_cols)))`
-
-**Timing:** Applied **ONCE** after Rule 7, before genetic algorithm.
-
-**Purpose:** Push projections to join children to reduce tuple size before join.
-
-**Transformation:**
-```
-Before:
-PROJECT(name, age)
-└── JOIN
-    ├── RELATION(users)
-    └── RELATION(profiles)
-
-After:
-PROJECT(name, age)
-└── JOIN
-    ├── PROJECT(id, name, age)  # Only needed columns
-    │   └── RELATION(users)
-    └── PROJECT(user_id)        # Only join key
-        └── RELATION(profiles)
-```
-
-**Benefits:**
-- Reduces tuple width before join
-- Less data to transfer and compare during join
-- Only required columns are projected from each relation
-
-**Implementation:**
-- Analyzes projected columns and join conditions
-- Determines minimal column set for each relation
-- Creates child projections under join
-- Executed deterministically before GA
-
-#### Rule 1 & 2: Unified Filter Params (Non-deterministic, Optimized by GA)
-
-**Equivalency:**  
-`σ(c1 ∧ c2 ∧ ... ∧ cn)(R)` ≡ `σ(cπ(1))(σ(cπ(2))(...(σ(cπ(n))(R))...))`
-
-**Format:** `list[int | list[int]]`
-
-- int: condition cascade sebagai single filter
-- list[int]: conditions stay grouped dalam AND
-
-**Transformasi:**  
-OPERATOR(AND) dengan multiple conditions → Reordered + Cascaded filters
-
-**Before:**
-
-```
-FILTER
-├── RELATION("users")
-└── OPERATOR("AND")
-    ├── COMPARISON(">") [age > 25, idx=0]
-    ├── COMPARISON("=") [status = 'active', idx=1]
-    └── COMPARISON("=") [city = 'Jakarta', idx=2]
-```
-
-**After (dengan unified params [1, [0, 2]]):**
-
-```
-FILTER [status = 'active']  # idx=1 single (most selective)
-└── FILTER
-    ├── RELATION("users")
-    └── OPERATOR("AND")      # [0,2] grouped
-        ├── COMPARISON(">") [age > 25]
-        └── COMPARISON("=") [city = 'Jakarta']
-```
-
-Penjelasan:
-
-- Order: [1, [0, 2]] = reorder to [status, age, city]
-- Cascade: 1 single, [0,2] grouped
-- Result: Most selective filter first, others stay in AND
-
-#### Unified Format Examples
-
-**Example 1: All singles (full cascade)**
-
-```python
-params = [2, 1, 0]  # Reorder + all single filters
-```
-
-Result: `FILTER(c2) → FILTER(c1) → FILTER(c0) → RELATION`
-
-**Example 2: Mixed (some grouped)**
-
-```python
-params = [2, [0, 1]]  # c2 single, [c0, c1] grouped
-```
-
-Result: `FILTER(c2) → FILTER(AND(c0, c1)) → RELATION`
-
-**Example 3: All grouped (no cascade)**
-
-```python
-params = [[2, 1, 0]]  # All stay in AND (just reordered)
-```
-
-Result: `FILTER(AND(c2, c1, c0)) → RELATION`
-
-#### Rule 4: Push Selection into Joins (Non-deterministic, Optimized by GA)
-
-**Equivalency:**  
-`FILTER(JOIN(R, S), cond)` → `JOIN(R, S, cond)` (when beneficial)
-
-**Format:** `dict[int, bool]`
-- Key: FILTER node ID
-- Value: True = merge FILTER into JOIN, False = keep separate
-
-**Purpose:** Mengubah FILTER di atas JOIN menjadi JOIN dengan condition (INNER JOIN)
-
-**Transformation:**
-```
-Before (decision = False):
-FILTER
-├── JOIN (NATURAL)
-│   ├── RELATION(employees)
-│   └── RELATION(payroll)
-└── COMPARISON(=) [e.id = p.employee_id]
-
-After (decision = True):
-JOIN (INNER)
-├── RELATION(employees)
-├── RELATION(payroll)
-└── COMPARISON(=) [e.id = p.employee_id]
-```
-
-**Benefits:**
-- Converts NATURAL JOIN → INNER JOIN with explicit condition
-- Reduces intermediate result size
-- Better query plan with condition pushed to join
-- GA explores both merge and separate configurations
-
-**Parameter Examples:**
-```python
-# Example 1: Merge FILTER into JOIN
-join_params = {42: True}  # FILTER node 42 merged
-
-# Example 2: Keep FILTER separate
-join_params = {42: False}  # FILTER node 42 kept separate
-
-# Example 3: Multiple patterns
-join_params = {
-    42: True,   # Merge filter 42
-    57: False,  # Keep filter 57 separate
-}
-```
-
-**Implementation:**
-- Pattern detection: finds FILTER → JOIN structures
-- Decision parameter: boolean (True/False)
-- Merge: creates INNER JOIN with condition
-- Separate: keeps FILTER above JOIN
-- Optimized by GA: explores both options for best cost
+GA workflow: selection → crossover → mutation → elitism, with parameter types now explicit and modular.
 
 ### 3.6 Query Validation
 
@@ -926,96 +508,75 @@ Query validation memastikan query tree structure valid dan semantically correct.
 - Comparison and condition expressions are separate node types (COMPARISON, IN_EXPR, etc.)
 - Validation is performed recursively on the entire tree structure
 
-### 3.7 Cost Estimation
+### 3.7 Estimasi Cost
 
-Cost estimation menghitung estimasi biaya eksekusi query.
+Estimasi cost diimplementasikan di `CostCalculator` class (`cost.py`). Model cost menggabungkan **I/O cost** dan **CPU cost** menggunakan statistik storage.
 
-**TO DO**
-
-### 3.8 Extending the Optimizer
-
-#### Adding New Parameter Type
-
-1. Create parameter functions in `rule_params_manager.py`:
+#### Struktur Cost
 
 ```python
-def analyze_for_my_params(query: ParsedQuery) -> dict:
-    """Analyze query to find nodes for new param type."""
-    # Find applicable nodes
-    return {node_id: metadata}
-
-def generate_my_params(metadata):
-    """Generate random parameters."""
-    # Return params structure
-    return params
-
-def mutate_my_params(params):
-    """Mutate parameters."""
-    # Return mutated params
-    return mutated_params
+@dataclass
+class CostResult:
+    io_cost: float              # Cost I/O (block access)
+    cpu_cost: float = 0.0       # Cost CPU (processing)
+    estimated_cardinality: int  # Jumlah tuple output
+    estimated_blocks: int       # Jumlah block output
+    
+    @property
+    def total_cost(self) -> float:
+        return self.io_cost + self.cpu_cost
 ```
 
-2. Register in `RuleParamsManager`:
+#### Parameter Konfigurasi
+
+- I/O: `sequential_io_cost` (1.0), `random_io_cost` (1.5), `write_cost` (2.0)
+- CPU: `cpu_per_tuple` (0.01), `cpu_per_comparison` (0.001), `cpu_per_hash` (0.005), `cpu_per_sort_compare` (0.002)
+- Memory: `memory_blocks` (100), `sort_memory_blocks` (10)
+
+#### Formula Cost per Operator
+
+**Table Scan:** I/O = `b_r × 1.0`, CPU = `n_r × 0.01`
+
+**Index Scan:**
+- Hash: I/O = `1.5 + data_blocks`
+- B-Tree (equality): I/O = `(height + 1) × 1.5 + data_blocks`
+- B-Tree (range): I/O = `(height + 1) × 1.5 + leaf_scan + data_blocks × 1.5`
+
+**Filter:** I/O = `source_io` (pipelined), CPU = `n_tuples × conditions × 0.001`
+- Cascade filter: CPU lebih rendah karena early filtering
+
+**Join (Block Nested Loop):** I/O = `b_outer + b_inner + (b_outer × b_inner)`
+
+**Join (Hash):** I/O in-memory = `build_io + build_blocks × 2.0 + probe_io`
+
+**Join (Index Nested Loop):** I/O = `outer_io + n_outer × index_cost + data_blocks`
+
+**Sort:** I/O = `source_io + 2 × b_r × (passes + 1)`, CPU = `n × log₂(n) × 0.002`
+
+#### Estimasi Selectivity
+
+- Equality (`=`): `1 / V(a,r)`
+- Range (`<`, `>`, `<=`, `>=`): 0.33
+- AND: perkalian selectivity
+- OR: `sel₁ + sel₂ - (sel₁ × sel₂)`
+- BETWEEN: 0.25, LIKE: 0.05, IN: 0.3, EXISTS: 0.5
+
+#### Penggunaan
 
 ```python
-manager.register_rule('my_params', {
-    'analyze': analyze_for_my_params,
-    'generate': generate_my_params,
-    'mutate': mutate_my_params,
-    'copy': lambda p: copy.deepcopy(p),
-    'validate': lambda p, m: True
-})
-```
-
-3. Update `_apply_transformations` in `genetic_optimizer.py`:
-
-```python
-if 'my_params' in self.operation_params:
-    current_query = apply_my_transformation(
-        current_query,
-        self.operation_params['my_params']
-    )
-```
-
-#### Custom Fitness Function
-
-Create custom fitness function for specific optimization goals:
-
-```python
-from query_optimizer.optimization_engine import OptimizationEngine, ParsedQuery
-
-def fitness_minimize_joins(query: ParsedQuery) -> float:
-    """Prioritize minimizing number of joins."""
-    joins = len(query.query_tree.find_nodes_by_type("JOIN"))
-    filters = len(query.query_tree.find_nodes_by_type("FILTER"))
-
-    # Heavy penalty for joins
-    return (joins * 100) + (filters * 10)
-
 engine = OptimizationEngine()
-optimized = engine.optimize_query(query, fitness_func=fitness_minimize_joins)
+query = engine.parse_query(sql)
+
+# Get total cost
+cost = engine.get_cost(query)
+
+# Get detail
+result = engine.get_cost_result(query)
+print(f"I/O: {result.io_cost}, CPU: {result.cpu_cost}")
+print(f"Total: {result.total_cost}")
 ```
 
-```python
-def fitness_selectivity(query: ParsedQuery) -> float:
-    """Consider filter selectivity."""
-    cost = 0
-    filters = query.query_tree.find_nodes_by_type("FILTER")
-
-    for f in filters:
-        # Estimate selectivity based on condition
-        if "=" in f.val:
-            cost += 5  # Equality is selective
-        elif ">" in f.val or "<" in f.val:
-            cost += 20  # Range is less selective
-        else:
-            cost += 30  # Other conditions
-
-    return float(cost)
-
-engine = OptimizationEngine()
-optimized = engine.optimize_query(query, fitness_func=fitness_selectivity)
-```
+Lihat `query_optimizer/cost.py` untuk detail implementasi.
 
 ---
 
@@ -1023,8 +584,7 @@ optimized = engine.optimize_query(query, fitness_func=fitness_selectivity)
 
 ### A. References
 
-- **[Rule.md](Rule.md)**: Detail lengkap tentang tokenization, parsing rules, dan operator precedence
-- **[Filter.md](Filter.md)**: Detail lengkap tentang FILTER structure dan logical operators
+- **[Parse_Query.md](doc/Parse_Query.md)**: Detail lengkap tentang tokenization dan parsing rules
 - Genetic Algorithms: Holland, J. H. (1992). Adaptation in Natural and Artificial Systems
 - Query Optimization: Graefe, G. (1993). Query Evaluation Techniques for Large Databases
 
