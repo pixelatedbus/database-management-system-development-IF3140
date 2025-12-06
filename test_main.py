@@ -3,6 +3,8 @@ import os
 import threading
 import time
 import logging
+from concurrency_control_manager.src.enums import AlgorithmType
+
 
 logging.basicConfig(
     level=logging.CRITICAL, # ubah jadi critical kalo mau ga muncul debug, jadi info kalo mau muncul
@@ -40,10 +42,15 @@ class ClientThread(threading.Thread):
 
 
 
-def main():
+def run_test_with_algorithm(algorithm_type: AlgorithmType):
+    """Run deadlock test scenario with specified algorithm"""
+    print("\n" + "=" * 80)
+    print(f"TESTING ALGORITHM: {algorithm_type.value}")
+    print("=" * 80)
     
     processor = QueryProcessor()
-
+    processor.adapter_ccm.set_algorithm(algorithm=algorithm_type)
+    
     scenario_deadlock_1 = [
         "BEGIN TRANSACTION",
         "UPDATE students SET age = 30 WHERE id = 1", 
@@ -67,6 +74,38 @@ def main():
 
     client_a.join()
     client_b.join()
+    
+    print(f"\n{'=' * 80}")
+    print(f"COMPLETED: {algorithm_type.value}")
+    print(f"{'=' * 80}\n")
+    
+    # Wait a bit before next test
+    time.sleep(2)
+
+def main():
+    print("\n" + "#" * 80)
+    print("CONCURRENCY CONTROL MANAGER - ALGORITHM TESTING")
+    print("Testing all algorithms with deadlock scenario")
+    print("#" * 80)
+    
+    # Test all algorithms
+    algorithms = [
+        AlgorithmType.LockBased,
+        AlgorithmType.TimestampBased,
+        AlgorithmType.ValidationBased,
+        AlgorithmType.MVCC
+    ]
+    
+    for algo in algorithms:
+        try:
+            run_test_with_algorithm(algo)
+        except Exception as e:
+            print(f"\n[ERROR] Failed to test {algo.value}: {e}\n")
+    
+    print("\n" + "#" * 80)
+    print("ALL TESTS COMPLETED")
+    print("#" * 80)
+
 
 if __name__ == "__main__":
     main()

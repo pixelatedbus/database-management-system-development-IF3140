@@ -223,86 +223,6 @@ class LockManager:
                     return True
         return False
     
-    # Tidak digunakan untuk wait-die prevention
-
-    # def detect_deadlock(self) -> bool:
-    #     """Detect if there is a deadlock"""
-    #     self._build_wait_for_graph()
-    #     return self._has_cycle()
-    
-    # def get_deadlock_victim(self) -> int:
-    #     """
-    #     Select a transaction to abort in case of deadlock
-    #     Must be called after detect_deadlock() returns True.
-    #     Abort the youngest (highest Transaction ID)
-    #     """
-    #     if not self.last_detected_cycle:
-    #         return -1
-    #     
-    #     victim = max(self.last_detected_cycle)
-    #     return victim
-
-    # def upgrade_lock(self, object_id: str, transaction_id: int) -> bool:
-    #     """Upgrade a read lock to a write lock"""
-    #     return self.acquire_lock(object_id, transaction_id, LockType.WRITE_LOCK)
-    
-    # def _build_wait_for_graph(self) -> None:
-    #     """Build the wait-for graph for deadlock detection"""
-    #     self.wait_for_graph.clear()
-    #     
-    #     for object_id, lock_list in self.lock_table.items():
-    #         
-    #         granted_locks = [lock for lock in lock_list if lock.granted]
-    #         waiting_locks = [lock for lock in lock_list if not lock.granted]
-    #
-    #         if not waiting_locks or not granted_locks:
-    #             continue
-    #
-    #         for wait_lock in waiting_locks:
-    #             waiting_trans_id = wait_lock.transaction_id
-    #             
-    #             for granted_lock in granted_locks:
-    #                 if granted_lock.transaction_id == waiting_trans_id:
-    #                     continue
-    #                     
-    #                 if not self._is_compatible(wait_lock.lock_type, granted_lock.lock_type):
-    #                     self.wait_for_graph.setdefault(waiting_trans_id, set()).add(granted_lock.transaction_id)
-    
-    # def _has_cycle(self) -> bool:
-    #     """Check if wait-for graph has a cycle"""
-    #     self.last_detected_cycle.clear()
-    #     visited = set()        
-    #     recursion_stack = set() 
-    #     
-    #     def dfs(node: int, path: List[int]) -> bool:
-    #         """Helper DFS function"""
-    #         visited.add(node)
-    #         recursion_stack.add(node)
-    #         path.append(node)
-    #         
-    #         neighbors = self.wait_for_graph.get(node, set())
-    #         for neighbor in neighbors:
-    #             if neighbor not in visited:
-    #                 if dfs(neighbor, path):
-    #                     return True
-    #             elif neighbor in recursion_stack:
-    #                 cycle_start_index = path.index(neighbor)
-    #                 self.last_detected_cycle = path[cycle_start_index:]
-    #                 return True
-    #         
-    #         # Backtrack
-    #         path.pop()
-    #         recursion_stack.remove(node)
-    #         return False
-    #
-    #     all_waiting_nodes = list(self.wait_for_graph.keys())
-    #     for node in all_waiting_nodes:
-    #         if node not in visited:
-    #             if dfs(node, []):
-    #                 return True # Siklus found
-    #                 
-    #     return False
-    
     def _is_compatible(self, lock_type1: LockType, lock_type2: LockType) -> bool:
         """Check if two lock types are compatible"""
         if lock_type1 == LockType.READ_LOCK and lock_type2 == LockType.READ_LOCK:
@@ -349,29 +269,6 @@ class LockBasedAlgorithm(ConcurrencyAlgorithm):
                 allowed=False, 
                 message=f"Transaction {t.transaction_id} (Younger) died (aborted) to prevent deadlock."
             )
-
-        # Tidak ada deadlock
-        
-        # else:
-        #     if self.lock_manager.detect_deadlock():
-        #         victim_id = self.lock_manager.get_deadlock_victim()
-        #         
-        #         if victim_id == trans_id:
-        #             self.abort_transaction(t) 
-        #             return AlgorithmAlgorithmResponse(
-        #                 allowed=False, 
-        #                 message=f"Transaction {trans_id} aborted due to deadlock."
-        #             )
-        #         else:
-        #             return AlgorithmAlgorithmResponse(
-        #                 allowed=False, 
-        #                 message=f"Transaction {trans_id} must wait (deadlock detected, victim is {victim_id})."
-        #             )
-        #     else:
-        #         return AlgorithmAlgorithmResponse(
-        #             allowed=False, 
-        #             message=f"Transaction {trans_id} must wait for lock on {obj_id}."
-        #         )
     
     def commit_transaction(self, t: Transaction) -> None:
         """Commit transaction and release locks"""
