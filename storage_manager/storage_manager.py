@@ -979,44 +979,201 @@ class StorageManager:
 
 
     def delete_block(self, data_deletion: DataDeletion) -> int:
-        # hapus data dari disk dan update indexes (efficient - no rebuild!)
         table_name = data_deletion.table
 
-        # cek tabel ada ga
         if table_name not in self.tables:
             available = list(self.tables.keys()) if self.tables else "tidak ada"
             raise ValueError(f"Tabel '{table_name}' tidak ditemukan. Tersedia: {available}")
 
-        # load rows
         all_rows = self._load_table_rows(table_name)
         if not all_rows:
             print(f"tidak ada baris ditemukan di tabel '{table_name}'")
             return 0
 
-        # tentuin rows yang di-keep dan track yang dihapus buat update index
         conditions = getattr(data_deletion, "conditions", []) or []
+        rows_to_delete: List[Dict[str, Any]] = []
         rows_to_keep: List[Dict[str, Any]] = []
-        deleted_record_ids: set[int] = set()  # set of deleted record_ids
+        deleted_record_ids: set[int] = set()
 
         for record_id, row in enumerate(all_rows):
             if self._row_matches_all_conditions(row, conditions):
+                rows_to_delete.append(row)
                 deleted_record_ids.add(record_id)
             else:
                 rows_to_keep.append(row)
 
-        if not deleted_record_ids:
+        if not rows_to_delete:
             print(f"tidak ada baris yang cocok untuk dihapus di tabel '{table_name}'")
             return 0
 
-        # efficient index update: delete entries + shift record_ids (no rebuild!)
-        self._update_indexes_after_delete_efficient(table_name, all_rows, deleted_record_ids)
+        self._check_and_handle_foreign_key_constraints(
+            table_name, 
+            rows_to_delete,
+            action_type='delete'
+        )
 
-        # simpen rows yang tersisa balik ke disk
+        self._update_indexes_after_delete_efficient(table_name, all_rows, deleted_record_ids)
         self._save_table_rows(table_name, rows_to_keep)
 
         deleted_count = len(deleted_record_ids)
-        print(f"dihapus {deleted_count} baris dari tabel '{table_name}' (efficient - no rebuild!)")
+        # Deleted {deleted_count} rows from '{table_name}'
         return deleted_count
+
+
+    def _check_and_handle_foreign_key_constraints(
+        self,
+        parent_table: str,
+        rows_to_delete: List[Dict[str, Any]],
+        action_type: str = 'delete'
+    ) -> None:
+        # First pass: validate all constraints before making any changes
+        actions_to_perform = []
+        
+        for child_table, meta in self.tables.items():
+            for fk in meta.get("foreign_keys", []):
+                if fk["references_table"] != parent_table:
+                    continue
+                
+                fk_column = fk["column"]
+                ref_column = fk["references_column"]
+                on_delete = fk.get("on_delete", "NO ACTION").upper()
+                
+                if action_type != 'delete':
+                    continue
+                
+                pk_values_to_delete = set()
+                for row in rows_to_delete:
+                    if ref_column in row:
+                        pk_values_to_delete.add(row[ref_column])
+                
+                if not pk_values_to_delete:
+                    continue
+                
+                child_rows = self._load_table_rows(child_table)
+                affected_child_rows = [
+                    row for row in child_rows 
+                    if fk_column in row and row[fk_column] in pk_values_to_delete
+                ]
+                
+                if not affected_child_rows:
+                    continue
+                
+                # Validate constraints first
+                if on_delete == "RESTRICT" or on_delete == "NO ACTION":
+                    raise ValueError(
+                        f"Cannot delete from '{parent_table}': "
+                        f"{len(affected_child_rows)} child record(s) exist in '{child_table}' "
+                        f"(foreign key constraint on column '{fk_column}'). "
+                        f"Action: {on_delete}"
+                    )
+                elif on_delete == "SET NULL":
+                    # Validate that column is nullable BEFORE making changes
+                    child_columns = self._get_column_definitions(child_table)
+                    fk_col_def = next((c for c in child_columns if c.name == fk_column), None)
+                    
+                    if fk_col_def and not fk_col_def.is_nullable:
+                        raise ValueError(
+                            f"Cannot SET NULL on '{child_table}.{fk_column}': "
+                            f"column is NOT NULL"
+                        )
+                    # Queue the action
+                    actions_to_perform.append(('SET_NULL', child_table, affected_child_rows, fk_column))
+                    
+                elif on_delete == "CASCADE":
+                    # Queue the action
+                    actions_to_perform.append(('CASCADE', child_table, affected_child_rows, fk_column))
+                    
+                else:
+                    raise ValueError(
+                        f"Cannot delete from '{parent_table}': "
+                        f"foreign key constraint exists in '{child_table}' "
+                        f"(unknown ON DELETE action: {on_delete})"
+                    )
+        
+        # Second pass: perform all queued actions (after all validations passed)
+        for action_type, child_table, affected_rows, fk_column in actions_to_perform:
+            if action_type == 'CASCADE':
+                # CASCADE: deleting {len(affected_rows)} child rows from '{child_table}'
+                self._cascade_delete_child_rows(child_table, affected_rows)
+            elif action_type == 'SET_NULL':
+                # SET NULL: updating {len(affected_rows)} child rows in '{child_table}'
+                self._set_null_child_rows(child_table, affected_rows, fk_column)
+
+
+    def _cascade_delete_child_rows(
+        self,
+        child_table: str,
+        child_rows_to_delete: List[Dict[str, Any]]
+    ) -> None:
+        all_child_rows = self._load_table_rows(child_table)
+        
+        rows_to_delete_set = {
+            tuple(sorted(row.items())) for row in child_rows_to_delete
+        }
+        
+        rows_to_keep = [
+            row for row in all_child_rows
+            if tuple(sorted(row.items())) not in rows_to_delete_set
+        ]
+        
+        deleted_record_ids = set()
+        for i, row in enumerate(all_child_rows):
+            if tuple(sorted(row.items())) in rows_to_delete_set:
+                deleted_record_ids.add(i)
+        
+        self._check_and_handle_foreign_key_constraints(
+            child_table,
+            child_rows_to_delete,
+            action_type='delete'
+        )
+        
+        self._update_indexes_after_delete_efficient(
+            child_table,
+            all_child_rows,
+            deleted_record_ids
+        )
+        
+        self._save_table_rows(child_table, rows_to_keep)
+
+
+    def _set_null_child_rows(
+        self,
+        child_table: str,
+        child_rows_to_update: List[Dict[str, Any]],
+        fk_column: str
+    ) -> None:
+        """Set FK column to NULL in child rows (validation already done)."""
+        all_child_rows = self._load_table_rows(child_table)
+        
+        rows_to_update_set = {
+            tuple(sorted(row.items())) for row in child_rows_to_update
+        }
+        
+        updated_rows_info = []
+        new_rows = []
+        
+        for record_id, row in enumerate(all_child_rows):
+            row_tuple = tuple(sorted(row.items()))
+            if row_tuple in rows_to_update_set:
+                old_row = row.copy()
+                new_row = row.copy()
+                new_row[fk_column] = None
+                new_rows.append(new_row)
+                updated_rows_info.append((record_id, old_row, new_row))
+            else:
+                new_rows.append(row)
+        
+        # Update indexes and save
+        self._update_indexes_after_update(child_table, updated_rows_info)
+        self._save_table_rows(child_table, new_rows)
+
+
+    def _get_primary_key_columns(self, table_name: str) -> List[str]:
+        if table_name not in self.tables:
+            return []
+        
+        table_meta = self.tables[table_name]
+        return table_meta.get("primary_keys", [])
 
     def _update_indexes_after_insert(self, table_name: str, new_rows: List[Dict[str, Any]]) -> None:
         # update index setelah insert rows baru

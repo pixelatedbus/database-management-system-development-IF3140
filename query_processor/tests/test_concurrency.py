@@ -170,18 +170,18 @@ class TestConcurrentTransactions(unittest.TestCase):
             if 'COMMIT' in result['query']:
                 self.assertTrue(result['success'], "Client 2 should commit successfully")
     
-    def test_02_wait_die_younger_waits(self):
-        """Test Wait-Die: Younger transaction waits for older transaction."""
+    def test_02_wait_die_older_waits(self):
+        """Test Wait-Die: Older transaction waits for younger transaction to complete."""
         self._setup_test_tables()
         
-        # Client 1 (older, lower timestamp) updates account 1
+        # Client 1 (younger, lower client_id = lower timestamp) locks account 1 first
         queries_1 = [
             "BEGIN TRANSACTION",
             "UPDATE accounts SET balance = 1100 WHERE id = 1",
             "COMMIT"
         ]
         
-        # Client 2 (younger, higher timestamp) tries to read same account - should wait
+        # Client 2 (older, higher client_id = higher timestamp) tries same account - should WAIT
         queries_2 = [
             "BEGIN TRANSACTION",
             "SELECT * FROM accounts WHERE id = 1",
@@ -196,61 +196,61 @@ class TestConcurrentTransactions(unittest.TestCase):
         thread1.join()
         thread2.join()
         
-        # Both should succeed (client 2 waits for client 1)
+        # Both should succeed (older client 2 waits for younger client 1)
         self.assertIn(1, self.thread_results)
         self.assertIn(2, self.thread_results)
         
-        # Verify client 1 committed
+        # Verify client 1 (younger) committed
         client1_committed = any(r['success'] and 'COMMIT' in r['query'] for r in self.thread_results[1])
-        self.assertTrue(client1_committed, "Older transaction (client 1) should commit")
+        self.assertTrue(client1_committed, "Younger transaction (client 1) should commit")
         
-        # Client 2 should either succeed after waiting or be allowed to proceed
-        client2_results = self.thread_results[2]
-        self.assertGreater(len(client2_results), 0, "Client 2 should have results")
+        # Client 2 (older) should succeed after waiting
+        client2_committed = any(r['success'] and 'COMMIT' in r['query'] for r in self.thread_results[2])
+        self.assertTrue(client2_committed, "Older transaction (client 2) should succeed after waiting")
     
-    def test_03_wait_die_older_kills_younger(self):
-        """Test Wait-Die: Older transaction causes younger transaction to die."""
+    def test_03_wait_die_younger_dies(self):
+        """Test Wait-Die: Younger transaction dies when conflicting with older."""
         self._setup_test_tables()
         
-        # Client 2 (younger) starts first and locks account 1
-        queries_2 = [
+        # Client 1 (older, lower client_id) locks account 1 first
+        queries_1 = [
             "BEGIN TRANSACTION",
             "UPDATE accounts SET balance = 900 WHERE id = 1",
             "COMMIT"
         ]
         
-        # Client 1 (older) tries to access same account - younger should die
-        queries_1 = [
+        # Client 2 (younger, higher client_id) tries to access same account - should DIE
+        queries_2 = [
             "BEGIN TRANSACTION",
             "UPDATE accounts SET balance = 1200 WHERE id = 1",
             "COMMIT"
         ]
         
-        thread2 = threading.Thread(target=self._execute_transaction, args=(2, queries_2))
-        thread1 = threading.Thread(target=self._execute_transaction, args=(1, queries_1, 0.3))
+        thread1 = threading.Thread(target=self._execute_transaction, args=(1, queries_1))
+        thread2 = threading.Thread(target=self._execute_transaction, args=(2, queries_2, 0.3))
         
-        thread2.start()
         thread1.start()
-        thread2.join()
+        thread2.start()
         thread1.join()
+        thread2.join()
         
         # Check results
         self.assertIn(1, self.thread_results)
         self.assertIn(2, self.thread_results)
         
-        # One transaction should be aborted (younger one)
+        # Younger transaction (client 2) should be aborted/die
         client2_aborted = any(
             not r['success'] and ('aborted' in r['message'].lower() or 'died' in r['message'].lower())
             for r in self.thread_results[2]
         )
         
-        # Older transaction should succeed
+        # Older transaction (client 1) should succeed
         client1_committed = any(r['success'] and 'COMMIT' in r['query'] for r in self.thread_results[1])
         
-        # Either client 2 was aborted OR client 1 succeeded (or both)
+        # Verify Wait-Die: younger dies, older succeeds
         self.assertTrue(
             client2_aborted or client1_committed,
-            "Wait-Die protocol should cause younger to die or older to succeed"
+            "Wait-Die: younger transaction should die, older should succeed"
         )
     
     def test_04_deadlock_prevention_multiple_resources(self):

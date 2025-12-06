@@ -1,339 +1,215 @@
-# Concurrency Control Manager - Timestamp-Based Algorithm
+# Concurrency Control Manager
 
 ## Overview
-This is the **Concurrency Control Manager** component for the mini Database Management System (mDBMS) project. This implementation focuses on the **Timestamp-Based Concurrency Control Algorithm** along with supporting data structures including **Queue**, **PriorityQueue**, and **Schedule**.
+This is the **Concurrency Control Manager** component for the Database Management System (DBMS) project. The CCM provides multiple concurrency control algorithms to ensure transaction isolation and data consistency in a multi-user database environment.
 
-## Team Member
-- **Component**: Concurrency Control Manager
-- **Algorithms Implemented**: Timestamp-Based Concurrency Control
-- **Supporting Classes**: Queue, PriorityQueue, PriorityItem, Schedule
+## Algorithms Implemented
+The CCM supports four different concurrency control algorithms:
+1. **Lock-Based (Wait-Die)** - Pessimistic locking with deadlock prevention
+2. **Timestamp-Based** - Timestamp ordering protocol
+3. **Validation-Based (Optimistic)** - Optimistic concurrency control with validation phase
+4. **MVCC** - Multi-Version Concurrency Control with three variants (MVTO, MV2PL, Snapshot Isolation)
 
-## Components Implemented
+## Algorithm Details
 
-### 1. Queue (FIFO Queue)
-A generic First-In-First-Out (FIFO) queue implementation.
+### 1. Lock-Based (Wait-Die)
+Uses **Wait-Die** protocol to prevent deadlocks:
+- **Older transactions wait** for younger ones
+- **Younger transactions abort** when conflicting with older ones
+- Supports shared (READ) and exclusive (WRITE) locks
+- Lock upgrade from READ to WRITE when needed
 
-**Features:**
-- `enqueue(item)` - Add item to the back of queue
-- `dequeue()` - Remove and return item from front
-- `is_empty()` - Check if queue is empty
-- `size()` - Get number of items in queue
-- `peek()` - View front item without removing
-- `clear()` - Clear all items
-
-**Time Complexity:**
-- Enqueue: O(1)
-- Dequeue: O(n) due to list.pop(0)
-- Peek: O(1)
-
-### 2. PriorityItem
-A wrapper class for items in the priority queue that includes priority value and comparison operators.
-
-**Features:**
-- Supports comparison operators (`<`, `<=`, `>`, `>=`, `==`)
-- Lower priority value = higher priority
-- Generic type support
-
-### 3. PriorityQueue (Min-Heap Implementation)
-A priority queue implemented using a min-heap data structure.
-
-**Features:**
-- `enqueue(item, priority)` - Add item with priority
-- `dequeue()` - Remove and return highest priority item
-- `is_empty()` - Check if queue is empty
-- `size()` - Get number of items
-- `peek()` - View highest priority item without removing
-- `clear()` - Clear all items
-
-**Time Complexity:**
-- Enqueue: O(log n)
-- Dequeue: O(log n)
-- Peek: O(1)
-
-**Heap Properties:**
-- Min-heap: parent priority ≤ children priorities
-- Array-based representation
-- Parent at index i, children at 2i+1 and 2i+2
-
-### 4. TimestampBased Algorithm
-Implementation of the Timestamp-Based Concurrency Control algorithm.
-
-**Principle:**
+### 2. Timestamp-Based
+Implements timestamp ordering protocol:
 - Each transaction gets a timestamp at start
-- Each object tracks read_timestamp (R-TS) and write_timestamp (W-TS)
-- Decisions based on timestamp comparisons
+- Objects track read and write timestamps
+- Operations validated against timestamp ordering rules
+- Aborts transactions that violate serialization order
 
-**Rules:**
+### 3. Validation-Based (Optimistic)
+Optimistic concurrency control approach:
+- Transactions execute without restrictions
+- Validation performed at commit time
+- Checks for conflicts with concurrent transactions
+- Aborts if validation fails
 
-**For READ operation by transaction T on object X:**
-- ✓ **Allow** if: TS(T) ≥ W-TS(X)
-  - Update R-TS(X) = max(R-TS(X), TS(T))
-- ✗ **Deny** if: TS(T) < W-TS(X)
-  - T is trying to read obsolete data
-
-**For WRITE operation by transaction T on object X:**
-- ✓ **Allow** if: TS(T) ≥ R-TS(X) AND TS(T) ≥ W-TS(X)
-  - Update W-TS(X) = TS(T)
-- ✗ **Deny** if: TS(T) < R-TS(X) OR TS(T) < W-TS(X)
-  - T is trying to overwrite data read/written by newer transaction
-
-**Advantages:**
-- Deadlock-free (no waiting)
-- Serializable schedules
-- Good for read-heavy workloads
-
-**Disadvantages:**
-- May cause transaction aborts
-- Cascading aborts possible
-- Higher abort rate than locking
+### 4. MVCC (Multi-Version Concurrency Control)
+Maintains multiple versions of data:
+- **MVTO** - Multi-Version Timestamp Ordering
+- **MV2PL** - Multi-Version Two-Phase Locking
+- **Snapshot Isolation** - First-Committer-Win or First-Updater-Win policies
+- Readers don't block writers, writers don't block readers
 
 ## Project Structure
 
 ```
 concurrency_control_manager/
-├── __init__.py
-├── cc_manager.py                    # Main CCManager class
-├── action.py                         # Action class
-├── transaction.py                    # Transaction class
-├── row.py                            # Row (database object) class
-├── response.py                       # Response protocol
-├── enums.py                          # Enumerations
-├── log_handler.py                    # Log handler
-├── algorithms/
-│   ├── __init__.py
-│   ├── base.py                      # Abstract base class
-│   ├── timestamp_based.py           # Timestamp-Based implementation
-│   ├── lock_based.py                # Lock-Based (other group)
-│   ├── mvcc.py                      # MVCC (other group)
-│   └── validation_based.py          # Validation-Based (other group)
-├── test_timestamp_based.py          # Unit tests for algorithm
-├── driver.py                        # Demo program
-└── README.md                        # This file
+├── cc_log.txt                       # Log file
+├── README.md                        # This file
+├── docs/
+│   └── class_diagram.puml           # PlantUML class diagram
+└── src/
+    ├── __init__.py
+    ├── cc_manager.py                # Main CCManager class
+    ├── action.py                    # Action class
+    ├── transaction.py               # Transaction class
+    ├── row.py                       # Row (database object) class
+    ├── response.py                  # Response classes
+    ├── enums.py                     # Enumerations
+    ├── log_handler.py               # Transaction log handler
+    ├── algorithms/
+    │   ├── __init__.py
+    │   ├── base.py                  # Abstract base class
+    │   ├── lock_based.py            # Lock-Based (Wait-Die)
+    │   ├── timestamp_based.py       # Timestamp-Based
+    │   ├── validation_based.py      # Validation-Based (Optimistic)
+    │   └── mvcc.py                  # MVCC (3 variants)
+    └── test/
+        ├── unit_test.py             # Comprehensive unit tests
+        ├── driver.py                # Demo program
+        └── [other test files]       # Algorithm-specific tests
 ```
 
 ## Installation & Setup
 
-No external dependencies required. Only standard Python libraries are used:
-- `datetime` - For timestamps
-- `typing` - For type hints
-- `abc` - For abstract base classes
-- `enum` - For enumerations
+No external dependencies required. Uses only standard Python libraries.
 
 **Python Version:** Python 3.7+
 
 ## Running Tests
 
-### Run Schedule Tests (Queue, PriorityQueue, Schedule)
+### Run Unit Tests
 ```bash
-cd /path/to/database-management-system-development-IF3140
-python -m unittest concurrency_control_manager.test_schedule -v
+cd concurrency_control_manager/src
+python test/unit_test.py
 ```
 
-**Expected Result:** 18 tests passed
+Tests cover:
+- Basic CCManager functionality
+- All four algorithms (Lock-Based, Timestamp-Based, Validation-Based, MVCC)
+- Transaction lifecycle management
+- Conflict detection and resolution
 
-### Run Timestamp-Based Algorithm Tests
+### Run Integration Tests
 ```bash
-cd /path/to/database-management-system-development-IF3140
-python -m unittest concurrency_control_manager.test_timestamp_based -v
+python test_main.py
 ```
 
-**Expected Result:** 18 tests passed
-
-### Run All Tests
-```bash
-cd /path/to/database-management-system-development-IF3140
-python -m unittest discover concurrency_control_manager -p "test_*.py" -v
-```
-
-**Expected Result:** 36 tests passed
-
-## Running Demo Program
-
-The driver program demonstrates 6 different scenarios:
-
-```bash
-cd /path/to/database-management-system-development-IF3140
-python -m concurrency_control_manager.driver
-```
-
-**Demos:**
-1. **Basic Operations** - Simple read and write
-2. **Serializable Schedule** - Valid T1 → T2 execution
-3. **Conflict Detection** - Detecting and aborting conflicting transactions
-4. **Multiple Objects** - Bank transfer scenario
-5. **Concurrent Transactions** - Interleaved operations
-6. **Algorithm Switching** - Changing concurrency control algorithm
+Tests all algorithms with concurrent transaction scenarios and logs results to a timestamped file.
 
 ## Usage Example
 
 ```python
-from concurrency_control_manager.cc_manager import CCManager
-from concurrency_control_manager.enums import AlgorithmType, ActionType
-from concurrency_control_manager.row import Row
+from concurrency_control_manager.src.cc_manager import CCManager
+from concurrency_control_manager.src.enums import AlgorithmType, ActionType
+from concurrency_control_manager.src.row import Row
 
-# Initialize with Timestamp-Based algorithm
-ccm = CCManager(AlgorithmType.TimestampBased)
+# Initialize CCManager with desired algorithm
+ccm = CCManager(AlgorithmType.LockBased, log_file="cc_log.txt")
 
-# Create a database object (row)
-account = Row("account_1", "accounts", {"id": 1, "balance": 1000})
+# Create a database object
+account = Row("account_1", "accounts", {"balance": 1000})
 
 # Begin transaction
 t1_id = ccm.begin_transaction()
 
-# Log object access
-ccm.log_object(account, t1_id)
-
-# Validate read operation
+# Validate operations
 response = ccm.validate_object(account, t1_id, ActionType.READ)
 if response.allowed:
-    print("Read allowed!")
-    # Perform actual read operation
-else:
-    print(f"Read denied: {response.message}")
-    ccm.abort_transaction(t1_id)
+    # Perform read operation
+    pass
 
-# Validate write operation
 response = ccm.validate_object(account, t1_id, ActionType.WRITE)
 if response.allowed:
-    print("Write allowed!")
-    # Perform actual write operation
+    # Perform write operation
+    pass
 else:
-    print(f"Write denied: {response.message}")
     ccm.abort_transaction(t1_id)
-
-# End transaction (commit)
+    
+# Commit transaction
 ccm.end_transaction(t1_id)
+
+# Switch algorithm (when no active transactions)
+ccm.set_algorithm(AlgorithmType.TimestampBased)
 ```
 
 ## API Reference
 
 ### CCManager
 
-Main interface for concurrency control.
-
-#### Methods:
+**`__init__(algorithm: AlgorithmType, log_file: str = "cc_log.txt")`**
+- Initialize CCManager with specified algorithm
 
 **`begin_transaction() -> int`**
-- Starts a new transaction
-- Returns: transaction ID
-
-**`log_object(obj: Row, transaction_id: int) -> None`**
-- Logs access to an object
-- Parameters:
-  - `obj`: Row object being accessed
-  - `transaction_id`: ID of transaction
+- Start a new transaction and return its ID
 
 **`validate_object(obj: Row, transaction_id: int, action: ActionType) -> Response`**
-- Validates if action is allowed
-- Parameters:
-  - `obj`: Row object
-  - `transaction_id`: Transaction ID
-  - `action`: ActionType.READ or ActionType.WRITE
-- Returns: Response with `allowed` (bool) and `message` (str)
+- Validate if an operation is allowed by the concurrency control algorithm
+- Returns Response with `allowed` (bool), `message` (str), and optional `value`
 
 **`end_transaction(transaction_id: int) -> None`**
-- Commits transaction
-- Parameters:
-  - `transaction_id`: Transaction ID
+- Commit the transaction
 
 **`abort_transaction(transaction_id: int) -> None`**
-- Aborts transaction
-- Parameters:
-  - `transaction_id`: Transaction ID
+- Abort the transaction and release resources
 
 **`set_algorithm(algorithm: AlgorithmType) -> None`**
-- Changes concurrency control algorithm
-- Can only switch when no active transactions
-- Parameters:
-  - `algorithm`: AlgorithmType enum value
+- Switch to a different concurrency control algorithm
+- Only allowed when no active transactions exist
 
-## Testing Results
+**`get_transaction_status(transaction_id: int) -> Optional[TransactionStatus]`**
+- Get current status of a transaction
 
-All tests pass successfully:
+**`get_active_transactions() -> Dict[int, Transaction]`**
+- Get all currently active transactions
 
-### Schedule Tests (18 tests)
-- ✓ Queue operations (enqueue, dequeue, peek, empty, size)
-- ✓ PriorityItem comparisons
-- ✓ PriorityQueue operations with priority ordering
-- ✓ Schedule action management (ready, blocked, removal)
+**`clear_completed_transactions() -> None`**
+- Remove terminated transactions from memory
 
-### Timestamp-Based Algorithm Tests (18 tests)
-- ✓ ObjectTimestamp operations
-- ✓ Read/Write validation rules
-- ✓ Conflict detection
-- ✓ Serializable schedule validation
-- ✓ Multiple objects handling
-- ✓ Transaction commit/abort
+## Key Features
 
-### Demo Program
-- ✓ All 6 demos executed successfully
-- ✓ Correct conflict detection and transaction abort
-- ✓ Proper timestamp ordering enforcement
+- **Four algorithms** supporting different concurrency control strategies
+- **Dynamic algorithm switching** at runtime
+- **Transaction lifecycle management** (Active → Committed/Aborted → Terminated)
+- **Conflict detection and resolution** specific to each algorithm
+- **Comprehensive logging** for debugging and audit trails
+- **Deadlock prevention** (Lock-Based Wait-Die)
+- **Multi-version support** (MVCC with 3 variants)
+- **Type-safe** with full type hints
 
-## Implementation Details
+## Algorithm Comparison
 
-### Timestamp Assignment
-- Timestamps assigned using `datetime.now()` at transaction start
-- Ensures unique ordering of transactions
-- More recent transaction = higher timestamp value
+| Feature | Lock-Based | Timestamp | Validation | MVCC |
+|---------|-----------|-----------|------------|------|
+| **Blocking** | Yes (older waits) | No | No | Depends on variant |
+| **Deadlock** | Prevented (Wait-Die) | Free | Free | Free |
+| **Overhead** | Lock management | Timestamp checks | Validation phase | Version storage |
+| **Best For** | High contention | Read-heavy | Low contention | Read-heavy, analytical |
+| **Abort Rate** | Low | Medium | Medium | Low |
 
-### Conflict Resolution
-- **Thomas Write Rule NOT implemented** (strict timestamp ordering)
-- When conflict detected: transaction must abort
-- No waiting mechanism (deadlock-free)
+## Integration with DBMS
 
-### Abort Handling
-- Aborted transactions removed from schedule
-- Timestamps of committed operations remain
-- No cascading rollback needed (due to strict ordering)
-
-## Performance Considerations
-
-### Time Complexity:
-- `begin_transaction()`: O(1)
-- `validate_object()`: O(1) average
-- `end_transaction()`: O(1)
-- Schedule operations: O(log n) for priority queue
-
-### Space Complexity:
-- O(N) for N transactions
-- O(M) for M unique objects accessed
-- O(K) for K actions in schedule
-
-### Scalability:
-- Efficient for read-heavy workloads
-- May have high abort rate with many writes
-- No lock management overhead
-- Suitable for distributed systems (with distributed timestamps)
-
-## Known Limitations
-
-1. **Abort Rate**: Higher than lock-based for write-heavy workloads
-2. **Starvation**: Older transactions more likely to abort
-3. **Timestamp Precision**: Limited by `datetime.now()` precision
-4. **No Thomas Write Rule**: Strict ordering, more aborts
-
-## Future Enhancements
-
-Possible improvements:
-1. **Thomas Write Rule**: Reduce aborts for certain write patterns
-2. **Timestamp Intervals**: Reduce conflicts
-3. **Multiversion Timestamp Ordering**: Combine with MVCC
-4. **Distributed Timestamps**: For distributed DBMS
-5. **Adaptive Algorithm Switching**: Based on workload characteristics
+The CCM is integrated with other DBMS components:
+- **Query Processor** - Validates operations before execution
+- **Storage Manager** - Coordinates data access
+- **Failure Recovery Manager** - Separate logging for recovery
+- **Query Optimizer** - Independent optimization layer
 
 ## References
 
-1. Database System Concepts (Silberschatz, Korth, Sudarshan)
-2. Transaction Processing (Gray & Reuter)
-3. IF3140 - Sistem Basis Data Course Materials
-
-## Contact
-
-For questions or issues regarding this implementation, please contact the development team.
+- Database System Concepts (Silberschatz, Korth, Sudarshan)
+- Transaction Processing (Gray & Reuter)
+- IF3140 Course Materials - Institut Teknologi Bandung
 
 ---
 
-**Course**: IF3140 - Sistem Basis Data
-**Institution**: Institut Teknologi Bandung
-**Year**: 2025
+## Contributor
+* 13523074 - Ahsan Malik Al Farisi
+* 13523056 - Salman Hanif
+* 13622076 - Ziyan Agil Nur Ramadhan
+* 13522004 - Eduardus Alvito Kristiadi
+* 13523026 - Bertha Soliany Frandy
+
+**Course**: IF3140 - Sistem Basis Data  
+**Institution**: Institut Teknologi Bandung  
+**Year**: 2024/2025

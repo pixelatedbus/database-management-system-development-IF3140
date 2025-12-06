@@ -408,6 +408,51 @@ class Parser:
             references.add_child(QueryTree("IDENTIFIER", ref_col))
             fk = QueryTree("FOREIGN_KEY", "")
             fk.add_child(references)
+            
+            # Parse ON DELETE or ON UPDATE action
+            while self.match(TokenType.KEYWORD_ON) or (self.match(TokenType.IDENTIFIER) and self.match_value("ON")):
+                self.advance()
+                
+                if self.match(TokenType.KEYWORD_DELETE) or (self.match(TokenType.IDENTIFIER) and self.match_value("DELETE")):
+                    self.advance()
+                    # Parse action: CASCADE, RESTRICT, SET NULL, NO ACTION
+                    if self.match(TokenType.KEYWORD_CASCADE) or (self.match(TokenType.IDENTIFIER) and self.match_value("CASCADE")):
+                        fk.add_child(QueryTree("ON_DELETE", "CASCADE"))
+                        self.advance()
+                    elif self.match(TokenType.KEYWORD_RESTRICT) or (self.match(TokenType.IDENTIFIER) and self.match_value("RESTRICT")):
+                        fk.add_child(QueryTree("ON_DELETE", "RESTRICT"))
+                        self.advance()
+                    elif self.match(TokenType.KEYWORD_SET) or (self.match(TokenType.IDENTIFIER) and self.match_value("SET")):
+                        self.advance()
+                        if self.match(TokenType.LITERAL_NULL) or (self.match(TokenType.IDENTIFIER) and self.match_value("NULL")):
+                            fk.add_child(QueryTree("ON_DELETE", "SET NULL"))
+                            self.advance()
+                    elif self.match(TokenType.IDENTIFIER) and self.match_value("NO"):
+                        self.advance()
+                        if self.match(TokenType.IDENTIFIER) and self.match_value("ACTION"):
+                            fk.add_child(QueryTree("ON_DELETE", "NO ACTION"))
+                            self.advance()
+                
+                elif self.match(TokenType.KEYWORD_UPDATE) or (self.match(TokenType.IDENTIFIER) and self.match_value("UPDATE")):
+                    self.advance()
+                    # Parse action: CASCADE, RESTRICT, SET NULL, NO ACTION
+                    if self.match(TokenType.KEYWORD_CASCADE) or (self.match(TokenType.IDENTIFIER) and self.match_value("CASCADE")):
+                        fk.add_child(QueryTree("ON_UPDATE", "CASCADE"))
+                        self.advance()
+                    elif self.match(TokenType.KEYWORD_RESTRICT) or (self.match(TokenType.IDENTIFIER) and self.match_value("RESTRICT")):
+                        fk.add_child(QueryTree("ON_UPDATE", "RESTRICT"))
+                        self.advance()
+                    elif self.match(TokenType.KEYWORD_SET) or (self.match(TokenType.IDENTIFIER) and self.match_value("SET")):
+                        self.advance()
+                        if self.match(TokenType.LITERAL_NULL) or (self.match(TokenType.IDENTIFIER) and self.match_value("NULL")):
+                            fk.add_child(QueryTree("ON_UPDATE", "SET NULL"))
+                            self.advance()
+                    elif self.match(TokenType.IDENTIFIER) and self.match_value("NO"):
+                        self.advance()
+                        if self.match(TokenType.IDENTIFIER) and self.match_value("ACTION"):
+                            fk.add_child(QueryTree("ON_UPDATE", "NO ACTION"))
+                            self.advance()
+            
             return fk
         return None
 

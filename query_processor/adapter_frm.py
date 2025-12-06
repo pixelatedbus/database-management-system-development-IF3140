@@ -184,6 +184,95 @@ class AdapterFRM:
         """Trigger recovery process"""
         return self.frm.recover(criteria)
     
+    def recover_system_crash(self) -> None:
+        """
+        Recover from system crash on startup.
+        Performs REDO for committed transactions after last checkpoint.
+        Performs UNDO for uncommitted transactions.
+        """
+        logger.info("[FRM] Starting system crash recovery...")
+        
+        # Get recovery operations from FRM
+        try:
+            data_execs = self.frm.recover_system_crash()
+        except FileNotFoundError as e:
+            logger.info(f"[FRM] No log files found - clean start (no recovery needed)")
+            return
+        except Exception as e:
+            logger.error(f"[FRM] Error during recovery: {e}")
+            raise
+        
+        if not data_execs:
+            logger.info("[FRM] No recovery operations needed (clean shutdown or no checkpoint)")
+            return
+        
+        # Apply recovery operations to storage
+        if not self.query_processor:
+            logger.error("[FRM] Query processor not set! Cannot apply recovery operations")
+            return
+        
+        adapter_storage = self.query_processor.adapter_storage
+        
+        logger.info(f"[FRM] Applying {len(data_execs)} recovery operation(s) to storage")
+        
+        from storage_manager.models import DataWrite, DataUpdate, DataDeletion
+        
+        for i, data_exec in enumerate(data_execs, 1):
+            # Get table name
+            if hasattr(data_exec, 'table_name'):
+                table_name = data_exec.table_name
+            elif hasattr(data_exec, 'table'):
+                table_name = data_exec.table
+            else:
+                logger.error(f"[FRM RECOVERY] Operation {i}: No table attribute found!")
+                continue
+            
+            try:
+                if isinstance(data_exec, DataWrite):
+                    # REDO INSERT or UNDO DELETE (by inserting)
+                    if hasattr(data_exec, 'column') and hasattr(data_exec, 'new_value'):
+                        adapter_storage.write_data(
+                            table_name=table_name,
+                            columns=data_exec.column,
+                            values=data_exec.new_value,
+                            conditions=[]
+                        )
+                        logger.info(f"[FRM RECOVERY] {i}. Applied INSERT to '{table_name}': {dict(zip(data_exec.column, data_exec.new_value))}")
+                    elif hasattr(data_exec, 'data'):
+                        columns = list(data_exec.data.keys())
+                        values = [data_exec.data[col] for col in columns]
+                        adapter_storage.write_data(
+                            table_name=table_name,
+                            columns=columns,
+                            values=values,
+                            conditions=[]
+                        )
+                        logger.info(f"[FRM RECOVERY] {i}. Applied INSERT to '{table_name}': {data_exec.data}")
+                
+                elif isinstance(data_exec, DataUpdate):
+                    # REDO UPDATE or UNDO UPDATE (by reversing)
+                    if hasattr(data_exec, 'old_data') and hasattr(data_exec, 'new_data'):
+                        adapter_storage.batch_update_data(
+                            table_name=table_name,
+                            old_data_list=[data_exec.old_data],
+                            new_data_list=[data_exec.new_data]
+                        )
+                        logger.info(f"[FRM RECOVERY] {i}. Applied UPDATE to '{table_name}': {data_exec.old_data} -> {data_exec.new_data}")
+                
+                elif isinstance(data_exec, DataDeletion):
+                    # REDO DELETE or UNDO INSERT (by deleting)
+                    adapter_storage.delete_data(
+                        table_name=table_name,
+                        conditions=data_exec.conditions if hasattr(data_exec, 'conditions') else []
+                    )
+                    logger.info(f"[FRM RECOVERY] {i}. Applied DELETE from '{table_name}'")
+                    
+            except Exception as e:
+                logger.error(f"[FRM RECOVERY] Error applying operation {i}: {e}")
+                # Continue with other operations
+        
+        logger.info(f"[FRM] System crash recovery completed: {len(data_execs)} operation(s) applied")
+    
     def _create_checkpoint(self) -> None:
         """Create a checkpoint: flush all buffered transactions and write checkpoint log"""
         # Flush all current WAL entries to disk first

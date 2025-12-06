@@ -94,7 +94,9 @@ class AdapterCCM:
         
         self.ccm.log_object(cc_row, transaction_id)
 
-
+    def set_algorithm(self, algorithm: AlgorithmType) -> None:
+        """Change the concurrency control algorithm"""
+        self.ccm.set_algorithm(algorithm)
 
 if __name__ == "__main__":
     

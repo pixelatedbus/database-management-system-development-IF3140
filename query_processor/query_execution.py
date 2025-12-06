@@ -61,7 +61,49 @@ class QueryExecution:
         self.optimizer_adapter = AdapterOptimizer()
         
         # Track limit values per transaction for thread safety
-        self.limit = {} 
+        self.limit = {}
+    
+    def _validate_with_retry(self, transaction_id: int, table_name: str, action_type: str, max_wait_time: float = 30.0):
+        """
+        Helper method to validate access with retry logic for waiting transactions.
+        
+        Args:
+            transaction_id: Transaction ID
+            table_name: Table to access
+            action_type: 'read' or 'write'
+            max_wait_time: Maximum time to wait in seconds
+            
+        Raises:
+            TransactionAbortedException: If transaction is aborted or timeout
+        """
+        import time
+        wait_interval = 0.1  # seconds
+        total_waited = 0
+        
+        while total_waited < max_wait_time:
+            response = self.ccm_adapter.validate_action(transaction_id, table_name, action_type)
+            
+            if response.allowed:
+                # Log the object access
+                self.ccm_adapter.log_object(transaction_id, table_name)
+                return  # Success
+            
+            # Check if waiting or aborted
+            if hasattr(response, 'waiting') and response.waiting:
+                logger.info(f"[CCM] Transaction {transaction_id} (Older) must wait for lock on {table_name}.")
+                time.sleep(wait_interval)
+                total_waited += wait_interval
+            else:
+                # Transaction was aborted
+                logger.info(f"[CCM] denied {action_type.upper()} access: {response.message}")
+                msg_lower = response.message.lower()
+                if "aborted" in msg_lower or "died" in msg_lower:
+                    raise TransactionAbortedException(transaction_id, response.message)
+                raise TransactionAbortedException(transaction_id, response.message)
+        
+        # Timeout waiting for lock
+        logger.error(f"[CCM] Transaction {transaction_id} timed out waiting for lock on {table_name}")
+        raise TransactionAbortedException(transaction_id, f"Timeout waiting for lock on {table_name}") 
     
     # for select and join methods
     def _get_execution_method(self, node: QueryTree) -> str:
@@ -118,16 +160,7 @@ class QueryExecution:
             
             # Validate READ access with CCM
             if self.ccm_adapter and transaction_id:
-                response = self.ccm_adapter.validate_action(transaction_id, table_name, 'read')
-                if not response.allowed:
-                    logger.info(f"[PROJECT] CCM denied READ access: {response.message}")
-                    # Check if transaction was aborted (deadlock prevention: Wait-Die)
-                    msg_lower = response.message.lower()
-                    if "aborted" in msg_lower or "died" in msg_lower:
-                        raise TransactionAbortedException(transaction_id, response.message)
-                    return []
-                # Log the object access
-                self.ccm_adapter.log_object(transaction_id, table_name)
+                self._validate_with_retry(transaction_id, table_name, 'read')
             
             if query_tree.val == "*":
                 logger.info(f"[PROJECT] SELECT * from '{table_name}' (optimized - direct storage call)")
@@ -263,16 +296,7 @@ class QueryExecution:
 
             # Validate READ access with CCM
             if self.ccm_adapter and transaction_id:
-                response = self.ccm_adapter.validate_action(transaction_id, table_name, 'read')
-                if not response.allowed:
-                    logger.info(f"[FILTER] CCM denied READ access: {response.message}")
-                    # Check if transaction was aborted (deadlock prevention: Wait-Die)
-                    msg_lower = response.message.lower()
-                    if "aborted" in msg_lower or "died" in msg_lower:
-                        raise TransactionAbortedException(transaction_id, response.message)
-                    return []
-                # Log the object access
-                self.ccm_adapter.log_object(transaction_id, table_name)
+                self._validate_with_retry(transaction_id, table_name, 'read')
 
             # Pushdown if possible            
             try:
@@ -306,7 +330,7 @@ class QueryExecution:
         source_data = self.execute_node(source, transaction_id)
         
         if not source_data:
-            print("[FILTER] No data from source")
+            # [FILTER] No data from source
             return []
         
         filtered_data = []
@@ -337,7 +361,7 @@ class QueryExecution:
         source_data = self.execute_node(source, transaction_id)
         
         if not source_data:
-            print("[SORT] No data to sort")
+            # [SORT] No data to sort
             return []
         
         logger.info(f"[SORT] Sorting by '{column_name}' {direction}")
@@ -380,16 +404,7 @@ class QueryExecution:
         
         # Validate READ access with CCM
         if self.ccm_adapter and transaction_id:
-            response = self.ccm_adapter.validate_action(transaction_id, table_name, 'read')
-            if not response.allowed:
-                logger.info(f"[RELATION] CCM denied READ access: {response.message}")
-                # Check if transaction was aborted (deadlock prevention: Wait-Die)
-                msg_lower = response.message.lower()
-                if "aborted" in msg_lower or "died" in msg_lower:
-                    raise TransactionAbortedException(transaction_id, response.message)
-                return []
-            # Log the object access
-            self.ccm_adapter.log_object(transaction_id, table_name)
+            self._validate_with_retry(transaction_id, table_name, 'read')
         
         # Call storage manager to read all rows
         # TODO: Implement different access methods (hash_index, btree_index) when available
@@ -421,7 +436,7 @@ class QueryExecution:
         Value: alias name
         """
         alias_name = query_tree.val
-        print(f"\n[ALIAS] Applying alias '{alias_name}'")
+        # [ALIAS] Applying alias '{alias_name}'
         
         source = query_tree.childs[0]
         return self.execute_node(source, transaction_id)
@@ -596,16 +611,7 @@ class QueryExecution:
         
         # Validate WRITE access with CCM
         if self.ccm_adapter and transaction_id:
-            response = self.ccm_adapter.validate_action(transaction_id, table_name, 'write')
-            if not response.allowed:
-                logger.info(f"[UPDATE] CCM denied WRITE access: {response.message}")
-                # Check if transaction was aborted (deadlock prevention: Wait-Die)
-                msg_lower = response.message.lower()
-                if "aborted" in msg_lower or "died" in msg_lower:
-                    raise TransactionAbortedException(transaction_id, response.message)
-                return 0
-            # Log the object access
-            self.ccm_adapter.log_object(transaction_id, table_name)
+            self._validate_with_retry(transaction_id, table_name, 'write')
         
         try:
             # STEP 1: READ (with buffered operations applied)
@@ -733,16 +739,7 @@ class QueryExecution:
         
         # Validate WRITE access with CCM
         if self.ccm_adapter and transaction_id:
-            response = self.ccm_adapter.validate_action(transaction_id, table_name, 'write')
-            if not response.allowed:
-                logger.info(f"[INSERT] CCM denied WRITE access: {response.message}")
-                # Check if transaction was aborted (deadlock prevention: Wait-Die)
-                msg_lower = response.message.lower()
-                if "aborted" in msg_lower or "died" in msg_lower:
-                    raise TransactionAbortedException(transaction_id, response.message)
-                return 0
-            # Log the object access
-            self.ccm_adapter.log_object(transaction_id, table_name)
+            self._validate_with_retry(transaction_id, table_name, 'write')
         
         try:
             # Prepare new data for FRM logging
@@ -783,7 +780,7 @@ class QueryExecution:
         Execute DELETE_QUERY node
         Structure: DELETE_QUERY with children: [RELATION, FILTER?]
         """
-        print(f"\n[DELETE] Executing DELETE statement...")
+        # [DELETE] Executing DELETE statement...
         
         if len(query_tree.childs) < 1:
             raise ValueError("DELETE requires RELATION")
@@ -811,16 +808,7 @@ class QueryExecution:
         
         # Validate WRITE access with CCM
         if self.ccm_adapter and transaction_id:
-            response = self.ccm_adapter.validate_action(transaction_id, table_name, 'write')
-            if not response.allowed:
-                logger.info(f"[DELETE] CCM denied WRITE access: {response.message}")
-                # Check if transaction was aborted (deadlock prevention: Wait-Die)
-                msg_lower = response.message.lower()
-                if "aborted" in msg_lower or "died" in msg_lower:
-                    raise TransactionAbortedException(transaction_id, response.message)
-                return 0
-            # Log the object access
-            self.ccm_adapter.log_object(transaction_id, table_name)
+            self._validate_with_retry(transaction_id, table_name, 'write')
         
         try:
             # Read rows before deletion for FRM logging
@@ -867,7 +855,7 @@ class QueryExecution:
     
     # TODO: implement transaction management with ccm
     def execute_transaction(self, query_tree: QueryTree, transaction_id: int) -> None:
-        print(f"\n[TRANSACTION] Executing BEGIN TRANSACTION...")
+        # [TRANSACTION] Executing BEGIN TRANSACTION...
         logger.info(f"[TRANSACTION] -> CCM: Start transaction")
         
         # Execute all statements in transaction
@@ -882,7 +870,7 @@ class QueryExecution:
     
     # TODO: TEStING!!!! DAN INTEGRASIIN LEBIH BAIK
     def execute_create_table(self, query_tree: QueryTree, transaction_id: int) -> None:
-        print(f"\n[CREATE TABLE] Executing CREATE TABLE statement...")
+        # [CREATE TABLE] Executing CREATE TABLE statement...
         
         if len(query_tree.childs) < 2:
             raise ValueError("CREATE TABLE requires table name and column definitions")
@@ -933,18 +921,29 @@ class QueryExecution:
                 
                 elif constraint.type == "FOREIGN_KEY":
                     has_foreign_key = True
-                    # FOREIGN_KEY contains: [REFERENCES(table), IDENTIFIER(column)]
-                    ref_table = constraint.childs[0].val
-                    ref_column = constraint.childs[1].val
+                    # FOREIGN_KEY structure: FOREIGN_KEY -> REFERENCES(table_name) -> IDENTIFIER(column_name) [-> ON_DELETE] [-> ON_UPDATE]
+                    references_node = constraint.childs[0]  # REFERENCES node
+                    ref_table = references_node.val
+                    ref_column = references_node.childs[0].val  # IDENTIFIER child
+                    
+                    # Extract ON DELETE and ON UPDATE actions from remaining children
+                    on_delete = "RESTRICT"  # default
+                    on_update = "RESTRICT"  # default
+                    
+                    for child in constraint.childs[1:]:
+                        if child.type == "ON_DELETE":
+                            on_delete = child.val
+                        elif child.type == "ON_UPDATE":
+                            on_update = child.val
                     
                     foreign_keys.append(ForeignKey(
                         column=col_name,
                         references_table=ref_table,
                         references_column=ref_column,
-                        on_delete="RESTRICT",
-                        on_update="RESTRICT"
+                        on_delete=on_delete,
+                        on_update=on_update
                     ))
-                    logger.info(f"[CREATE TABLE]   - {col_name} {data_type_str} FOREIGN KEY REFERENCES {ref_table}({ref_column})")
+                    logger.info(f"[CREATE TABLE]   - {col_name} {data_type_str} FOREIGN KEY REFERENCES {ref_table}({ref_column}) ON DELETE {on_delete} ON UPDATE {on_update}")
                 else:
                     logger.info(f"[CREATE TABLE]   - {col_name} {data_type_str}")
             else:

@@ -1,6 +1,9 @@
 import sys
 import os
 import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -41,6 +44,15 @@ class QueryProcessor:
         
         # Set reference to self in FRM adapter for checkpoint functionality
         self.adapter_frm.query_processor = self
+        
+        # Perform system crash recovery on startup
+        try:
+            logger.info("[STARTUP] Checking for crash recovery...")
+            self.adapter_frm.recover_system_crash()
+            logger.info("[STARTUP] Crash recovery completed")
+        except Exception as e:
+            logger.error(f"[STARTUP] Error during crash recovery: {e}")
+            # Continue anyway - system can still operate
         
 
     def execute_query(self, query: str, client_id: int):
@@ -149,12 +161,10 @@ class QueryProcessor:
                         for op in ops:
                             self.adapter_storage.delete_data(
                                 table_name=op.table_name,
-                                conditions=op.conditions,
-                                transaction_id=t_id
-                            )
-                        print(f"[COMMIT]   Executed {len(ops)} DELETE(s) from '{table_name}'")
-                
-                # Clear buffer for this transaction
+                            conditions=op.conditions,
+                            transaction_id=t_id
+                        )
+                        logger.info(f"[COMMIT]   Executed {len(ops)} DELETE(s) from '{table_name}'")                # Clear buffer for this transaction
                 self.query_execution_engine.transaction_buffer.clear_transaction(t_id)
                 
                 # Log commit to FRM (flushes WAL to disk)
@@ -280,12 +290,10 @@ class QueryProcessor:
                             for op in ops:
                                 self.adapter_storage.delete_data(
                                     table_name=op.table_name,
-                                    conditions=op.conditions,
-                                    transaction_id=t_id
-                                )
-                            print(f"[AUTO-COMMIT]   Executed {len(ops)} DELETE(s) from '{table_name}'")
-                    
-                    # Clear buffer and commit
+                                conditions=op.conditions,
+                                transaction_id=t_id
+                            )
+                            logger.debug(f"[AUTO-COMMIT]   Executed {len(ops)} DELETE(s) from '{table_name}'")                    # Clear buffer and commit
                     self.query_execution_engine.transaction_buffer.clear_transaction(t_id)
                     self.adapter_frm.log_commit(t_id)
                     self.adapter_ccm.commit_transaction(t_id)

@@ -44,6 +44,28 @@ class logFile:
 
             self.paths: PosixPath = [log_path / filename_1, log_path / filename_2]
 
+        def find_most_recent_logs(self):
+            base_dir = Path(__file__).resolve().parent
+            log_path = base_dir / "log"
+            
+            if not log_path.exists():
+                raise FileNotFoundError("Log directory does not exist")
+            
+            log_files = list(log_path.glob("logfile_*_1.log"))
+            
+            if not log_files:
+                raise FileNotFoundError("No log files found")
+            
+            log_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+            
+            most_recent_1 = log_files[0]
+            timestamp = most_recent_1.stem.replace("logfile_", "").replace("_1", "")
+            most_recent_2 = log_path / f"logfile_{timestamp}_2.log"
+            
+            self.paths = [most_recent_1, most_recent_2]
+            
+            return self.paths
+
         def get_buffer(self):
             return self.logFile_buffer
         

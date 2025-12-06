@@ -34,6 +34,8 @@ def print_help():
     print("  DELETE FROM ...             - Execute DELETE query")
     print("  CREATE TABLE ...            - Create a new table")
     print("  DROP TABLE ...              - Drop a table")
+    print("  \\algo [algorithm]           - Change concurrency control algorithm")
+    print("                                 (lockbased, timestamp, validation, mvcc)")
     print("  \\h or help                  - Show this help message")
     print("  \\q or quit                  - Exit the client")
     print()
@@ -137,6 +139,40 @@ def main():
                     print_help()
                     continue
             
+                # Handle algorithm change command
+                if query.lower().startswith('\\algo'):
+                    parts = query.split()
+                    if len(parts) < 2:
+                        print("Usage: \\algo [lockbased|timestamp|validation|mvcc]")
+                        print(f"Current algorithm: {processor.adapter_ccm.algorithm.value}")
+                        continue
+                    
+                    algo_name = parts[1].lower()
+                    algo_map = {
+                        'lockbased': 'LockBased',
+                        'timestamp': 'TimestampBased',
+                        'validation': 'ValidationBased',
+                        'mvcc': 'MVCC'
+                    }
+                    
+                    if algo_name not in algo_map:
+                        print(f"Unknown algorithm: {algo_name}")
+                        print("Available: lockbased, timestamp, validation, mvcc")
+                        continue
+                    
+                    try:
+                        from query_processor.adapter_ccm import AlgorithmType
+                        new_algo = AlgorithmType[algo_map[algo_name]]
+                        processor.adapter_ccm.set_algorithm(new_algo)
+                        print(f"Algorithm changed to: {new_algo.value}")
+                    except RuntimeError as e:
+                        print(f"Error: {e}")
+                    except Exception as e:
+                        print(f"Failed to change algorithm: {e}")
+                    
+                    print()
+                    continue
+
                 query_upper = query.upper().strip()
                 # handling transaksi
                 if query_upper == "BEGIN TRANSACTION":
