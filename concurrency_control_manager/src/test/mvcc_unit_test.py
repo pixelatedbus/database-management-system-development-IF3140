@@ -7,13 +7,18 @@ import unittest
 import sys
 import os
 
-# Setup Python path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 src_dir = os.path.dirname(current_dir)
+project_root = os.path.dirname(os.path.dirname(src_dir))
+
+# Add paths
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
-from .mvcc_tester import MVCCTester
+
+from concurrency_control_manager.src.test.mvcc_tester import MVCCTester
 
 
 class TestMVTO(unittest.TestCase):
