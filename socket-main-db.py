@@ -122,6 +122,12 @@ def main():
     
     except KeyboardInterrupt:
         print("\n\nShutting down server...")
+        print("Creating checkpoint before shutdown...")
+        try:
+            processor.adapter_frm.checkpoint()
+            print("Checkpoint completed successfully")
+        except Exception as e:
+            print(f"Error during checkpoint: {e}")
     except Exception as e:
         print(f"Server error: {e}")
     finally:

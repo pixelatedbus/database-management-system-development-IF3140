@@ -57,7 +57,7 @@ class AdapterFRM:
             old_data=None,
             new_data=None
         )
-        # Note: WAL is kept in memory, will be flushed on checkpoint or commit
+        logger.info(f"[FRM] BEGIN logged for transaction {transaction_id}")
     
     def log_write(self, transaction_id: int, query: str, table_name: str, 
                   old_data=None, new_data=None) -> None:
@@ -74,8 +74,8 @@ class AdapterFRM:
         
         # Check if we need to checkpoint AFTER adding new log
         if len(self.frm.mem_wal) >= self.frm.wal_size:
-            logger.info(f"[FRM] WAL size ({len(self.frm.mem_wal)}) reached threshold ({self.frm.wal_size}). Creating checkpoint...")
-            self._create_checkpoint()
+            logger.info(f"[FRM] WAL size ({len(self.frm.mem_wal)}) reached threshold ({self.frm.wal_size}). Triggering checkpoint...")
+            self.checkpoint()
     
     def _flush_to_disk(self) -> None:
         """Force immediate flush of WAL to disk"""
@@ -85,7 +85,7 @@ class AdapterFRM:
             self.frm.mem_wal = []
     
     def log_commit(self, transaction_id: int) -> None:
-        """Log transaction commit - this flushes WAL to disk"""
+        """Log transaction commit and trigger checkpoint to flush buffers to storage"""
         self.log_operation(
             transaction_id=transaction_id,
             query="COMMIT",
@@ -94,6 +94,11 @@ class AdapterFRM:
             old_data=None,
             new_data=None
         )
+        logger.info(f"[FRM] COMMIT logged for transaction {transaction_id}")
+        
+        # COMMIT triggers checkpoint to flush all buffers to storage
+        logger.info(f"[FRM] COMMIT triggering checkpoint...")
+        self.checkpoint()
     
     def log_abort(self, transaction_id: int) -> None:
         """Log transaction abort"""
@@ -273,32 +278,35 @@ class AdapterFRM:
         
         logger.info(f"[FRM] System crash recovery completed: {len(data_execs)} operation(s) applied")
     
-    def _create_checkpoint(self) -> None:
-        """Create a checkpoint: flush all buffered transactions and write checkpoint log"""
+    def checkpoint(self) -> None:
+        """Create a checkpoint: flush all buffered transactions to storage and write checkpoint log"""
+        logger.info("[FRM CHECKPOINT] Starting checkpoint...")
+        
         # Flush all current WAL entries to disk first
         self._flush_to_disk()
+        logger.info("[FRM CHECKPOINT] WAL flushed to disk")
         
-        # Commit all buffered transactions to storage
+        # Flush all buffered transactions to storage
         if self.query_processor:
-            self._commit_all_buffered_transactions()
+            self._flush_all_buffers_to_storage()
         
         # Create checkpoint log entry
         self.frm._save_checkpoint()
         
-        logger.info(f"[FRM] Checkpoint created. Undo list: {self.frm.undo_list}")
+        logger.info(f"[FRM CHECKPOINT] Checkpoint completed. Undo list: {self.frm.undo_list}")
     
-    def _commit_all_buffered_transactions(self) -> None:
-        """Commit all transactions that have buffered operations to storage"""
+    def _flush_all_buffers_to_storage(self) -> None:
+        """Flush all buffered operations from all transactions to storage"""
         transaction_buffer = self.query_processor.query_execution_engine.transaction_buffer
         
         # Get all active transaction IDs with buffered operations
         active_transactions = list(transaction_buffer.buffers.keys())
         
         if not active_transactions:
-            logger.info("[FRM] No buffered transactions to commit for checkpoint")
+            logger.info("[FRM CHECKPOINT] No buffered transactions to flush")
             return
         
-        logger.info(f"[FRM] Committing {len(active_transactions)} buffered transaction(s) for checkpoint: {active_transactions}")
+        logger.info(f"[FRM CHECKPOINT] Flushing {len(active_transactions)} buffered transaction(s) to storage: {active_transactions}")
         
         from collections import defaultdict
         adapter_storage = self.query_processor.adapter_storage
@@ -367,6 +375,10 @@ class AdapterFRM:
                         )
                     logger.info(f"[FRM CHECKPOINT]   Flushed {len(ops)} DELETE(s) from '{table_name}' for T{t_id}")
             
-            # Clear buffer for this transaction after flushing to storage
+            # Flushed to storage, will clear buffers after processing all transactions
+            logger.info(f"[FRM CHECKPOINT] Flushed all operations for transaction {t_id}")
+        
+        # Clear all buffers after checkpoint
+        for t_id in active_transactions:
             transaction_buffer.clear_transaction(t_id)
-            logger.info(f"[FRM CHECKPOINT] Cleared buffer for transaction {t_id}")
+        logger.info(f"[FRM CHECKPOINT] Cleared all transaction buffers")
