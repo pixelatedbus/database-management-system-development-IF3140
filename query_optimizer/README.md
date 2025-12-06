@@ -147,36 +147,6 @@ print("Original cost:", engine.get_cost(query))
 print("Optimized cost:", engine.get_cost(optimized))
 ```
 
-#### Custom Fitness Function
-
-```python
-from query_optimizer.optimization_engine import OptimizationEngine, ParsedQuery
-
-def custom_fitness(query: ParsedQuery) -> float:
-    """
-    Custom fitness function.
-    Return: float (lower is better)
-    """
-    # Implement your own cost calculation
-    # Example: count number of filters
-    filter_count = len(query.query_tree.find_nodes_by_type("FILTER"))
-    return float(filter_count * 50)
-
-engine = OptimizationEngine()
-query = engine.parse_query("SELECT * FROM users WHERE age > 25 AND status = 'active'")
-
-# Use custom fitness function
-# Deterministic rules (3, 7, 8) tetap dijalankan di awal, kemudian GA dengan custom fitness
-optimized = engine.optimize_query(
-    query,
-    population_size=30,
-    generations=50,
-    fitness_func=custom_fitness  # Use custom function
-)
-
-print(f"Optimized with custom fitness: {custom_fitness(optimized)}")
-```
-
 ### 2.4 Running Tests
 
 ```bash
@@ -538,19 +508,75 @@ Query validation memastikan query tree structure valid dan semantically correct.
 - Comparison and condition expressions are separate node types (COMPARISON, IN_EXPR, etc.)
 - Validation is performed recursively on the entire tree structure
 
-### 3.7 Cost Estimation
+### 3.7 Estimasi Cost
 
-Cost estimation is implemented in `optimization_engine.py` (delegating to `CostCalculator` in `cost.py`). The cost model estimates operator costs using storage statistics and heuristics.
+Estimasi cost diimplementasikan di `CostCalculator` class (`cost.py`). Model cost menggabungkan **I/O cost** dan **CPU cost** menggunakan statistik storage.
 
-**Key points:**
+#### Struktur Cost
 
-- **Scan cost**: based on tuples and block I/O (sequential scan ∝ tuples/tuples_per_block)
-- **Filter/selectivity**: estimated selectivity reduces input cardinality; equality predicates more selective than ranges; uses histograms/index info when available
-- **Indexes**: index scan preferred when applicable (lower I/O); cost model factors index lookup cost
-- **Join algorithms**: compares block nested-loop vs. hash join using input sizes and memory assumptions; picks cheaper option. `join_method_params` lets GA override by forcing `nested_loop` or `hash` per node
-- **Projection & sort costs**: projection reduces tuple width (affects downstream); sorts modeled with O(n log n) I/O approximations
+```python
+@dataclass
+class CostResult:
+    io_cost: float              # Cost I/O (block access)
+    cpu_cost: float = 0.0       # Cost CPU (processing)
+    estimated_cardinality: int  # Jumlah tuple output
+    estimated_blocks: int       # Jumlah block output
+    
+    @property
+    def total_cost(self) -> float:
+        return self.io_cost + self.cpu_cost
+```
 
-Public entry: `OptimizationEngine.get_cost(parsed_query)` returns numeric cost (float) summarizing estimated resource usage. GA uses this as default fitness (lower is better). See `query_optimizer/cost.py` for exact formulas.
+#### Parameter Konfigurasi
+
+- I/O: `sequential_io_cost` (1.0), `random_io_cost` (1.5), `write_cost` (2.0)
+- CPU: `cpu_per_tuple` (0.01), `cpu_per_comparison` (0.001), `cpu_per_hash` (0.005), `cpu_per_sort_compare` (0.002)
+- Memory: `memory_blocks` (100), `sort_memory_blocks` (10)
+
+#### Formula Cost per Operator
+
+**Table Scan:** I/O = `b_r × 1.0`, CPU = `n_r × 0.01`
+
+**Index Scan:**
+- Hash: I/O = `1.5 + data_blocks`
+- B-Tree (equality): I/O = `(height + 1) × 1.5 + data_blocks`
+- B-Tree (range): I/O = `(height + 1) × 1.5 + leaf_scan + data_blocks × 1.5`
+
+**Filter:** I/O = `source_io` (pipelined), CPU = `n_tuples × conditions × 0.001`
+- Cascade filter: CPU lebih rendah karena early filtering
+
+**Join (Block Nested Loop):** I/O = `b_outer + b_inner + (b_outer × b_inner)`
+
+**Join (Hash):** I/O in-memory = `build_io + build_blocks × 2.0 + probe_io`
+
+**Join (Index Nested Loop):** I/O = `outer_io + n_outer × index_cost + data_blocks`
+
+**Sort:** I/O = `source_io + 2 × b_r × (passes + 1)`, CPU = `n × log₂(n) × 0.002`
+
+#### Estimasi Selectivity
+
+- Equality (`=`): `1 / V(a,r)`
+- Range (`<`, `>`, `<=`, `>=`): 0.33
+- AND: perkalian selectivity
+- OR: `sel₁ + sel₂ - (sel₁ × sel₂)`
+- BETWEEN: 0.25, LIKE: 0.05, IN: 0.3, EXISTS: 0.5
+
+#### Penggunaan
+
+```python
+engine = OptimizationEngine()
+query = engine.parse_query(sql)
+
+# Get total cost
+cost = engine.get_cost(query)
+
+# Get detail
+result = engine.get_cost_result(query)
+print(f"I/O: {result.io_cost}, CPU: {result.cpu_cost}")
+print(f"Total: {result.total_cost}")
+```
+
+Lihat `query_optimizer/cost.py` untuk detail implementasi.
 
 ---
 
@@ -558,8 +584,7 @@ Public entry: `OptimizationEngine.get_cost(parsed_query)` returns numeric cost (
 
 ### A. References
 
-- **[Rule.md](Rule.md)**: Detail lengkap tentang tokenization, parsing rules, dan operator precedence
-- **[Filter.md](Filter.md)**: Detail lengkap tentang FILTER structure dan logical operators
+- **[Parse_Query.md](doc/Parse_Query.md)**: Detail lengkap tentang tokenization dan parsing rules
 - Genetic Algorithms: Holland, J. H. (1992). Adaptation in Natural and Artificial Systems
 - Query Optimization: Graefe, G. (1993). Query Evaluation Techniques for Large Databases
 
