@@ -22,12 +22,13 @@ class Validator:
         """Validate a transaction before commit"""
         transaction_id = transaction.transaction_id
         
-        # Check for conflicts with all other active transactions
-        for other_id in self.active_transactions:
-            if other_id != transaction_id:
-                if self.detect_conflict(transaction_id, other_id):
-                    return False
+        # Get all other active transactions (excluding self)
+        other_transactions = self.active_transactions - {transaction_id}
         
+        # Check for conflicts with each other active transaction
+        for other_id in other_transactions:
+            if self.detect_conflict(transaction_id, other_id):
+                return False
         return True
     
     def record_read(self, transaction_id: int, object_id: str) -> None:
@@ -124,7 +125,7 @@ class ValidationBasedAlgorithm(ConcurrencyAlgorithm):
             t.set_status(TransactionStatus.Committed)
             self.validator.clear_transaction(t.transaction_id)
         else:
-            t.set_status(TransactionStatus.Aborted)
+            # t.set_status(TransactionStatus.Aborted)
             self.abort_transaction(t)
     
     def abort_transaction(self, t: Transaction) -> None:
