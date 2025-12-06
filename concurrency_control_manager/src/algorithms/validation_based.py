@@ -7,7 +7,7 @@ from .base import ConcurrencyAlgorithm
 from ..transaction import Transaction
 from ..row import Row
 from ..enums import ActionType, TransactionStatus
-from ..response import Response
+from ..response import AlgorithmResponse
 
 
 class Validator:
@@ -87,7 +87,7 @@ class ValidationBasedAlgorithm(ConcurrencyAlgorithm):
         self.validator: Validator = Validator()
     
     def check_permission(self, t: Transaction, obj: Row, 
-                        action: ActionType) -> Response:
+                        action: ActionType) -> AlgorithmResponse:
         """Check permission (always allowed in read/write phase)"""
         transaction_id = t.transaction_id
         object_id = obj.object_id
@@ -95,19 +95,19 @@ class ValidationBasedAlgorithm(ConcurrencyAlgorithm):
         # Conflicts are detected only during validation phase
         if action == ActionType.READ:
             self.validator.record_read(transaction_id, object_id)
-            return Response(
+            return AlgorithmResponse(
                 allowed=True,
                 message=f"T{transaction_id} reads {object_id} - allowed (optimistic)"
             )
         elif action == ActionType.WRITE:
             self.validator.record_read(transaction_id, object_id)
             self.validator.record_write(transaction_id, object_id)
-            return Response(
+            return AlgorithmResponse(
                 allowed=True,
                 message=f"T{transaction_id} writes {object_id} - allowed (optimistic)"
             )
         else:
-            return Response(
+            return AlgorithmResponse(
                 allowed=False,
                 message=f"Unknown action type: {action}"
             )
@@ -125,7 +125,7 @@ class ValidationBasedAlgorithm(ConcurrencyAlgorithm):
             self.validator.clear_transaction(t.transaction_id)
         else:
             t.set_status(TransactionStatus.Aborted)
-            self.abort_transaction(t.transaction_id)
+            self.abort_transaction(t)
     
     def abort_transaction(self, t: Transaction) -> None:
         """Abort transaction"""

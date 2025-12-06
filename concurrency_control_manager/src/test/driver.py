@@ -4,9 +4,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import time
 from datetime import datetime
-from .cc_manager import CCManager
-from .enums import AlgorithmType, ActionType, TransactionStatus
-from .row import Row
+from ..cc_manager import CCManager
+from ..enums import AlgorithmType, ActionType, TransactionStatus
+from ..row import Row
 
 
 def print_section(title):

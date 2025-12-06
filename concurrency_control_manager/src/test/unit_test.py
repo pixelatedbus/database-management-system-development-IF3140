@@ -3,17 +3,23 @@ import sys
 import os
 from datetime import datetime
 
-# Setup Python path - add src directory
+# Setup Python path - add project root and src directory
 current_dir = os.path.dirname(os.path.abspath(__file__))
 src_dir = os.path.dirname(current_dir)
+project_root = os.path.dirname(os.path.dirname(src_dir))
+
+# Add paths
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
+    
 # Import directly from src modules
-from ..cc_manager import CCManager
-from ..enums import AlgorithmType, ActionType, TransactionStatus
-from ..row import Row
-from ..transaction import Transaction
+from concurrency_control_manager.src.cc_manager import CCManager
+from concurrency_control_manager.src.enums import AlgorithmType, ActionType, TransactionStatus
+from concurrency_control_manager.src.row import Row
+from concurrency_control_manager.src.transaction import Transaction
 
 
 class TestCCManagerBasic(unittest.TestCase):
