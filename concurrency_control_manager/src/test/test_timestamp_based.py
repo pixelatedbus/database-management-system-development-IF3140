@@ -1,13 +1,22 @@
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+src_dir = os.path.dirname(current_dir)
+project_root = os.path.dirname(os.path.dirname(src_dir))
+
+if src_dir not in sys.path:
+    sys.path.insert(0, src_dir)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 import unittest
 from datetime import datetime, timedelta
-from algorithms.timestamp_based import TimestampBasedAlgorithm, ObjectTimestamp
-from transaction import Transaction
-from row import Row
-from enums import ActionType
+
+from concurrency_control_manager.src.algorithms.timestamp_based import TimestampBasedAlgorithm, ObjectTimestamp
+from concurrency_control_manager.src.transaction import Transaction
+from concurrency_control_manager.src.row import Row
+from concurrency_control_manager.src.enums import ActionType
 
 
 class TestObjectTimestamp(unittest.TestCase):
